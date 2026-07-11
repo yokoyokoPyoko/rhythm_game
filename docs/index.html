@@ -3,9 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hello TypeScript</title>
+  <title>リズムゲーム - 音波サバイバル / トレース・ウェーブ</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: sans-serif;
+    }
+    canvas {
+      border: 2px solid #e94560;
+      border-radius: 8px;
+      box-shadow: 0 0 30px rgba(233, 69, 96, 0.3);
+      display: block;
+    }
+  </style>
 </head>
 <body>
+  <canvas id="game" width="800" height="600"></canvas>
   <script src="index.js"></script>
 </body>
 </html>
