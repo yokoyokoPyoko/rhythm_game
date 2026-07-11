@@ -4,6 +4,26 @@ const ctx = canvas.getContext("2d")!;
 canvas.width = 800;
 canvas.height = 600;
 
+function showError(msg: string) {
+  ctx.fillStyle = "#0a0a1a";
+  ctx.fillRect(0, 0, 800, 600);
+  ctx.fillStyle = "#ff3333";
+  ctx.font = "16px monospace";
+  ctx.textAlign = "left";
+  const lines = msg.split("\n").slice(0, 20);
+  lines.forEach((l, i) => ctx.fillText(l, 20, 40 + i * 22));
+}
+window.addEventListener("error", e => {
+  showError("ERROR: " + (e.message || e.error) + "\n" + (e.error && e.error.stack ? e.error.stack : ""));
+});
+
+ctx.fillStyle = "#0a0a1a";
+ctx.fillRect(0, 0, 800, 600);
+ctx.fillStyle = "#fff";
+ctx.font = "20px sans-serif";
+ctx.textAlign = "center";
+ctx.fillText("初期化中... (Initializing)", 400, 300);
+
 const W = canvas.width;
 const H = canvas.height;
 const CX = W / 2;
@@ -27,10 +47,14 @@ let audioCtx: AudioContext | null = null;
 let nextClickBeat = 0;
 
 function ensureAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-  }
-  if (audioCtx.state === "suspended") audioCtx.resume();
+  try {
+    if (!audioCtx) {
+      const AC = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AC) return;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch { audioCtx = null; }
 }
 
 function click(freq: number, dur: number, vol: number, type: OscillatorType = "sine") {
@@ -594,14 +618,15 @@ function initTraceWave() {
 let lastLoopTime = 0;
 
 function gameLoop(time: number) {
-  const dt = lastLoopTime === 0 ? 0 : Math.min(1 / 20, (time - lastLoopTime) / 1000);
-  lastLoopTime = time;
+  try {
+    const dt = lastLoopTime === 0 ? 0 : Math.min(1 / 20, (time - lastLoopTime) / 1000);
+    lastLoopTime = time;
 
-  if (gameMode !== "menu") {
-    songTime = now() - startSongTime;
-  } else {
-    songTime = time;
-  }
+    if (gameMode !== "menu") {
+      songTime = now() - startSongTime;
+    } else {
+      songTime = time;
+    }
 
   if (audioCtx && !muted) {
     const beatIndex = Math.floor(songTime / beatMs);
@@ -631,6 +656,10 @@ function gameLoop(time: number) {
   }
 
   keysJust = {};
+  } catch (err) {
+    showError("gameLoop error:\n" + (err && (err as Error).stack ? (err as Error).stack : String(err)));
+    return;
+  }
   requestAnimationFrame(gameLoop);
 }
 
