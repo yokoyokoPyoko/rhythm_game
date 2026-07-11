@@ -31,13 +31,16 @@ let beatMs = 60000 / bpm;
 let gameOver = false;
 let score = 0;
 let songTime = 0;
-let startSongTime = 0;
 let muted = false;
 const keys = {};
 let keysJust = {};
-// ── Audio ──
+// ── Audio (lookahead scheduler, audio-clock driven) ──
 let audioCtx = null;
-let nextClickBeat = 0;
+let audioStartTime = 0;
+let audioStarted = false;
+let nextBeatTime = 0;
+let schedulerBeat = 0;
+let perfStart = performance.now();
 function ensureAudio() {
     try {
         if (!audioCtx) {
@@ -45,6 +48,10 @@ function ensureAudio() {
             if (!AC)
                 return;
             audioCtx = new AC();
+            audioStartTime = audioCtx.currentTime;
+            nextBeatTime = audioCtx.currentTime + 0.12;
+            schedulerBeat = 0;
+            audioStarted = true;
         }
         if (audioCtx.state === "suspended")
             audioCtx.resume();
@@ -53,28 +60,84 @@ function ensureAudio() {
         audioCtx = null;
     }
 }
-function click(freq, dur, vol, type = "sine") {
+function resetAudioClock() {
+    if (audioCtx && audioStarted) {
+        audioStartTime = audioCtx.currentTime;
+        nextBeatTime = audioCtx.currentTime + 0.12;
+        schedulerBeat = 0;
+    }
+    perfStart = performance.now();
+}
+function songNow() {
+    if (audioCtx && audioStarted)
+        return (audioCtx.currentTime - audioStartTime) * 1000;
+    return performance.now() - perfStart;
+}
+function playClickAt(time, beat) {
+    if (!audioCtx || muted)
+        return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g).connect(audioCtx.destination);
+    if (beat % 4 === 0) {
+        o.type = "sine";
+        o.frequency.setValueAtTime(170, time);
+        o.frequency.exponentialRampToValueAtTime(55, time + 0.12);
+        g.gain.setValueAtTime(0.55, time);
+        g.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
+        o.start(time);
+        o.stop(time + 0.22);
+    }
+    else {
+        o.type = "square";
+        o.frequency.value = 900;
+        g.gain.setValueAtTime(0.22, time);
+        g.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+        o.start(time);
+        o.stop(time + 0.06);
+    }
+}
+function scheduleMetronome() {
+    if (!audioCtx || !audioStarted || muted)
+        return;
+    const ahead = 0.15;
+    while (nextBeatTime < audioCtx.currentTime + ahead) {
+        playClickAt(nextBeatTime, schedulerBeat);
+        nextBeatTime += beatMs / 1000;
+        schedulerBeat++;
+    }
+}
+function hitSound(quality) {
     if (!audioCtx || muted)
         return;
     const t = audioCtx.currentTime;
     const o = audioCtx.createOscillator();
     const g = audioCtx.createGain();
-    o.type = type;
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(vol, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g).connect(audioCtx.destination);
-    o.start(t);
-    o.stop(t + dur);
-}
-function metronome() { click(880, 0.05, 0.15, "square"); }
-function hitSound(quality) {
-    if (quality === "perfect")
-        click(1320, 0.08, 0.2, "sine");
-    else if (quality === "good")
-        click(880, 0.08, 0.15, "sine");
-    else
-        click(110, 0.15, 0.15, "sawtooth");
+    if (quality === "perfect") {
+        o.type = "sine";
+        o.frequency.value = 1320;
+        g.gain.setValueAtTime(0.25, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+        o.start(t);
+        o.stop(t + 0.11);
+    }
+    else if (quality === "good") {
+        o.type = "sine";
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.2, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+        o.start(t);
+        o.stop(t + 0.11);
+    }
+    else {
+        o.type = "sawtooth";
+        o.frequency.value = 110;
+        g.gain.setValueAtTime(0.2, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+        o.start(t);
+        o.stop(t + 0.19);
+    }
 }
 window.addEventListener("keydown", e => {
     if (!keys[e.key])
@@ -90,6 +153,7 @@ window.addEventListener("keydown", e => {
     ensureAudio();
 });
 window.addEventListener("keyup", e => { keys[e.key] = false; });
+canvas.addEventListener("click", () => ensureAudio());
 function fillCircle(x, y, r, color) {
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -126,7 +190,6 @@ function drawText(text, x, y, color, size, align = "center") {
     ctx.textAlign = align;
     ctx.fillText(text, x, y);
 }
-function now() { return performance.now(); }
 // ─── Menu ───
 function drawMenu() {
     ctx.fillStyle = "#0a0a1a";
@@ -135,7 +198,7 @@ function drawMenu() {
     const pulse = Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
     drawText("リズムゲーム プロトタイプ", CX, 80, "#e94560", 40);
     drawText(`BPM: ${bpm}  (↑↓で変更)`, CX, 120, "#888", 16);
-    drawText(muted ? "🔇 ミュート中 (Mで解除)" : "🔊 音あり (Mでミュート)", CX, 150, muted ? "#666" : "#00ff88", 13);
+    drawText(muted ? "🔇 ミュート中 (Mで解除)" : (audioStarted ? "🔊 ビート再生中 (Mでミュート)" : "🔈 キー/クリックでビート開始"), CX, 150, muted ? "#666" : (audioStarted ? "#00ff88" : "#ffaa00"), 13);
     const s = 0.97 + Math.sin(songTime * 0.008) * 0.03;
     const bg = `rgba(15, 52, 96, ${0.7 + pulse * 0.3})`;
     ctx.save();
@@ -167,8 +230,7 @@ function startSoundWave() {
     gameOver = false;
     score = 0;
     songTime = 0;
-    startSongTime = now();
-    nextClickBeat = 0;
+    resetAudioClock();
     initSoundWave();
 }
 function startTraceWave() {
@@ -176,8 +238,7 @@ function startTraceWave() {
     gameOver = false;
     score = 0;
     songTime = 0;
-    startSongTime = now();
-    nextClickBeat = 0;
+    resetAudioClock();
     initTraceWave();
 }
 function updateMenu() {
@@ -480,6 +541,41 @@ function initTraceWave() {
                 trail.shift();
         }
         beatFlash = Math.max(0, beatFlash - dt * 3);
+        if (keysJust[" "]) {
+            keysJust[" "] = false;
+            const tapDiff = Math.abs(playerY - getWave(jx + scroll));
+            const beatPhase = (songTime % beatMs) / beatMs;
+            const onBeat = beatPhase < 0.14 || beatPhase > 0.86;
+            if (tapDiff < 10) {
+                hitCount++;
+                missStreak = 0;
+                score += onBeat ? 200 : 100;
+                judgeText = onBeat ? "PERFECT! ★" : "PERFECT!";
+                judgeColor = "#00ff88";
+                judgeFlash = 1;
+                hitSound("perfect");
+            }
+            else if (tapDiff < 25) {
+                hitCount++;
+                missStreak = 0;
+                score += onBeat ? 100 : 50;
+                judgeText = "GOOD";
+                judgeColor = "#ffaa00";
+                judgeFlash = 1;
+                hitSound("good");
+            }
+            else {
+                missCount++;
+                missStreak++;
+                judgeText = "MISS";
+                judgeColor = "#ff3333";
+                judgeFlash = 0.8;
+                hitSound("miss");
+            }
+            trail.push({ x: jx, y: playerY });
+            if (trail.length > 80)
+                trail.shift();
+        }
         judgeFlash = Math.max(0, judgeFlash - dt * 2.5);
         if (missStreak > 30) {
             gameOver = true;
@@ -547,7 +643,7 @@ function initTraceWave() {
         ctx.fillRect(bx, by, bw, bh);
         ctx.fillStyle = diff < 10 ? "#00ff88" : diff < 25 ? "#ffaa00" : "#ff3333";
         ctx.fillRect(bx, by, bw * accuracy, bh);
-        drawText("↑ ↓ で波形をトレース → ビート毎に判定!", CX, H - 20, "#888", 13);
+        drawText("↑ ↓ で波形をトレース  Space=波に重ねた瞬間に判定!  (ビートで叩くと高得点)", CX, H - 20, "#888", 13);
         if (gameOver) {
             ctx.fillStyle = "rgba(0,0,0,0.75)";
             ctx.fillRect(0, 0, W, H);
@@ -564,19 +660,8 @@ function gameLoop(time) {
     try {
         const dt = lastLoopTime === 0 ? 0 : Math.min(1 / 20, (time - lastLoopTime) / 1000);
         lastLoopTime = time;
-        if (gameMode !== "menu") {
-            songTime = now() - startSongTime;
-        }
-        else {
-            songTime = time;
-        }
-        if (audioCtx && !muted) {
-            const beatIndex = Math.floor(songTime / beatMs);
-            if (beatIndex >= nextClickBeat && beatIndex > 0) {
-                metronome();
-                nextClickBeat = beatIndex + 1;
-            }
-        }
+        songTime = songNow();
+        scheduleMetronome();
         if (gameMode === "menu") {
             updateMenu();
             drawMenu();
