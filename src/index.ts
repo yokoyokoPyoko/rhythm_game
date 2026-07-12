@@ -85,25 +85,12 @@ function resetAudioClock() {
   perfStart = performance.now();
 }
 
-let _latencyLogged = false;
-function audioLatency(): number {
-  if (!audioCtx) return 0;
-  if (!_latencyLogged) {
-    _latencyLogged = true;
-    console.log(
-      `[LATENCY] baseLatency=${(audioCtx.baseLatency * 1000).toFixed(1)}ms` +
-      ` outputLatency=${(audioCtx.outputLatency * 1000).toFixed(1)}ms`
-    );
-  }
-  return audioCtx.baseLatency || 0.03;
-}
-
 function songNow(): number {
-  // オーディオクロックからオーディオデバイスの出力遅延(audioLatency)を引いたものを
-  // 曲時間として扱う。これにより「今スピーカーから鳴っている音の時間」と
-  // ゲーム内の視覚的な時間が完全に一致する。
+  // baseLatency / outputLatency はLinux等で不正確なため一切補正しない。
+  // 生のオーディオクロックをそのままゲーム時間とする。
+  // メトロノームも同じクロックで鳴らしているため、音と映像は自動的に一致する。
   if (audioCtx && audioStarted) {
-    return (audioCtx.currentTime - audioStartTime - audioLatency()) * 1000;
+    return (audioCtx.currentTime - audioStartTime) * 1000;
   }
   return performance.now() - perfStart;
 }
