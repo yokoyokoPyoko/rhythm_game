@@ -156,6 +156,7 @@ function hitSound(quality: "perfect" | "good" | "miss") {
 }
 
 window.addEventListener("keydown", e => {
+  if (e.repeat) return; // 長押しによる連続入力を防ぐ
   if (!keys[e.key]) keysJust[e.key] = true;
   keys[e.key] = true;
   if (e.key === " ") {
@@ -330,6 +331,7 @@ function initTraceWave() {
   function attemptHit() {
     let best: Ring | null = null;
     let bestErr = Infinity;
+    let bestErrRaw = 0;
     const pressTime = spaceHitSong >= 0 ? spaceHitSong : songTime;
     spaceHitSong = -1;
     for (const r of rings) {
@@ -338,7 +340,7 @@ function initTraceWave() {
       // ハードウェア/OSの入力遅延（USBポーリング等）を約25msと仮定して補正
       const err = (pressTime - r.hitTime) - 25;
       const absErr = Math.abs(err);
-      if (absErr < beatMs * 0.4 && absErr < bestErr) { best = r; bestErr = absErr; }
+      if (absErr < beatMs * 0.4 && absErr < bestErr) { best = r; bestErr = absErr; bestErrRaw = err; }
     }
     if (best) {
       best.resolved = true;
@@ -350,7 +352,10 @@ function initTraceWave() {
       score += 200 + combo * 4;
       flash = 0.15;
       for (let k = 0; k < 18; k++) spawnParticle(TW_JUDGE_X, best.targetY, tierColorsTW[tier], 160);
-      judgeText = result === "perfect" ? "PERFECT!" : "GOOD";
+      
+      const msStr = Math.round(Math.abs(bestErrRaw)) + "ms";
+      const signStr = bestErrRaw < 0 ? "FAST" : "SLOW";
+      judgeText = result === "perfect" ? `PERFECT! (${signStr} ${msStr})` : `GOOD (${signStr} ${msStr})`;
       judgeColor = result === "perfect" ? POSITIVE : "#ffb454";
       judgeFlash = 1;
       hitSound(result);

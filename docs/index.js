@@ -169,6 +169,8 @@ function hitSound(quality) {
     }
 }
 window.addEventListener("keydown", e => {
+    if (e.repeat)
+        return; // 長押しによる連続入力を防ぐ
     if (!keys[e.key])
         keysJust[e.key] = true;
     keys[e.key] = true;
@@ -327,6 +329,7 @@ function initTraceWave() {
     function attemptHit() {
         let best = null;
         let bestErr = Infinity;
+        let bestErrRaw = 0;
         const pressTime = spaceHitSong >= 0 ? spaceHitSong : songTime;
         spaceHitSong = -1;
         for (const r of rings) {
@@ -339,6 +342,7 @@ function initTraceWave() {
             if (absErr < beatMs * 0.4 && absErr < bestErr) {
                 best = r;
                 bestErr = absErr;
+                bestErrRaw = err;
             }
         }
         if (best) {
@@ -352,7 +356,9 @@ function initTraceWave() {
             flash = 0.15;
             for (let k = 0; k < 18; k++)
                 spawnParticle(TW_JUDGE_X, best.targetY, tierColorsTW[tier], 160);
-            judgeText = result === "perfect" ? "PERFECT!" : "GOOD";
+            const msStr = Math.round(Math.abs(bestErrRaw)) + "ms";
+            const signStr = bestErrRaw < 0 ? "FAST" : "SLOW";
+            judgeText = result === "perfect" ? `PERFECT! (${signStr} ${msStr})` : `GOOD (${signStr} ${msStr})`;
             judgeColor = result === "perfect" ? POSITIVE : "#ffb454";
             judgeFlash = 1;
             hitSound(result);
