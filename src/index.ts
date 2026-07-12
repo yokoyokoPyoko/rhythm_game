@@ -32,7 +32,7 @@ ctx.fillText("初期化中... (Initializing)", 400, 300);
 const CX = W / 2;
 const CY = H / 2;
 
-let gameMode: "menu" | "tracewave" = "menu";
+let gameMode: "menu" | "tracewave" | "calibration" = "menu";
 let bpm = 120;
 let beatMs = 60000 / bpm;
 let gameOver = false;
@@ -41,6 +41,10 @@ let songTime = 0;
 let muted = false;
 let keySoundEnabled = localStorage.getItem("rhythmKeySound") !== "false";
 let manualOffsetMs = parseInt(localStorage.getItem("rhythmOffset") || "0");
+
+let calibPresses: number[] = [];
+let lastCalibFeedback: string = "";
+let lastCalibFeedbackTime = 0;
 
 const keys: Record<string, boolean> = {};
 let keysJust: Record<string, boolean> = {};
@@ -188,6 +192,9 @@ window.addEventListener("keydown", e => {
     if (gameMode === "tracewave" && twState && twState.onSpace) {
       twState.onSpace();
     }
+    if (gameMode === "calibration") {
+      onCalibrationSpace();
+    }
   }
   if (k === "m" || k === "M") { muted = !muted; keysJust["m"] = false; keysJust["M"] = false; }
   if (k === "k" || k === "K") {
@@ -255,7 +262,7 @@ function drawMenu() {
 
   drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
   drawText(`キー効果音: ${keySoundEnabled ? "ON" : "OFF"} (Kで切替)`, CX, 386, keySoundEnabled ? ACCENT : MUTED, 13);
-  drawText(`判定オフセット: ${manualOffsetMs > 0 ? '+' : ''}${manualOffsetMs}ms ( J と L キーで調整 )`, CX, 412, manualOffsetMs === 0 ? MUTED : "#ffb454", 13);
+  drawText(`判定オフセット: ${manualOffsetMs > 0 ? '+' : ''}${manualOffsetMs}ms ( < / > で微調整, L で自動調整 )`, CX, 412, manualOffsetMs === 0 ? MUTED : "#ffb454", 13);
 
   const s = 1 + pulse * 0.025;
   ctx.save();
@@ -291,8 +298,80 @@ function updateMenu() {
   if (keysJust["ArrowRight"] || keysJust[" "]) { startTraceWave(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
   if (keysJust["ArrowUp"]) { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
   if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5); beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
-  if (keysJust["j"] || keysJust["J"]) { manualOffsetMs -= 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["j"] = false; keysJust["J"] = false; }
-  if (keysJust["l"] || keysJust["L"]) { manualOffsetMs += 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["l"] = false; keysJust["L"] = false; }
+  if (keysJust[","] || keysJust["<"]) { manualOffsetMs -= 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust[","] = false; keysJust["<"] = false; }
+  if (keysJust["."] || keysJust[">"]) { manualOffsetMs += 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["."] = false; keysJust[">"] = false; }
+  if (keysJust["l"] || keysJust["L"]) { startCalibration(); keysJust["l"] = false; keysJust["L"] = false; }
+}
+
+// ─── Calibration ───
+
+function startCalibration() {
+  gameMode = "calibration";
+  songTime = 0;
+  spaceHitSong = -1;
+  calibPresses = [];
+  lastCalibFeedback = "";
+  lastCalibFeedbackTime = 0;
+  
+  // 一時的に offset を 0 にして純粋なズレを測る
+  manualOffsetMs = 0; 
+  resetAudioClock();
+}
+
+function onCalibrationSpace() {
+  const pressTime = spaceHitSong >= 0 ? spaceHitSong : songTime;
+  
+  // 直近のビートを探す
+  const closestBeat = Math.round(pressTime / beatMs) * beatMs;
+  const err = pressTime - closestBeat;
+  
+  // 誤差が ±beatMs*0.4 以上の場合は無視
+  if (Math.abs(err) > beatMs * 0.4) return;
+  
+  calibPresses.push(err);
+  const signStr = err < 0 ? "FAST" : "SLOW";
+  const msStr = Math.round(Math.abs(err)) + "ms";
+  lastCalibFeedback = `${signStr} ${msStr}`;
+  lastCalibFeedbackTime = songTime;
+
+  if (calibPresses.length >= 8) {
+    let sum = 0;
+    for (let i = 2; i < 8; i++) sum += calibPresses[i];
+    const avg = sum / 6;
+    
+    // 早く押しすぎている(avgがマイナス)場合、音を早くする必要がある(offsetをプラスにする)
+    manualOffsetMs = -Math.round(avg);
+    localStorage.setItem("rhythmOffset", manualOffsetMs.toString());
+    
+    gameMode = "menu";
+    songTime = 0;
+  }
+}
+
+function updateCalibration(dt: number) {
+  // メトロノームは scheduleMetronome() によって鳴り続ける
+}
+
+function drawCalibration() {
+  drawBackground();
+  
+  drawText("オート・キャリブレーション", CX, 142, TEXT, 40);
+  drawText("A U T O   C A L I B R A T I O N", CX, 178, ACCENT, 14);
+  
+  drawText("メトロノームの音に合わせて", CX, 280, MUTED, 16);
+  drawText("SPACE キーを叩いてください", CX, 310, MUTED, 16);
+  
+  const prog = `${calibPresses.length} / 8`;
+  drawText(`Progress: ${prog}`, CX, 380, TEXT, 24);
+  
+  if (songTime - lastCalibFeedbackTime < 1000) {
+    const alpha = Math.max(0, 1 - (songTime - lastCalibFeedbackTime) / 1000);
+    ctx.globalAlpha = alpha;
+    drawText(lastCalibFeedback, CX, 430, lastCalibFeedback.includes("FAST") ? "#4cc9f0" : "#ffb454", 20);
+    ctx.globalAlpha = 1;
+  }
+  
+  drawText("ESC キーでキャンセル", CX, 550, MUTED, 13);
 }
 
 
@@ -575,6 +654,14 @@ function gameLoop(time: number) {
     if (gameMode === "menu") {
       updateMenu();
       drawMenu();
+    } else if (gameMode === "calibration") {
+      if (keysJust["Escape"]) {
+        manualOffsetMs = parseInt(localStorage.getItem("rhythmOffset") || "0");
+        gameMode = "menu";
+        keysJust["Escape"] = false;
+      }
+      updateCalibration(dt);
+      drawCalibration();
     } else if (gameMode === "tracewave") {
       if (twState) {
         twState.update(dt);
