@@ -11,10 +11,9 @@ canvas.style.height = H + "px";
 ctx.scale(DPR, DPR);
 
 function showError(msg: string) {
-  ctx.fillStyle = "#0a0a1a";
-  ctx.fillRect(0, 0, 800, 600);
-  ctx.fillStyle = "#ff3333";
-  ctx.font = "16px monospace";
+  drawBackground();
+  ctx.fillStyle = DANGER;
+  ctx.font = `16px ${FONT}`;
   ctx.textAlign = "left";
   const lines = msg.split("\n").slice(0, 20);
   lines.forEach((l, i) => ctx.fillText(l, 20, 40 + i * 22));
@@ -145,42 +144,82 @@ canvas.addEventListener("click", () => ensureAudio());
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function clamp(v: number, mn: number, mx: number) { return Math.max(mn, Math.min(mx, v)); }
 
+const FONT = "'M PLUS Rounded 1c', 'Hiragino Sans', 'Yu Gothic', sans-serif";
+const ACCENT = "#22e0ff";
+const ACCENT2 = "#a96bff";
+const DANGER = "#ff3b5c";
+
+const bgGrad = ctx.createRadialGradient(CX, CY, 40, CX, CY, 560);
+bgGrad.addColorStop(0, "#171738");
+bgGrad.addColorStop(0.6, "#0b0b1e");
+bgGrad.addColorStop(1, "#04040a");
+
+function drawBackground() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function roundRect(x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  if ((ctx as any).roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
 function drawText(text: string, x: number, y: number, color: string, size: number, align: CanvasTextAlign = "center") {
   ctx.fillStyle = color;
-  ctx.font = `${size}px sans-serif`;
+  ctx.font = `${size}px ${FONT}`;
   ctx.textAlign = align;
   ctx.fillText(text, x, y);
+}
+
+function glowText(text: string, x: number, y: number, color: string, size: number, glow: string, blur: number, align: CanvasTextAlign = "center") {
+  ctx.save();
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = blur;
+  drawText(text, x, y, color, size, align);
+  ctx.restore();
 }
 
 // ─── Menu ───
 
 function drawMenu() {
-  ctx.fillStyle = "#0a0a1a";
-  ctx.fillRect(0, 0, W, H);
+  drawBackground();
 
   const phase = (songTime % beatMs) / beatMs;
   const pulse = Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
 
-  drawText("リズムゲーム プロトタイプ", CX, 80, "#e94560", 40);
-  drawText(`BPM: ${bpm}  (↑↓で変更)`, CX, 120, "#888", 16);
-  drawText(muted ? "🔇 ミュート中 (Mで解除)" : (audioStarted ? "🔊 ビート再生中 (Mでミュート)" : "🔈 キー/クリックでビート開始"), CX, 150, muted ? "#666" : (audioStarted ? "#00ff88" : "#ffaa00"), 13);
+  glowText("トレース・ウェーブ", CX, 132, "#ffffff", 52, ACCENT, 26);
+  drawText("T R A C E   W A V E", CX, 172, ACCENT, 16);
 
-  const s = 0.97 + Math.sin(songTime * 0.008) * 0.03;
-  const bg = `rgba(15, 52, 96, ${0.7 + pulse * 0.3})`;
+  drawText(`BPM  ${bpm}`, CX, 238, "#dff1ff", 24);
+  drawText("↑ ↓ でテンポ変更", CX, 264, "#7fa8c9", 13);
 
+  drawText(muted ? "🔇 ミュート中 (Mで解除)" : (audioStarted ? "🔊 ビート再生中 (Mでミュート)" : "🔈 クリック / キーでスタート"), CX, 300, muted ? "#8aa" : (audioStarted ? "#00ff88" : "#ffaa00"), 13);
+
+  const s = 1 + pulse * 0.04;
   ctx.save();
-  ctx.translate(CX, 260);
+  ctx.translate(CX, 392);
   ctx.scale(s, s);
-  ctx.fillStyle = bg;
-  ctx.fillRect(-120, -50, 240, 100);
-  ctx.strokeStyle = "#e94560";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(-120, -50, 240, 100);
-  drawText("トレース・ウェーブ", 0, 8, "#fff", 22);
-  drawText("Space / → キー", 0, 32, "#aaa", 14);
+  const cw = 260, ch = 78, x = -cw / 2, y = -ch / 2, r = 18;
+  const cg = ctx.createLinearGradient(x, 0, x + cw, 0);
+  cg.addColorStop(0, ACCENT);
+  cg.addColorStop(1, ACCENT2);
+  ctx.shadowColor = ACCENT;
+  ctx.shadowBlur = 16 + pulse * 16;
+  ctx.fillStyle = "rgba(10,14,30,0.85)";
+  roundRect(x, y, cw, ch, r);
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = cg;
+  roundRect(x, y, cw, ch, r);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  drawText("▶  PLAY", 0, -3, "#ffffff", 28);
+  drawText("Space / →", 0, 22, "#a9d8ef", 13);
   ctx.restore();
 
-  drawText("ESC=メニュー  R=リスタート  Space=決定/アクション  M=ミュート", CX, 430, "#555", 13);
+  drawText("R = リスタート    ESC = メニュー    M = ミュート", CX, 522, "#5a6b8c", 13);
+  drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE = HIT", CX, 550, "#7fa8c9", 14);
 }
 
 function startTraceWave() {
@@ -349,29 +388,40 @@ function initTraceWave() {
   }
 
   function render() {
-    ctx.fillStyle = "#0a0a1a";
-    ctx.fillRect(0, 0, W, H);
+    drawBackground();
 
     const tier = tierFor(combo);
+    const tierCol = tierColorsTW[tier];
 
     if (flash > 0) {
       ctx.globalAlpha = flash * 0.5;
-      ctx.fillStyle = tierColorsTW[tier];
+      ctx.fillStyle = tierCol;
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 4]);
+    ctx.save();
+    ctx.shadowColor = tierCol;
+    ctx.shadowBlur = 8 + beatPulse * 14;
+    ctx.strokeStyle = tierCol;
+    ctx.globalAlpha = 0.4 + beatPulse * 0.4;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 8]);
     ctx.beginPath();
     ctx.moveTo(TW_JUDGE_X, 0);
     ctx.lineTo(TW_JUDGE_X, H);
     ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.restore();
 
-    ctx.strokeStyle = "#8ba3c7";
-    ctx.lineWidth = 2;
+    ctx.save();
+    ctx.shadowColor = tierCol;
+    ctx.shadowBlur = 12;
+    const wg = ctx.createLinearGradient(0, TW_CENTER_Y - TW_AMP, 0, TW_CENTER_Y + TW_AMP);
+    wg.addColorStop(0, tierCol);
+    wg.addColorStop(0.5, ACCENT);
+    wg.addColorStop(1, tierCol);
+    ctx.strokeStyle = wg;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     for (let x = 0; x <= W; x += 2) {
       const y = waveY(offset + x);
@@ -379,6 +429,7 @@ function initTraceWave() {
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+    ctx.restore();
 
     if (beatPulse > 0) {
       ctx.globalAlpha = beatPulse * 0.55;
@@ -414,16 +465,30 @@ function initTraceWave() {
       ctx.globalAlpha = 1;
     });
 
-    ctx.fillStyle = tierColorsTW[tier];
+    ctx.save();
+    ctx.shadowColor = tierCol;
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = tierCol;
     ctx.beginPath();
     ctx.arc(TW_JUDGE_X, cursorY, 9 + tier, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
 
-    drawText(`Score: ${Math.floor(score)}`, 20, 30, "#fff", 18, "left");
-    drawText(`Combo: ${combo}`, 20, 55, "#fff", 18, "left");
-    if (judgeFlash > 0) drawText(judgeText, TW_JUDGE_X, 90, judgeColor, 26 + judgeFlash * 8);
+    ctx.save();
+    ctx.fillStyle = "rgba(10,14,30,0.55)";
+    roundRect(14, 14, 210, 66, 12);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(34,224,255,0.35)";
+    ctx.lineWidth = 1;
+    roundRect(14, 14, 210, 66, 12);
+    ctx.stroke();
+    ctx.restore();
+    drawText(`SCORE  ${Math.floor(score)}`, 26, 42, "#ffffff", 18, "left");
+    drawText(`COMBO  ${combo}`, 26, 66, combo > 0 ? ACCENT : "#7fa8c9", 16, "left");
 
-    drawText("↑ ↓ で波形をなぞる  リングが最小になった瞬間に SPACE = HIT!", CX, H - 20, "#888", 13);
+    if (judgeFlash > 0) glowText(judgeText, TW_JUDGE_X, 92, judgeColor, 28 + judgeFlash * 8, judgeColor, 18);
+
+    drawText("↑ ↓ で波形をなぞる  リングが最小になった瞬間に SPACE = HIT!", CX, H - 20, "#7fa8c9", 14);
   }
 
   twState = { update, render };
