@@ -40,6 +40,7 @@ let score = 0;
 let songTime = 0;
 let muted = false;
 let keySoundEnabled = localStorage.getItem("rhythmKeySound") !== "false";
+let manualOffsetMs = parseInt(localStorage.getItem("rhythmOffset") || "0");
 
 const keys: Record<string, boolean> = {};
 let keysJust: Record<string, boolean> = {};
@@ -139,7 +140,7 @@ function audioOutputLatency(): number {
   const base = audioCtx.baseLatency || 0;
   const out = audioCtx.outputLatency || 0;
   const total = base + out;
-  
+
   // 異常に大きい値（0.5秒以上など）の場合は安全のために 0.02 (20ms) にフォールバック
   return total < 0.5 ? total : 0.02;
 }
@@ -147,7 +148,7 @@ function audioOutputLatency(): number {
 function scheduleMetronome() {
   if (!audioCtx || !audioStarted || muted) return;
   const ahead = 0.20;
-  const lat = audioOutputLatency();
+  const lat = audioOutputLatency() + (manualOffsetMs / 1000);
   while (nextBeatTime < audioCtx.currentTime + ahead) {
     // 「スピーカーから音が出る時刻」 = nextBeatTime になるよう、
     // lat 分だけ早めに AudioContext に登録する。
@@ -253,11 +254,12 @@ function drawMenu() {
   drawText("↑ ↓ でテンポ変更", CX, 322, MUTED, 13);
 
   drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
-  drawText(`キー効果音: ${keySoundEnabled ? "ON" : "OFF"} (Kで切替)`, CX, 396, keySoundEnabled ? ACCENT : MUTED, 13);
+  drawText(`キー効果音: ${keySoundEnabled ? "ON" : "OFF"} (Kで切替)`, CX, 386, keySoundEnabled ? ACCENT : MUTED, 13);
+  drawText(`判定オフセット: ${manualOffsetMs > 0 ? '+' : ''}${manualOffsetMs}ms ( < と > キーで調整 )`, CX, 412, manualOffsetMs === 0 ? MUTED : "#ffb454", 13);
 
   const s = 1 + pulse * 0.025;
   ctx.save();
-  ctx.translate(CX, 446);
+  ctx.translate(CX, 460);
   ctx.scale(s, s);
   const cw = 220, ch = 62, x = -cw / 2, y = -ch / 2, r = 14;
   ctx.fillStyle = SURFACE;
@@ -289,6 +291,8 @@ function updateMenu() {
   if (keysJust["ArrowRight"] || keysJust[" "]) { startTraceWave(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
   if (keysJust["ArrowUp"]) { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
   if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5); beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
+  if (keysJust[","] || keysJust["<"]) { manualOffsetMs -= 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust[","] = false; keysJust["<"] = false; }
+  if (keysJust["."] || keysJust[">"]) { manualOffsetMs += 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["."] = false; keysJust[">"] = false; }
 }
 
 
