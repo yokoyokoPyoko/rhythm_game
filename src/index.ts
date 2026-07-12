@@ -127,15 +127,10 @@ function playClickAt(time: number, beat: number) {
 
 function audioOutputLatency(): number {
   if (!audioCtx) return 0;
-  // outputLatency = OS/ドライバの実際のバッファ遅延。
-  // 「スケジュール時刻 T に音を登録しても、スピーカーから出るのは T + outputLatency 秒後」
-  // Linux/Chromeでは outputLatency が正確。Firefox や一部環境では 0 の場合もあり、
-  // その場合は baseLatency (ハードウェアバッファ) で代用する。
-  const out = audioCtx.outputLatency || 0;
-  const base = audioCtx.baseLatency || 0;
-  const lat = out > 0 ? out : base;
-  // 明らかにおかしな値（>500ms）は無視して 0 でフォールバック
-  return lat < 0.5 ? lat : 0;
+  // outputLatency は Linux/Chromium 環境で過大報告されるバグがあるため使用しません。
+  // 信頼性の高い baseLatency (ハードウェアバッファ) のみを使用します。
+  const base = audioCtx.baseLatency || 0.01; // 0の場合は10msとして扱う
+  return base < 0.5 ? base : 0.01;
 }
 
 function scheduleMetronome() {
