@@ -58,9 +58,10 @@ function ensureAudio() {
     if (!audioCtx) {
       const AC = window.AudioContext || (window as any).webkitAudioContext;
       if (!AC) return;
-      // latencyHint: "interactive" でOSに最小バッファを要求する。
-      // Linux/PipeWire ではデフォルト比 5​~​10 倍の遅延改善になることが多い。
-      audioCtx = new AC({ latencyHint: "interactive" });
+      // latencyHint に数値(秒)を渡すと、ブラウザに具体的な最小バッファを要求できる。
+      // 0.001 (1ms) を指定することで Chrome/Firefox が内部バッファを最小化し、
+      // outputLatency を可能な限り小さくする。"interactive" より効果的な場合がある。
+      audioCtx = new AC({ latencyHint: 0.001 });
       audioStartTime = audioCtx.currentTime;
       alignScheduler();
       audioStarted = true;
