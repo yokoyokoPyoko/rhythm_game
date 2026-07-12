@@ -265,7 +265,7 @@ const TW_AMP = 120;
 const TW_SCROLL = 150;
 const TW_LEAD_BEATS = 2;
 const TW_TOLERANCE = 26;
-const TW_SNAP = 0.14;
+const TW_SNAP = 0.10;
 const tierColorsTW = ["#4cc9f0", "#56e39f", "#ffb454", "#ff5d6c"];
 let twState = null;
 function initTraceWave() {
@@ -299,8 +299,8 @@ function initTraceWave() {
         const cornerVal = (idx % 2 === 0) ? -1 : 1;
         const targetY = TW_CENTER_Y + TW_AMP * cornerVal;
         cursorY += (targetY - cursorY) * TW_SNAP;
-        beatPulse = 1;
         lastBeatY = targetY;
+        beatPulse = 1;
     }
     function spawnRing(beat) {
         const hitTime = (beat + TW_LEAD_BEATS) * beatMs;
@@ -413,9 +413,9 @@ function initTraceWave() {
             ctx.fillRect(0, 0, W, H);
             ctx.globalAlpha = 1;
         }
-        // judge line: thin, beat-synced subtle brighten
-        ctx.strokeStyle = `rgba(255,255,255,${0.10 + beatPulse * 0.22})`;
-        ctx.lineWidth = 1;
+        // judge line: flashes bright on the beat
+        ctx.strokeStyle = `rgba(255,255,255,${0.12 + beatPulse * 0.5})`;
+        ctx.lineWidth = 1 + beatPulse * 1.5;
         ctx.beginPath();
         ctx.moveTo(TW_JUDGE_X, 0);
         ctx.lineTo(TW_JUDGE_X, H);
@@ -434,14 +434,22 @@ function initTraceWave() {
         }
         ctx.stroke();
         ctx.globalAlpha = 1;
-        // beat marker at the wave's extremum on the judge line
+        // beat pulse: an expanding ring at the wave's extremum on the judge line
         if (beatPulse > 0) {
-            ctx.globalAlpha = beatPulse * 0.5;
+            const pr = 10 + (1 - beatPulse) * 26;
+            ctx.save();
+            ctx.globalAlpha = beatPulse;
+            ctx.strokeStyle = tierCol;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(TW_JUDGE_X, lastBeatY, pr, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = beatPulse * 0.9;
             ctx.fillStyle = tierCol;
             ctx.beginPath();
-            ctx.arc(TW_JUDGE_X, lastBeatY, 9 + (1 - beatPulse) * 7, 0, Math.PI * 2);
+            ctx.arc(TW_JUDGE_X, lastBeatY, 6, 0, Math.PI * 2);
             ctx.fill();
-            ctx.globalAlpha = 1;
+            ctx.restore();
         }
         for (const r of rings) {
             if (r.resolved && !(songTime - r.hitTime < 0.25))
