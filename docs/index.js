@@ -190,9 +190,6 @@ window.addEventListener("keydown", e => {
     if (k === " ") {
         e.preventDefault();
         spaceHitSong = songNow();
-        // キーを押した瞬間に即時再生（ハードウェア遅延分のみ遅れ、ブラウザ遅延は無し）
-        if (!muted && audioCtx)
-            hitSound("perfect");
         if (gameMode === "tracewave" && twState && twState.onSpace) {
             twState.onSpace();
         }
