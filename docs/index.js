@@ -35,9 +35,11 @@ let gameOver = false;
 let score = 0;
 let songTime = 0;
 let muted = false;
-// タイミング補正 (ms): 正 = ヒット判定を後ろへ、負 = 前へ。localStorage に保存。
+// タイミング補正 (ms): 自動キャリブレーションで計測。プレイヤーには非公開。
 let timingOffset = parseInt(localStorage.getItem("rhythmTimingOffset") || "0", 10);
-function saveTimingOffset() { localStorage.setItem("rhythmTimingOffset", String(timingOffset)); }
+let calibSamples = [];
+const CALIB_TOTAL = 8; // 計測する押下回数
+const CALIB_DISCARD = 2; // 最初の n 回は反応時間の安定待ちとして捨てる
 const keys = {};
 let keysJust = {};
 let spaceHitSong = -1;
@@ -213,23 +215,15 @@ function drawMenu() {
     const pulse = Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
     drawText("トレース・ウェーブ", CX, 142, TEXT, 46);
     drawText("T R A C E   W A V E", CX, 178, ACCENT, 14);
-    // BPM
-    drawText("BPM", CX, 240, MUTED, 14);
-    drawText(`${bpm}`, CX, 272, TEXT, 30);
-    drawText("↑ ↓ でテンポ変更", CX, 296, MUTED, 13);
-    // タイミング補正
-    const offsetColor = timingOffset === 0 ? MUTED : ACCENT;
-    const offsetSign = timingOffset >= 0 ? "+" : "";
-    drawText("タイミング補正", CX, 334, MUTED, 14);
-    drawText(`${offsetSign}${timingOffset} ms`, CX, 360, offsetColor, 28);
-    drawText("[ で −10ms (早める)    ] で +10ms (遅らせる)", CX, 384, MUTED, 13);
-    drawText("押すのが遅れる → + 方向、早すぎる → − 方向", CX, 402, MUTED, 12);
-    drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 432, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
+    drawText("BPM", CX, 262, MUTED, 14);
+    drawText(`${bpm}`, CX, 296, TEXT, 30);
+    drawText("↑ ↓ でテンポ変更", CX, 322, MUTED, 13);
+    drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
     const s = 1 + pulse * 0.025;
     ctx.save();
-    ctx.translate(CX, 492);
+    ctx.translate(CX, 446);
     ctx.scale(s, s);
-    const cw = 220, ch = 56, x = -cw / 2, y = -ch / 2, r = 14;
+    const cw = 220, ch = 62, x = -cw / 2, y = -ch / 2, r = 14;
     ctx.fillStyle = SURFACE;
     roundRect(x, y, cw, ch, r);
     ctx.fill();
@@ -239,9 +233,9 @@ function drawMenu() {
     ctx.stroke();
     drawText("▶  PLAY", 0, -2, TEXT, 24);
     ctx.restore();
-    drawText("Space / →", CX, 528, MUTED, 13);
-    drawText("R リスタート    ESC メニュー    M ミュート", CX, 562, MUTED, 13);
-    drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE", CX, 582, MUTED, 12);
+    drawText("Space / →", CX, 492, MUTED, 13);
+    drawText("R リスタート    ESC メニュー    M ミュート", CX, 552, MUTED, 13);
+    drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE", CX, 574, MUTED, 13);
 }
 function startTraceWave() {
     gameMode = "tracewave";
@@ -252,9 +246,74 @@ function startTraceWave() {
     resetAudioClock();
     initTraceWave();
 }
+// ─── Calibration ───
+function startCalibration() {
+    gameMode = "calibrating";
+    calibSamples = [];
+    spaceHitSong = -1;
+    resetAudioClock();
+}
+function drawCalibration() {
+    drawBackground();
+    const phase = (songTime % beatMs) / beatMs;
+    // 拍頭で最大になる大きな円（視覚的ビート）
+    const pulse = Math.pow(Math.max(0, 1 - phase * 2.5), 2);
+    const pr = 28 + pulse * 38;
+    ctx.save();
+    ctx.globalAlpha = 0.18 + pulse * 0.55;
+    ctx.fillStyle = ACCENT;
+    ctx.beginPath();
+    ctx.arc(CX, 370, pr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    drawText("準備", CX, 160, MUTED, 14);
+    drawText("メトロノームに合わせて", CX, 210, TEXT, 28);
+    drawText("SPACE を押してください", CX, 252, TEXT, 28);
+    const done = calibSamples.length;
+    const total = CALIB_TOTAL;
+    // プログレスバー
+    const bw = 300, bh = 8, bx = CX - bw / 2, by = 430;
+    ctx.fillStyle = SURFACE;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(bx, by, bw, bh, 4) : ctx.rect(bx, by, bw, bh);
+    ctx.fill();
+    ctx.fillStyle = ACCENT;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(bx, by, bw * (done / total), bh, 4) : ctx.rect(bx, by, bw * (done / total), bh);
+    ctx.fill();
+    drawText(`${done} / ${total}`, CX, 410, done > 0 ? ACCENT : MUTED, 22);
+    drawText("ESC でキャンセル", CX, 520, MUTED, 13);
+}
+function updateCalibration() {
+    if (keysJust[" "]) {
+        keysJust[" "] = false;
+        const t = spaceHitSong >= 0 ? spaceHitSong : songTime;
+        spaceHitSong = -1;
+        // 最も近い拍を探し、そこからのずれを記録
+        const nearestBeat = Math.round(t / beatMs) * beatMs;
+        const err = t - nearestBeat;
+        calibSamples.push(err);
+        if (calibSamples.length >= CALIB_TOTAL) {
+            // 最初の CALIB_DISCARD 回を捨て、残りの中央値をオフセットに採用
+            const valid = calibSamples.slice(CALIB_DISCARD).sort((a, b) => a - b);
+            const mid = Math.floor(valid.length / 2);
+            const median = valid.length % 2 === 0
+                ? (valid[mid - 1] + valid[mid]) / 2
+                : valid[mid];
+            timingOffset = Math.round(clamp(median, -400, 400));
+            localStorage.setItem("rhythmTimingOffset", String(timingOffset));
+            startTraceWave();
+        }
+    }
+    if (keysJust["Escape"]) {
+        keysJust["Escape"] = false;
+        gameMode = "menu";
+    }
+}
 function updateMenu() {
     if (keysJust["ArrowRight"] || keysJust[" "]) {
-        startTraceWave();
+        startCalibration();
         keysJust["ArrowRight"] = false;
         keysJust[" "] = false;
     }
@@ -267,23 +326,6 @@ function updateMenu() {
         bpm = Math.max(60, bpm - 5);
         beatMs = 60000 / bpm;
         keysJust["ArrowDown"] = false;
-    }
-    // タイミング補正: [ で -10ms, ] で +10ms。-500〜+500ms の範囲に制限。
-    if (keysJust["["] || keysJust["{"]) {
-        timingOffset = Math.max(-500, timingOffset - 10);
-        saveTimingOffset();
-        keysJust["["] = false;
-        keysJust["{"] = false;
-    }
-    if (keysJust["]"]) {
-        timingOffset = Math.min(500, timingOffset + 10);
-        saveTimingOffset();
-        keysJust["]"] = false;
-    }
-    if (keysJust["}"]) {
-        timingOffset = Math.min(500, timingOffset + 10);
-        saveTimingOffset();
-        keysJust["}"] = false;
     }
 }
 const TW_JUDGE_X = Math.round(W * 0.26);
@@ -540,6 +582,10 @@ function gameLoop(time) {
             updateMenu();
             drawMenu();
         }
+        else if (gameMode === "calibrating") {
+            updateCalibration();
+            drawCalibration();
+        }
         else if (gameMode === "tracewave") {
             if (twState) {
                 twState.update(dt);
@@ -548,7 +594,7 @@ function gameLoop(time) {
             if (keysJust["r"] || keysJust["R"]) {
                 keysJust["r"] = false;
                 keysJust["R"] = false;
-                startTraceWave();
+                startCalibration();
             }
             if (keysJust["Escape"]) {
                 keysJust["Escape"] = false;
