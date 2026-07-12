@@ -334,13 +334,17 @@ function initTraceWave() {
     spaceHitSong = -1;
     for (const r of rings) {
       if (r.resolved) continue;
-      const err = Math.abs(pressTime - r.hitTime);
-      if (err < beatMs * 0.4 && err < bestErr) { best = r; bestErr = err; }
+      // 物理的なキー押し込みからブラウザにイベントが届くまでの
+      // ハードウェア/OSの入力遅延（USBポーリング等）を約25msと仮定して補正
+      const err = (pressTime - r.hitTime) - 25;
+      const absErr = Math.abs(err);
+      if (absErr < beatMs * 0.4 && absErr < bestErr) { best = r; bestErr = absErr; }
     }
     if (best) {
       best.resolved = true;
       best.hit = true;
-      const result: "perfect" | "good" = bestErr < 55 ? "perfect" : "good";
+      // Webブラウザ環境のためPERFECT判定を 75ms (約4.5フレーム) に緩和
+      const result: "perfect" | "good" = bestErr < 75 ? "perfect" : "good";
       const tier = tierFor(combo);
       combo += 5;
       score += 200 + combo * 4;
