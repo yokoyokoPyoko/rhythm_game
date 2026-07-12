@@ -157,9 +157,10 @@ function hitSound(quality: "perfect" | "good" | "miss") {
 
 window.addEventListener("keydown", e => {
   if (e.repeat) return; // 長押しによる連続入力を防ぐ
-  if (!keys[e.key]) keysJust[e.key] = true;
-  keys[e.key] = true;
-  if (e.key === " ") {
+  const k = e.code === "Space" ? " " : e.key;
+  if (!keys[k]) keysJust[k] = true;
+  keys[k] = true;
+  if (k === " ") {
     e.preventDefault();
     // audioCtx.currentTime でなく performance.now() ベースで記録し、
     // フレーム遅延によるずれを防ぐ。
@@ -168,10 +169,13 @@ window.addEventListener("keydown", e => {
       twState.onSpace();
     }
   }
-  if (e.key === "m" || e.key === "M") { muted = !muted; keysJust["m"] = false; keysJust["M"] = false; }
+  if (k === "m" || k === "M") { muted = !muted; keysJust["m"] = false; keysJust["M"] = false; }
   ensureAudio();
 });
-window.addEventListener("keyup", e => { keys[e.key] = false; });
+window.addEventListener("keyup", e => { 
+  const k = e.code === "Space" ? " " : e.key;
+  keys[k] = false; 
+});
 canvas.addEventListener("click", () => ensureAudio());
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
