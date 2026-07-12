@@ -128,17 +128,18 @@ function playClickAt(time: number, beat: number) {
 
 function audioOutputLatency(): number {
   if (!audioCtx) return 0;
-  const base = audioCtx.baseLatency || 0;
-  let out = audioCtx.outputLatency || 0;
 
-  // Linux (Desktop) 環境の Chromium では outputLatency が実際の物理遅延の約2倍（過大）に
-  // 報告されるバグがあるため、0.5倍の補正係数を適用します。
   const isLinux = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
   if (isLinux) {
-    out = out * 0.375;
+    // Linux/Chromium環境では outputLatency が数百ms等の異常値を突発的に返すバグがあり、
+    // タイミングが突然250msずれるなどの原因になるため、実測でPERFECTとなる固定値(54ms)を使用する。
+    return 0.054;
   }
 
+  const base = audioCtx.baseLatency || 0;
+  const out = audioCtx.outputLatency || 0;
   const total = base + out;
+  
   // 異常に大きい値（0.5秒以上など）の場合は安全のために 0.02 (20ms) にフォールバック
   return total < 0.5 ? total : 0.02;
 }
@@ -313,12 +314,13 @@ let twState: {
 
 function initTraceWave() {
   let offset = 0;
-  let cursorY = TW_CENTER_Y;
+  // 波形の初期状態（t=0）は Peak（上端）から始まるため、カーソルもそれに合わせる
+  let cursorY = TW_CENTER_Y - TW_AMP;
   let combo = 0;
   let inSync = 0;
   let outSync = 0;
   let beatPulse = 0;
-  let lastBeatY = TW_CENTER_Y;
+  let lastBeatY = TW_CENTER_Y - TW_AMP;
   let lastCornerIdx = 0;
   let flash = 0;
   let judgeFlash = 0;
