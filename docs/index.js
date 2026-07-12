@@ -56,7 +56,9 @@ function ensureAudio() {
             const AC = window.AudioContext || window.webkitAudioContext;
             if (!AC)
                 return;
-            audioCtx = new AC();
+            // latencyHint: "interactive" でOSに最小バッファを要求する。
+            // Linux/PipeWire ではデフォルト比 5​~​10 倍の遅延改善になることが多い。
+            audioCtx = new AC({ latencyHint: "interactive" });
             audioStartTime = audioCtx.currentTime;
             alignScheduler();
             audioStarted = true;
@@ -117,12 +119,26 @@ function playClickAt(time, beat) {
         o.stop(time + 0.06);
     }
 }
+// オーディオ出力遅延の推定値 (s)。
+// baseLatency はOSバッファ固定分、outputLatency はソフトウェアミキシング分を含む。
+// outputLatency は Linux で不正確な場合があるので上限を引いてクランプ。
+function audioLatency() {
+    if (!audioCtx)
+        return 0;
+    const base = audioCtx.baseLatency || 0;
+    const out = audioCtx.outputLatency || 0;
+    // outputLatency が明らかに大きすぎる場合は baseLatency のみを使用
+    return out > 0 && out < 0.35 ? out : base;
+}
 function scheduleMetronome() {
     if (!audioCtx || !audioStarted || muted)
         return;
-    const ahead = 0.15;
+    const ahead = 0.20; // ルックアヘッドを少し広げて左記されることを防ぎます
+    const lat = audioLatency();
     while (nextBeatTime < audioCtx.currentTime + ahead) {
-        playClickAt(nextBeatTime, schedulerBeat);
+        // 「耳に届く時刻」が nextBeatTime になるよう、lat 分早めにスケジュールする。
+        const sched = Math.max(audioCtx.currentTime + 0.001, nextBeatTime - lat);
+        playClickAt(sched, schedulerBeat);
         nextBeatTime += beatMs / 1000;
         schedulerBeat++;
     }

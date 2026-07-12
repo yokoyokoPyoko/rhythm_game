@@ -83,6 +83,22 @@
   `spaceHitSong` の記録も `songNow()` に統一（旧コードは `audioTimeToSong(audioCtx.currentTime)` で
   同じ計算をしていたが、意図が不明瞭だったため整理）。
 
+### 12. 音声スケジューリングの根本修正（描画遅延か音声遅延か混乱）
+- 症状: 「描画が遅れてる？いや音が遅れてる？わからん」
+- 診断: この混乱自体が「視覚と聴覚がズレている」証拠。
+  - 描画（リング最小）: `audioCtx.currentTime = audioStartTime + N * beatSec` の瞬間 → **正確**
+  - 音声（クリックが耳に届く）: 上記 + `actualOutputLatency` 秒後 → **遅れる**
+  - つまり「リングが最小になってから音が聞こえる」状態だった。
+- 根本修正:
+  ① `AudioContext({ latencyHint: "interactive" })` で OS に最小バッファを要求
+    → Linux/PipeWire でデフォルト比 5〜10 倍の遅延改善が見込める。
+  ② 音を `audioLatency()` 秒だけ早めにスケジュールする
+    → `sched = max(currentTime + 1ms, nextBeatTime - audioLatency())`
+    → 音が「耳に届く瞬間」が `nextBeatTime`（= リングが最小になる瞬間）に一致。
+  ③ `audioLatency()` は `outputLatency`（0.35s 未満なら採用）か `baseLatency` を使用
+    → Linux での `outputLatency` 過大報告に対して上限クランプ。
+- ルックアヘッドを 0.15s → 0.20s に拡張（早めスケジュール時の余裕確保）。
+
 ### 10. キー入力の端末依存遅延とタイミング補正機能の実装（agy 調査）
 - 症状（修正 9 後）: 「キー入力の遅延が 0.5 拍ぐらいある。どの端末でも正常にしたい」。
 - 原因: Web ブラウザのキー入力には以下の複数の遅延源があり、端末・OS・音声ドライバで異なる:
