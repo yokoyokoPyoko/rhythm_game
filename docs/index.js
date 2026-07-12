@@ -188,9 +188,10 @@ window.addEventListener("keydown", e => {
     keys[k] = true;
     if (k === " ") {
         e.preventDefault();
-        // audioCtx.currentTime でなく performance.now() ベースで記録し、
-        // フレーム遅延によるずれを防ぐ。
         spaceHitSong = songNow();
+        // キーを押した瞬間に即時再生（ハードウェア遅延分のみ遅れ、ブラウザ遅延は無し）
+        if (!muted && audioCtx)
+            hitSound("perfect");
         if (gameMode === "tracewave" && twState && twState.onSpace) {
             twState.onSpace();
         }
@@ -376,12 +377,7 @@ function initTraceWave() {
             judgeText = result === "perfect" ? `PERFECT! (${signStr} ${msStr})` : `GOOD (${signStr} ${msStr})`;
             judgeColor = result === "perfect" ? POSITIVE : "#ffb454";
             judgeFlash = 1;
-            // ヒット音をリングの hitTime（実際に音が鳴るべき瞬間）に合わせてスケジュール。
-            // outputLatency 分だけ早めに登録することで、メトロノームと同じ到達タイミングになる。
-            const hitSoundTime = audioCtx
-                ? audioStartTime + best.hitTime / 1000 - audioOutputLatency()
-                : undefined;
-            hitSound(result, hitSoundTime);
+            // 音は keydown 時に即時再生済みのため、ここでは再生しない
         }
     }
     function update(dt) {
