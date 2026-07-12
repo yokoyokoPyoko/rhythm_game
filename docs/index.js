@@ -80,13 +80,15 @@ function resetAudioClock() {
     }
     perfStart = performance.now();
 }
-// オーディオ出力遅延の推定値 (s)。
+let _latencyLogged = false;
 function audioLatency() {
     if (!audioCtx)
         return 0;
-    // outputLatency はブラウザ/OSによって過大報告（数百ms等）されることがあり、
-    // 映像が極端に遅れる原因になります。
-    // baseLatency（ハードウェアバッファ長、通常数ms〜数十ms）のみを信用します。
+    if (!_latencyLogged) {
+        _latencyLogged = true;
+        console.log(`[LATENCY] baseLatency=${(audioCtx.baseLatency * 1000).toFixed(1)}ms` +
+            ` outputLatency=${(audioCtx.outputLatency * 1000).toFixed(1)}ms`);
+    }
     return audioCtx.baseLatency || 0.03;
 }
 function songNow() {
@@ -339,10 +341,10 @@ function initTraceWave() {
         for (const r of rings) {
             if (r.resolved)
                 continue;
-            // 物理的なキー押し込みからブラウザにイベントが届くまでの
-            // ハードウェア/OSの入力遅延（USBポーリング等）を約25msと仮定して補正
-            const err = (pressTime - r.hitTime) - 25;
+            const rawErr = pressTime - r.hitTime;
+            const err = rawErr - 25;
             const absErr = Math.abs(err);
+            console.log(`[HIT] pressTime=${pressTime.toFixed(1)} hitTime=${r.hitTime.toFixed(1)} rawErr=${rawErr.toFixed(1)}ms window=±${(beatMs * 0.4).toFixed(0)}ms`);
             if (absErr < beatMs * 0.4 && absErr < bestErr) {
                 best = r;
                 bestErr = absErr;
