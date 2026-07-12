@@ -42,6 +42,7 @@ let muted = false;
 
 const keys: Record<string, boolean> = {};
 let keysJust: Record<string, boolean> = {};
+let spaceHitSong = -1;
 
 // ── Audio (lookahead scheduler, audio-clock driven) ──
 
@@ -82,9 +83,18 @@ function resetAudioClock() {
   perfStart = performance.now();
 }
 
+function outputLatency(): number {
+  if (!audioCtx) return 0;
+  return (audioCtx as any).outputLatency || (audioCtx as any).baseLatency || 0;
+}
+
 function songNow(): number {
-  if (audioCtx && audioStarted) return (audioCtx.currentTime - audioStartTime) * 1000;
+  if (audioCtx && audioStarted) return (audioCtx.currentTime - audioStartTime - outputLatency()) * 1000;
   return performance.now() - perfStart;
+}
+
+function audioTimeToSong(t: number): number {
+  return (t - audioStartTime - outputLatency()) * 1000;
 }
 
 function playClickAt(time: number, beat: number) {
@@ -134,7 +144,10 @@ function hitSound(quality: "perfect" | "good" | "miss") {
 window.addEventListener("keydown", e => {
   if (!keys[e.key]) keysJust[e.key] = true;
   keys[e.key] = true;
-  if (e.key === " ") e.preventDefault();
+  if (e.key === " ") {
+    e.preventDefault();
+    spaceHitSong = (audioCtx && audioStarted) ? audioTimeToSong(audioCtx.currentTime) : -1;
+  }
   if (e.key === "m" || e.key === "M") { muted = !muted; keysJust["m"] = false; keysJust["M"] = false; }
   ensureAudio();
 });
@@ -217,6 +230,7 @@ function startTraceWave() {
   gameOver = false;
   score = 0;
   songTime = 0;
+  spaceHitSong = -1;
   resetAudioClock();
   initTraceWave();
 }
@@ -296,9 +310,11 @@ function initTraceWave() {
   function attemptHit() {
     let best: Ring | null = null;
     let bestErr = Infinity;
+    const pressTime = spaceHitSong >= 0 ? spaceHitSong : songTime;
+    spaceHitSong = -1;
     for (const r of rings) {
       if (r.resolved) continue;
-      const err = Math.abs(songTime - r.hitTime);
+      const err = Math.abs(pressTime - r.hitTime);
       if (err < beatMs * 0.4 && err < bestErr) { best = r; bestErr = err; }
     }
     if (best) {

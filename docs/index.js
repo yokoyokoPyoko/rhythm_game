@@ -37,6 +37,7 @@ let songTime = 0;
 let muted = false;
 const keys = {};
 let keysJust = {};
+let spaceHitSong = -1;
 // ── Audio (lookahead scheduler, audio-clock driven) ──
 let audioCtx = null;
 let audioStartTime = 0;
@@ -77,10 +78,18 @@ function resetAudioClock() {
     }
     perfStart = performance.now();
 }
+function outputLatency() {
+    if (!audioCtx)
+        return 0;
+    return audioCtx.outputLatency || audioCtx.baseLatency || 0;
+}
 function songNow() {
     if (audioCtx && audioStarted)
-        return (audioCtx.currentTime - audioStartTime) * 1000;
+        return (audioCtx.currentTime - audioStartTime - outputLatency()) * 1000;
     return performance.now() - perfStart;
+}
+function audioTimeToSong(t) {
+    return (t - audioStartTime - outputLatency()) * 1000;
 }
 function playClickAt(time, beat) {
     if (!audioCtx || muted)
@@ -152,8 +161,10 @@ window.addEventListener("keydown", e => {
     if (!keys[e.key])
         keysJust[e.key] = true;
     keys[e.key] = true;
-    if (e.key === " ")
+    if (e.key === " ") {
         e.preventDefault();
+        spaceHitSong = (audioCtx && audioStarted) ? audioTimeToSong(audioCtx.currentTime) : -1;
+    }
     if (e.key === "m" || e.key === "M") {
         muted = !muted;
         keysJust["m"] = false;
@@ -227,6 +238,7 @@ function startTraceWave() {
     gameOver = false;
     score = 0;
     songTime = 0;
+    spaceHitSong = -1;
     resetAudioClock();
     initTraceWave();
 }
@@ -299,10 +311,12 @@ function initTraceWave() {
     function attemptHit() {
         let best = null;
         let bestErr = Infinity;
+        const pressTime = spaceHitSong >= 0 ? spaceHitSong : songTime;
+        spaceHitSong = -1;
         for (const r of rings) {
             if (r.resolved)
                 continue;
-            const err = Math.abs(songTime - r.hitTime);
+            const err = Math.abs(pressTime - r.hitTime);
             if (err < beatMs * 0.4 && err < bestErr) {
                 best = r;
                 bestErr = err;
