@@ -32,18 +32,13 @@ ctx.fillText("初期化中... (Initializing)", 400, 300);
 const CX = W / 2;
 const CY = H / 2;
 
-let gameMode: "menu" | "calibrating" | "tracewave" = "menu";
+let gameMode: "menu" | "tracewave" = "menu";
 let bpm = 120;
 let beatMs = 60000 / bpm;
 let gameOver = false;
 let score = 0;
 let songTime = 0;
 let muted = false;
-// タイミング補正 (ms): 自動キャリブレーションで計測。プレイヤーには非公開。
-let timingOffset: number = parseInt(localStorage.getItem("rhythmTimingOffset") || "0", 10);
-let calibSamples: number[] = [];
-const CALIB_TOTAL = 8;   // 計測する押下回数
-const CALIB_DISCARD = 2; // 最初の n 回は反応時間の安定待ちとして捨てる
 
 const keys: Record<string, boolean> = {};
 let keysJust: Record<string, boolean> = {};
@@ -167,6 +162,9 @@ window.addEventListener("keydown", e => {
     // audioCtx.currentTime でなく performance.now() ベースで記録し、
     // フレーム遅延によるずれを防ぐ。
     spaceHitSong = songNow();
+    if (gameMode === "tracewave" && twState && twState.onSpace) {
+      twState.onSpace();
+    }
   }
   if (e.key === "m" || e.key === "M") { muted = !muted; keysJust["m"] = false; keysJust["M"] = false; }
   ensureAudio();
@@ -255,78 +253,8 @@ function startTraceWave() {
   initTraceWave();
 }
 
-// ─── Calibration ───
-
-function startCalibration() {
-  gameMode = "calibrating";
-  calibSamples = [];
-  spaceHitSong = -1;
-  resetAudioClock();
-}
-
-function drawCalibration() {
-  drawBackground();
-
-  const phase = (songTime % beatMs) / beatMs;
-  // 拍頭で最大になる大きな円（視覚的ビート）
-  const pulse = Math.pow(Math.max(0, 1 - phase * 2.5), 2);
-  const pr = 28 + pulse * 38;
-  ctx.save();
-  ctx.globalAlpha = 0.18 + pulse * 0.55;
-  ctx.fillStyle = ACCENT;
-  ctx.beginPath();
-  ctx.arc(CX, 370, pr, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.restore();
-
-  drawText("準備", CX, 160, MUTED, 14);
-  drawText("メトロノームに合わせて", CX, 210, TEXT, 28);
-  drawText("SPACE を押してください", CX, 252, TEXT, 28);
-
-  const done = calibSamples.length;
-  const total = CALIB_TOTAL;
-  // プログレスバー
-  const bw = 300, bh = 8, bx = CX - bw / 2, by = 430;
-  ctx.fillStyle = SURFACE;
-  ctx.beginPath();
-  ctx.roundRect ? ctx.roundRect(bx, by, bw, bh, 4) : ctx.rect(bx, by, bw, bh);
-  ctx.fill();
-  ctx.fillStyle = ACCENT;
-  ctx.beginPath();
-  ctx.roundRect ? ctx.roundRect(bx, by, bw * (done / total), bh, 4) : ctx.rect(bx, by, bw * (done / total), bh);
-  ctx.fill();
-
-  drawText(`${done} / ${total}`, CX, 410, done > 0 ? ACCENT : MUTED, 22);
-  drawText("ESC でキャンセル", CX, 520, MUTED, 13);
-}
-
-function updateCalibration() {
-  if (keysJust[" "]) {
-    keysJust[" "] = false;
-    const t = spaceHitSong >= 0 ? spaceHitSong : songTime;
-    spaceHitSong = -1;
-    // 最も近い拍を探し、そこからのずれを記録
-    const nearestBeat = Math.round(t / beatMs) * beatMs;
-    const err = t - nearestBeat;
-    calibSamples.push(err);
-    if (calibSamples.length >= CALIB_TOTAL) {
-      // 最初の CALIB_DISCARD 回を捨て、残りの中央値をオフセットに採用
-      const valid = calibSamples.slice(CALIB_DISCARD).sort((a, b) => a - b);
-      const mid = Math.floor(valid.length / 2);
-      const median = valid.length % 2 === 0
-        ? (valid[mid - 1] + valid[mid]) / 2
-        : valid[mid];
-      timingOffset = Math.round(clamp(median, -400, 400));
-      localStorage.setItem("rhythmTimingOffset", String(timingOffset));
-      startTraceWave();
-    }
-  }
-  if (keysJust["Escape"]) { keysJust["Escape"] = false; gameMode = "menu"; }
-}
-
 function updateMenu() {
-  if (keysJust["ArrowRight"] || keysJust[" "]) { startCalibration(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
+  if (keysJust["ArrowRight"] || keysJust[" "]) { startTraceWave(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
   if (keysJust["ArrowUp"])   { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
   if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5);  beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
 }
@@ -349,6 +277,7 @@ const tierColorsTW = ["#4cc9f0", "#56e39f", "#ffb454", "#ff5d6c"];
 let twState: {
   update: (dt: number) => void;
   render: () => void;
+  onSpace: () => void;
 } | null = null;
 
 function initTraceWave() {
@@ -404,8 +333,7 @@ function initTraceWave() {
     spaceHitSong = -1;
     for (const r of rings) {
       if (r.resolved) continue;
-      // timingOffset: 補正分だけヒット判定ウィンドウをずらす
-      const err = Math.abs(pressTime - (r.hitTime + timingOffset));
+      const err = Math.abs(pressTime - r.hitTime);
       if (err < beatMs * 0.4 && err < bestErr) { best = r; bestErr = err; }
     }
     if (best) {
@@ -445,12 +373,9 @@ function initTraceWave() {
     flash = Math.max(0, flash - dt);
     judgeFlash = Math.max(0, judgeFlash - dt * 2.5);
 
-    if (keysJust[" "]) { keysJust[" "] = false; attemptHit(); }
-
     for (const r of rings) {
       if (r.resolved) continue;
-      // timingOffset が大きい場合でもMISS判定ウィンドウをずらす
-      if (songTime > r.hitTime + timingOffset + beatMs * 0.4) {
+      if (songTime > r.hitTime + beatMs * 0.4) {
         r.resolved = true;
         r.hit = false;
         combo = 0;
@@ -587,7 +512,7 @@ function initTraceWave() {
     drawText("↑ ↓ で波形をなぞる   リングが最小になった瞬間に SPACE", CX, H - 22, MUTED, 14);
   }
 
-  twState = { update, render };
+  twState = { update, render, onSpace: attemptHit };
 }
 
 // ─── Main Loop ───
@@ -605,15 +530,12 @@ function gameLoop(time: number) {
     if (gameMode === "menu") {
       updateMenu();
       drawMenu();
-    } else if (gameMode === "calibrating") {
-      updateCalibration();
-      drawCalibration();
     } else if (gameMode === "tracewave") {
       if (twState) {
         twState.update(dt);
         twState.render();
       }
-      if (keysJust["r"] || keysJust["R"]) { keysJust["r"] = false; keysJust["R"] = false; startCalibration(); }
+      if (keysJust["r"] || keysJust["R"]) { keysJust["r"] = false; keysJust["R"] = false; startTraceWave(); }
       if (keysJust["Escape"]) { keysJust["Escape"] = false; gameMode = "menu"; }
     }
 
