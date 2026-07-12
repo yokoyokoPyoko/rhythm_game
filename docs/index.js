@@ -116,12 +116,28 @@ function playClickAt(time, beat) {
         o.stop(time + 0.06);
     }
 }
+function audioOutputLatency() {
+    if (!audioCtx)
+        return 0;
+    // outputLatency = OS/ドライバの実際のバッファ遅延。
+    // 「スケジュール時刻 T に音を登録しても、スピーカーから出るのは T + outputLatency 秒後」
+    // Linux/Chromeでは outputLatency が正確。Firefox や一部環境では 0 の場合もあり、
+    // その場合は baseLatency (ハードウェアバッファ) で代用する。
+    const out = audioCtx.outputLatency || 0;
+    const base = audioCtx.baseLatency || 0;
+    const lat = out > 0 ? out : base;
+    // 明らかにおかしな値（>500ms）は無視して 0 でフォールバック
+    return lat < 0.5 ? lat : 0;
+}
 function scheduleMetronome() {
     if (!audioCtx || !audioStarted || muted)
         return;
-    const ahead = 0.20; // ルックアヘッドを少し広げて左記されることを防ぎます
+    const ahead = 0.20;
+    const lat = audioOutputLatency();
     while (nextBeatTime < audioCtx.currentTime + ahead) {
-        const sched = Math.max(audioCtx.currentTime + 0.001, nextBeatTime);
+        // 「スピーカーから音が出る時刻」 = nextBeatTime になるよう、
+        // lat 分だけ早めに AudioContext に登録する。
+        const sched = Math.max(audioCtx.currentTime + 0.001, nextBeatTime - lat);
         playClickAt(sched, schedulerBeat);
         nextBeatTime += beatMs / 1000;
         schedulerBeat++;
