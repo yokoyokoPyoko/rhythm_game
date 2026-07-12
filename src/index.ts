@@ -56,19 +56,25 @@ function ensureAudio() {
       if (!AC) return;
       audioCtx = new AC();
       audioStartTime = audioCtx.currentTime;
-      nextBeatTime = audioCtx.currentTime + 0.12;
-      schedulerBeat = 0;
+      alignScheduler();
       audioStarted = true;
     }
     if (audioCtx.state === "suspended") audioCtx.resume();
   } catch { audioCtx = null; }
 }
 
+function alignScheduler() {
+  if (!audioCtx) return;
+  const beatSec = beatMs / 1000;
+  const elapsedBeats = (audioCtx.currentTime - audioStartTime) / beatSec;
+  schedulerBeat = Math.max(0, Math.ceil(elapsedBeats));
+  nextBeatTime = audioStartTime + schedulerBeat * beatSec;
+}
+
 function resetAudioClock() {
   if (audioCtx && audioStarted) {
     audioStartTime = audioCtx.currentTime;
-    nextBeatTime = audioCtx.currentTime + 0.12;
-    schedulerBeat = 0;
+    alignScheduler();
   }
   perfStart = performance.now();
 }
@@ -156,13 +162,6 @@ function wrapAngle(a: number) {
   return a;
 }
 
-function angleDiff(a: number, b: number) {
-  let d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return Math.abs(d);
-}
-
 function drawText(text: string, x: number, y: number, color: string, size: number, align: CanvasTextAlign = "center") {
   ctx.fillStyle = color;
   ctx.font = `${size}px sans-serif`;
@@ -246,10 +245,10 @@ interface Note {
   judged: boolean;
   result?: "perfect" | "good" | "miss";
   hitAnim: number;
+  inWindow: boolean;
 }
 
 let swState: {
-  playerAngle: number;
   notes: Note[];
   health: number;
   combo: number;
@@ -258,6 +257,7 @@ let swState: {
   judgeText: string;
   judgeColor: string;
   beatPulse: number;
+  shockAnim: number;
   lastSpawnBeat: number;
   update: (dt: number) => void;
   render: () => void;
@@ -265,9 +265,9 @@ let swState: {
 
 const JUDGE_R = 150;
 const APPROACH_BEATS = 2;
+const HIT_WINDOW = 0.4;
 
 function initSoundWave() {
-  let playerAngle = 0;
   let notes: Note[] = [];
   let health = 100;
   let combo = 0;
@@ -276,47 +276,49 @@ function initSoundWave() {
   let judgeText = "";
   let judgeColor = "#fff";
   let beatPulse = 0;
+  let shockAnim = 0;
   let lastSpawnBeat = -1;
 
   const state = {
-    playerAngle: 0, notes, health, combo, maxCombo,
+    notes, health, combo, maxCombo,
     judgeFlash: 0, judgeText: "", judgeColor: "#fff",
-    beatPulse: 0, lastSpawnBeat: -1, update, render
+    beatPulse: 0, shockAnim: 0, lastSpawnBeat: -1, update, render
   };
 
   function spawnNote(targetBeat: number) {
     const angle = Math.random() * Math.PI * 2;
-    notes.push({ angle, targetBeat, judged: false, hitAnim: 0 });
+    notes.push({ angle, targetBeat, judged: false, hitAnim: 0, inWindow: false });
   }
 
   function judgePress() {
-    const currentBeatTime = songTime;
-    let best: Note | null = null;
+    let hitAny = false;
     let bestErr = Infinity;
+    let bestResult: "perfect" | "good" = "good";
     for (const n of notes) {
       if (n.judged) continue;
       const targetTime = n.targetBeat * beatMs;
-      const err = Math.abs(currentBeatTime - targetTime);
-      const angleOk = angleDiff(n.angle, playerAngle) < 0.45;
-      if (angleOk && err < bestErr) {
-        bestErr = err;
-        best = n;
+      const err = Math.abs(songTime - targetTime);
+      if (err < beatMs * HIT_WINDOW) {
+        hitAny = true;
+        if (err < bestErr) {
+          bestErr = err;
+          bestResult = err < 55 ? "perfect" : err < 120 ? "good" : "good";
+        }
+        n.judged = true;
+        n.result = err < 55 ? "perfect" : "good";
+        n.hitAnim = 1;
       }
     }
-    if (best && bestErr < beatMs * 0.45) {
-      best.judged = true;
-      let result: "perfect" | "good";
-      if (bestErr < 55) { result = "perfect"; score += 100; }
-      else if (bestErr < 120) { result = "good"; score += 50; }
-      else { result = "good"; score += 25; }
-      best.result = result;
-      best.hitAnim = 1;
+    if (hitAny) {
+      const mult = bestResult === "perfect" ? 1 : 0.5;
+      score += Math.round(100 * mult);
       combo++;
       if (combo > maxCombo) maxCombo = combo;
-      judgeText = result === "perfect" ? "PERFECT!" : "GOOD";
-      judgeColor = result === "perfect" ? "#00ff88" : "#ffaa00";
+      judgeText = bestResult === "perfect" ? "PERFECT!" : "GOOD";
+      judgeColor = bestResult === "perfect" ? "#00ff88" : "#ffaa00";
       judgeFlash = 1;
-      hitSound(result);
+      shockAnim = 1;
+      hitSound(bestResult);
     } else {
       combo = 0;
       judgeText = "MISS";
@@ -330,29 +332,18 @@ function initSoundWave() {
     if (gameOver) return;
     if (health <= 0) { gameOver = true; return; }
 
-    let dx = 0, dy = 0;
-    if (keys["ArrowLeft"]) dx -= 1;
-    if (keys["ArrowRight"]) dx += 1;
-    if (keys["ArrowUp"]) dy -= 1;
-    if (keys["ArrowDown"]) dy += 1;
-    if (dx !== 0 || dy !== 0) {
-      const tx = -Math.sin(playerAngle), ty = Math.cos(playerAngle);
-      const dot = tx * dx + ty * dy;
-      playerAngle += Math.sign(dot) * 3.5 * dt;
-      playerAngle = wrapAngle(playerAngle);
-    }
-
-    const beat = songTime / beatMs;
-    const beatIndex = Math.floor(beat);
+    const beatIndex = Math.floor(songTime / beatMs);
     if (beatIndex !== lastSpawnBeat && beatIndex > 0) {
       lastSpawnBeat = beatIndex;
-      if (Math.random() < 0.8) {
+      if (Math.random() < 0.85) {
         spawnNote(beatIndex + APPROACH_BEATS);
+        if (Math.random() < 0.3) spawnNote(beatIndex + APPROACH_BEATS);
       }
     }
 
     beatPulse = 1 - (songTime % beatMs) / beatMs;
     judgeFlash = Math.max(0, judgeFlash - dt * 2.5);
+    shockAnim = Math.max(0, shockAnim - dt * 3);
 
     if (keysJust[" "]) {
       keysJust[" "] = false;
@@ -362,7 +353,8 @@ function initSoundWave() {
     for (const n of notes) {
       if (n.hitAnim > 0) n.hitAnim = Math.max(0, n.hitAnim - dt * 3);
       const targetTime = n.targetBeat * beatMs;
-      if (!n.judged && songTime > targetTime + 140) {
+      n.inWindow = !n.judged && Math.abs(songTime - targetTime) < beatMs * HIT_WINDOW;
+      if (!n.judged && songTime > targetTime + beatMs * HIT_WINDOW) {
         n.judged = true;
         n.result = "miss";
         health -= 15;
@@ -383,26 +375,21 @@ function initSoundWave() {
     ctx.fillStyle = "#0a0a1a";
     ctx.fillRect(0, 0, W, H);
 
-    if (beatPulse > 0) {
-      const r = JUDGE_R * (1 + (1 - beatPulse) * 0.15);
-      strokeCircle(CX, CY, r, `rgba(233, 69, 96, ${beatPulse * 0.3})`, 2);
+    if (shockAnim > 0) {
+      const r = JUDGE_R + (1 - shockAnim) * 80;
+      strokeCircle(CX, CY, r, `rgba(0, 255, 136, ${shockAnim * 0.5})`, 4);
     }
 
-    strokeCircle(CX, CY, JUDGE_R, "rgba(0, 210, 255, 0.4)", 3);
-    strokeCircle(CX, CY, JUDGE_R, "rgba(255,255,255,0.1)", 1);
-    strokeCircle(CX, CY, 200, "rgba(255,255,255,0.06)", 1);
+    if (beatPulse > 0) {
+      const r = JUDGE_R * (1 + (1 - beatPulse) * 0.12);
+      strokeCircle(CX, CY, r, `rgba(233, 69, 96, ${beatPulse * 0.25})`, 2);
+    }
 
-    const px = CX + Math.cos(playerAngle) * JUDGE_R;
-    const py = CY + Math.sin(playerAngle) * JUDGE_R;
-    fillCircle(px, py, 8, "#00d2ff");
-    strokeCircle(px, py, 14, "#00d2ff", 2);
+    strokeCircle(CX, CY, JUDGE_R, "rgba(0, 210, 255, 0.5)", 3);
+    strokeCircle(CX, CY, JUDGE_R, "rgba(255,255,255,0.12)", 1);
+    strokeCircle(CX, CY, 200, "rgba(255,255,255,0.05)", 1);
 
-    ctx.beginPath();
-    ctx.moveTo(CX, CY);
-    ctx.lineTo(px, py);
-    ctx.strokeStyle = "rgba(0, 210, 255, 0.08)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    fillCircle(CX, CY, 6, "#e94560");
 
     for (const n of notes) {
       if (n.hitAnim > 0) {
@@ -425,11 +412,9 @@ function initSoundWave() {
       const r = progress * JUDGE_R;
       const x = CX + Math.cos(n.angle) * r;
       const y = CY + Math.sin(n.angle) * r;
-      const near = Math.abs(r - JUDGE_R) < 15;
-      const inLane = angleDiff(n.angle, playerAngle) < 0.45;
-      if (near && inLane) {
+      if (n.inWindow) {
         strokeCircle(CX, CY, r, "#ffaa00", 4);
-        fillCircle(x, y, 9, "#ffaa00");
+        fillCircle(x, y, 10, "#ffaa00");
       } else {
         strokeCircle(CX, CY, r, `rgba(233,69,96,${0.7 - progress * 0.3})`, 3);
         fillCircle(x, y, 7, "#e94560");
@@ -452,7 +437,7 @@ function initSoundWave() {
 
     drawText(`Score: ${Math.floor(score)}`, 20, 30, "#fff", 18, "left");
     drawText(`Combo: ${combo}`, 20, 55, "#fff", 18, "left");
-    drawText("← → ↑ ↓ で移動(画面方向)  SPACEでビートに合わせて迎撃", CX, H - 20, "#888", 13);
+    drawText("音符が青い輪に重なったら SPACE!  (ビートに合わせて)", CX, H - 20, "#888", 13);
 
     if (gameOver) {
       ctx.fillStyle = "rgba(0,0,0,0.75)";
