@@ -35,6 +35,7 @@ let gameOver = false;
 let score = 0;
 let songTime = 0;
 let muted = false;
+let keySoundEnabled = localStorage.getItem("rhythmKeySound") !== "false";
 const keys = {};
 let keysJust = {};
 let spaceHitSong = -1;
@@ -120,10 +121,17 @@ function playClickAt(time, beat) {
 function audioOutputLatency() {
     if (!audioCtx)
         return 0;
-    // outputLatency は Linux/Chromium 環境で過大報告されるバグがあるため使用しません。
-    // 信頼性の高い baseLatency (ハードウェアバッファ) のみを使用します。
-    const base = audioCtx.baseLatency || 0.01; // 0の場合は10msとして扱う
-    return base < 0.5 ? base : 0.01;
+    const base = audioCtx.baseLatency || 0;
+    let out = audioCtx.outputLatency || 0;
+    // Linux (Desktop) 環境の Chromium では outputLatency が実際の物理遅延の約2倍（過大）に
+    // 報告されるバグがあるため、0.5倍の補正係数を適用します。
+    const isLinux = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+    if (isLinux) {
+        out = out * 0.375;
+    }
+    const total = base + out;
+    // 異常に大きい値（0.5秒以上など）の場合は安全のために 0.02 (20ms) にフォールバック
+    return total < 0.5 ? total : 0.02;
 }
 function scheduleMetronome() {
     if (!audioCtx || !audioStarted || muted)
@@ -185,6 +193,9 @@ window.addEventListener("keydown", e => {
     if (k === " ") {
         e.preventDefault();
         spaceHitSong = songNow();
+        if (keySoundEnabled) {
+            hitSound("perfect");
+        }
         if (gameMode === "tracewave" && twState && twState.onSpace) {
             twState.onSpace();
         }
@@ -193,6 +204,12 @@ window.addEventListener("keydown", e => {
         muted = !muted;
         keysJust["m"] = false;
         keysJust["M"] = false;
+    }
+    if (k === "k" || k === "K") {
+        keySoundEnabled = !keySoundEnabled;
+        localStorage.setItem("rhythmKeySound", String(keySoundEnabled));
+        keysJust["k"] = false;
+        keysJust["K"] = false;
     }
     ensureAudio();
 });
@@ -242,6 +259,7 @@ function drawMenu() {
     drawText(`${bpm}`, CX, 296, TEXT, 30);
     drawText("↑ ↓ でテンポ変更", CX, 322, MUTED, 13);
     drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
+    drawText(`キー効果音: ${keySoundEnabled ? "ON" : "OFF"} (Kで切替)`, CX, 396, keySoundEnabled ? ACCENT : MUTED, 13);
     const s = 1 + pulse * 0.025;
     ctx.save();
     ctx.translate(CX, 446);
@@ -257,7 +275,7 @@ function drawMenu() {
     drawText("▶  PLAY", 0, -2, TEXT, 24);
     ctx.restore();
     drawText("Space / →", CX, 492, MUTED, 13);
-    drawText("R リスタート    ESC メニュー    M ミュート", CX, 552, MUTED, 13);
+    drawText("R リスタート    ESC メニュー    M ミュート    K キー音切替", CX, 552, MUTED, 13);
     drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE", CX, 574, MUTED, 13);
 }
 function startTraceWave() {
@@ -377,7 +395,8 @@ function initTraceWave() {
         if (gameOver)
             return;
         offset = (songTime / 1000) * TW_SCROLL;
-        const ms = 340;
+        // 波形の傾きとカーソルの上下移動速度を完全に一致させる
+        const ms = (2 * TW_AMP) / (beatMs / 1000);
         if (keys["ArrowUp"])
             cursorY -= ms * dt;
         if (keys["ArrowDown"])
