@@ -84,10 +84,10 @@ function resetAudioClock() {
 function audioLatency() {
     if (!audioCtx)
         return 0;
-    const base = audioCtx.baseLatency || 0;
-    const out = audioCtx.outputLatency || 0;
-    // outputLatency が明らかに大きすぎる場合は baseLatency のみを使用
-    return out > 0 && out < 0.35 ? out : base;
+    // outputLatency はブラウザ/OSによって過大報告（数百ms等）されることがあり、
+    // 映像が極端に遅れる原因になります。
+    // baseLatency（ハードウェアバッファ長、通常数ms〜数十ms）のみを信用します。
+    return audioCtx.baseLatency || 0.03;
 }
 function songNow() {
     // オーディオクロックからオーディオデバイスの出力遅延(audioLatency)を引いたものを
