@@ -255,7 +255,7 @@ function drawMenu() {
 
   drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
   drawText(`キー効果音: ${keySoundEnabled ? "ON" : "OFF"} (Kで切替)`, CX, 386, keySoundEnabled ? ACCENT : MUTED, 13);
-  drawText(`判定オフセット: ${manualOffsetMs > 0 ? '+' : ''}${manualOffsetMs}ms ( < と > キーで調整 )`, CX, 412, manualOffsetMs === 0 ? MUTED : "#ffb454", 13);
+  drawText(`判定オフセット: ${manualOffsetMs > 0 ? '+' : ''}${manualOffsetMs}ms ( J と L キーで調整 )`, CX, 412, manualOffsetMs === 0 ? MUTED : "#ffb454", 13);
 
   const s = 1 + pulse * 0.025;
   ctx.save();
@@ -291,8 +291,8 @@ function updateMenu() {
   if (keysJust["ArrowRight"] || keysJust[" "]) { startTraceWave(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
   if (keysJust["ArrowUp"]) { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
   if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5); beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
-  if (keysJust[","] || keysJust["<"]) { manualOffsetMs -= 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust[","] = false; keysJust["<"] = false; }
-  if (keysJust["."] || keysJust[">"]) { manualOffsetMs += 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["."] = false; keysJust[">"] = false; }
+  if (keysJust["j"] || keysJust["J"]) { manualOffsetMs -= 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["j"] = false; keysJust["J"] = false; }
+  if (keysJust["l"] || keysJust["L"]) { manualOffsetMs += 10; localStorage.setItem("rhythmOffset", manualOffsetMs.toString()); keysJust["l"] = false; keysJust["L"] = false; }
 }
 
 
