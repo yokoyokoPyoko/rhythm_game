@@ -437,204 +437,225 @@ function initSoundWave() {
     }
     swState = state;
 }
-// ─── Trace Wave (beat-synced scoring) ───
+const TW_JUDGE_X = Math.round(W * 0.26);
+const TW_CENTER_Y = H / 2;
+const TW_AMP = 120;
+const TW_SCROLL = 150;
+const TW_LEAD_BEATS = 2;
+const TW_TOLERANCE = 26;
+const TW_SNAP = 0.14;
+const tierColorsTW = ["#00d2ff", "#00ff88", "#ffaa00", "#ff3333"];
 let twState = null;
 function initTraceWave() {
-    const waveAmp = 120;
-    const waveOrigin = H / 2;
-    let playerY = waveOrigin;
-    let targetY = waveOrigin;
-    let scroll = 0;
-    let accuracy = 0;
-    let hitCount = 0;
-    let missCount = 0;
-    let missStreak = 0;
-    let trail = [];
-    let waveFreq = 2.5;
-    let speed = 90;
-    let beatFlash = 0;
+    let offset = 0;
+    let cursorY = TW_CENTER_Y;
+    let combo = 0;
+    let inSync = 0;
+    let outSync = 0;
+    let beatPulse = 0;
+    let lastBeatY = TW_CENTER_Y;
+    let lastCornerIdx = 0;
+    let flash = 0;
+    let judgeFlash = 0;
     let judgeText = "";
     let judgeColor = "#fff";
-    let judgeFlash = 0;
-    let lastBeat = -1;
-    const state = {
-        playerY: waveOrigin, hitCount: 0, missCount: 0,
-        missStreak: 0, accuracy: 0, beatFlash: 0,
-        judgeText: "", judgeColor: "#fff", judgeFlash: 0,
-        lastBeat: -1, update, render
-    };
-    function getWave(x) {
-        const beatPhase = (songTime % beatMs) / beatMs;
-        const env = 1 + 0.35 * Math.sin(beatPhase * Math.PI * 2);
-        const a = Math.sin(x * 0.012 * waveFreq) * waveAmp * 0.6 * env;
-        const b = Math.sin(x * 0.025 * waveFreq * 1.4 + 1.2) * waveAmp * 0.3;
-        const c = Math.sin(x * 0.006 * waveFreq * 0.6 + 2.7) * waveAmp * 0.2;
-        return waveOrigin + a + b + c;
+    let lastSpawnBeat = -1;
+    let rings = [];
+    let particles = [];
+    const worldPerBeat = TW_SCROLL * (beatMs / 1000);
+    const period = worldPerBeat * 2;
+    function triWave(x) {
+        let t = ((x / period) % 1 + 1) % 1;
+        return t < 0.5 ? (4 * t - 1) : (3 - 4 * t);
+    }
+    function waveY(worldX) { return TW_CENTER_Y + TW_AMP * triWave(worldX); }
+    function tierFor(c) { return c >= 50 ? 3 : c >= 25 ? 2 : c >= 10 ? 1 : 0; }
+    function spawnParticle(x, y, color, speed) {
+        particles.push({ x, y, vx: (Math.random() - 0.5) * speed, vy: (Math.random() - 0.5) * speed, life: 0.5, max: 0.5, color, size: 2 + Math.random() * 2 });
+    }
+    function onBeat(idx) {
+        const cornerVal = (idx % 2 === 0) ? -1 : 1;
+        const targetY = TW_CENTER_Y + TW_AMP * cornerVal;
+        cursorY += (targetY - cursorY) * TW_SNAP;
+        beatPulse = 1;
+        lastBeatY = targetY;
+    }
+    function spawnRing(beat) {
+        const hitTime = (beat + TW_LEAD_BEATS) * beatMs;
+        const futureOffset = (hitTime / 1000) * TW_SCROLL;
+        const targetY = waveY(futureOffset + TW_JUDGE_X);
+        rings.push({ spawnTime: songTime, hitTime, targetY, resolved: false, hit: false });
+    }
+    function attemptHit() {
+        let best = null;
+        let bestErr = Infinity;
+        for (const r of rings) {
+            if (r.resolved)
+                continue;
+            const err = Math.abs(songTime - r.hitTime);
+            if (err < beatMs * 0.4 && err < bestErr) {
+                best = r;
+                bestErr = err;
+            }
+        }
+        if (best) {
+            best.resolved = true;
+            best.hit = true;
+            const result = bestErr < 55 ? "perfect" : "good";
+            const tier = tierFor(combo);
+            combo += 5;
+            score += 200 + combo * 4;
+            flash = 0.15;
+            for (let k = 0; k < 18; k++)
+                spawnParticle(TW_JUDGE_X, best.targetY, tierColorsTW[tier], 160);
+            judgeText = result === "perfect" ? "PERFECT!" : "GOOD";
+            judgeColor = result === "perfect" ? "#00ff88" : "#ffaa00";
+            judgeFlash = 1;
+            hitSound(result);
+        }
     }
     function update(dt) {
         if (gameOver)
             return;
-        waveFreq = 2.5 + (songTime / beatMs) * 0.01;
-        speed = 90 + (songTime / beatMs) * 0.5;
-        scroll += speed * dt;
-        const ms = 360;
+        offset = (songTime / 1000) * TW_SCROLL;
+        const ms = 340;
         if (keys["ArrowUp"])
-            targetY -= ms * dt;
+            cursorY -= ms * dt;
         if (keys["ArrowDown"])
-            targetY += ms * dt;
-        targetY = clamp(targetY, 30, H - 30);
-        playerY = lerp(playerY, targetY, 15 * dt);
-        const jx = W * 0.18;
-        const waveY = getWave(jx + scroll);
-        const diff = Math.abs(playerY - waveY);
-        accuracy = Math.max(0, 1 - diff / waveAmp);
-        const beatIndex = Math.floor(songTime / beatMs);
-        if (beatIndex !== lastBeat && beatIndex > 0) {
-            lastBeat = beatIndex;
-            beatFlash = 1;
-            if (diff < 10) {
-                hitCount++;
-                missStreak = 0;
-                score += 100;
-                judgeText = "PERFECT!";
-                judgeColor = "#00ff88";
-                judgeFlash = 1;
-                hitSound("perfect");
-            }
-            else if (diff < 25) {
-                hitCount++;
-                missStreak = 0;
-                score += 50;
-                judgeText = "GOOD";
-                judgeColor = "#ffaa00";
-                judgeFlash = 1;
-                hitSound("good");
-            }
-            else {
-                missCount++;
-                missStreak++;
-                judgeText = "MISS";
-                judgeColor = "#ff3333";
-                judgeFlash = 0.8;
-                hitSound("miss");
-            }
-            trail.push({ x: jx, y: playerY });
-            if (trail.length > 80)
-                trail.shift();
+            cursorY += ms * dt;
+        cursorY = clamp(cursorY, 12, H - 12);
+        const idx = Math.floor((offset + TW_JUDGE_X) / worldPerBeat);
+        if (idx !== lastCornerIdx) {
+            lastCornerIdx = idx;
+            onBeat(idx);
         }
-        beatFlash = Math.max(0, beatFlash - dt * 3);
+        const beatIndex = Math.floor(songTime / beatMs);
+        if (beatIndex !== lastSpawnBeat && beatIndex > 0) {
+            lastSpawnBeat = beatIndex;
+            if (beatIndex % 2 === 0)
+                spawnRing(beatIndex);
+        }
+        beatPulse = Math.max(0, beatPulse - dt / 0.2);
+        flash = Math.max(0, flash - dt);
+        judgeFlash = Math.max(0, judgeFlash - dt * 2.5);
         if (keysJust[" "]) {
             keysJust[" "] = false;
-            const tapDiff = Math.abs(playerY - getWave(jx + scroll));
-            const beatPhase = (songTime % beatMs) / beatMs;
-            const onBeat = beatPhase < 0.14 || beatPhase > 0.86;
-            if (tapDiff < 10) {
-                hitCount++;
-                missStreak = 0;
-                score += onBeat ? 200 : 100;
-                judgeText = onBeat ? "PERFECT! ★" : "PERFECT!";
-                judgeColor = "#00ff88";
-                judgeFlash = 1;
-                hitSound("perfect");
-            }
-            else if (tapDiff < 25) {
-                hitCount++;
-                missStreak = 0;
-                score += onBeat ? 100 : 50;
-                judgeText = "GOOD";
-                judgeColor = "#ffaa00";
-                judgeFlash = 1;
-                hitSound("good");
-            }
-            else {
-                missCount++;
-                missStreak++;
+            attemptHit();
+        }
+        for (const r of rings) {
+            if (r.resolved)
+                continue;
+            if (songTime > r.hitTime + beatMs * 0.4) {
+                r.resolved = true;
+                r.hit = false;
+                combo = 0;
                 judgeText = "MISS";
                 judgeColor = "#ff3333";
-                judgeFlash = 0.8;
+                judgeFlash = 0.6;
                 hitSound("miss");
             }
-            trail.push({ x: jx, y: playerY });
-            if (trail.length > 80)
-                trail.shift();
         }
-        judgeFlash = Math.max(0, judgeFlash - dt * 2.5);
-        if (missStreak > 30) {
-            gameOver = true;
+        rings = rings.filter(r => songTime - r.hitTime < 1200);
+        const nowWaveY = waveY(offset + TW_JUDGE_X);
+        const diff = Math.abs(cursorY - nowWaveY);
+        const tier = tierFor(combo);
+        if (diff < TW_TOLERANCE) {
+            outSync = 0;
+            inSync += dt;
+            if (inSync >= 0.15) {
+                inSync = 0;
+                combo++;
+                score += 8 + combo;
+                for (let p = 0; p < 2 + tier; p++)
+                    spawnParticle(TW_JUDGE_X, cursorY, tierColorsTW[tier], 60);
+            }
         }
+        else {
+            inSync = 0;
+            outSync += dt;
+            if (outSync >= 0.5) {
+                outSync = 0;
+                combo = Math.max(0, combo - 4);
+            }
+        }
+        particles.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; });
+        particles = particles.filter(p => p.life > 0);
     }
     function render() {
         ctx.fillStyle = "#0a0a1a";
         ctx.fillRect(0, 0, W, H);
-        if (beatFlash > 0) {
-            ctx.fillStyle = `rgba(233, 69, 96, ${beatFlash * 0.06})`;
+        const tier = tierFor(combo);
+        if (flash > 0) {
+            ctx.globalAlpha = flash * 0.5;
+            ctx.fillStyle = tierColorsTW[tier];
             ctx.fillRect(0, 0, W, H);
+            ctx.globalAlpha = 1;
         }
-        ctx.strokeStyle = "rgba(255,255,255,0.05)";
+        ctx.strokeStyle = "rgba(255,255,255,0.08)";
         ctx.lineWidth = 1;
-        ctx.setLineDash([4, 6]);
+        ctx.setLineDash([3, 4]);
         ctx.beginPath();
-        ctx.moveTo(0, waveOrigin);
-        ctx.lineTo(W, waveOrigin);
+        ctx.moveTo(TW_JUDGE_X, 0);
+        ctx.lineTo(TW_JUDGE_X, H);
         ctx.stroke();
         ctx.setLineDash([]);
+        ctx.strokeStyle = "#e94560";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "#e94560";
+        ctx.shadowBlur = 6;
         ctx.beginPath();
-        const steps = 300;
-        for (let i = 0; i <= steps; i++) {
-            const x = (i / steps) * W;
-            const y = getWave(x + scroll);
-            if (i === 0)
+        for (let x = 0; x <= W; x += 4) {
+            const y = waveY(offset + x);
+            if (x === 0)
                 ctx.moveTo(x, y);
             else
                 ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = "#e94560";
-        ctx.lineWidth = 3;
-        ctx.shadowColor = "#e94560";
-        ctx.shadowBlur = 8;
         ctx.stroke();
         ctx.shadowBlur = 0;
-        const jx = W * 0.18;
-        const waveY = getWave(jx + scroll);
-        ctx.strokeStyle = "rgba(0, 210, 255, 0.2)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 5]);
+        if (beatPulse > 0) {
+            ctx.globalAlpha = beatPulse * 0.55;
+            ctx.fillStyle = "#ffaa00";
+            ctx.beginPath();
+            ctx.arc(TW_JUDGE_X, lastBeatY, 16 + (1 - beatPulse) * 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+        for (const r of rings) {
+            if (r.resolved && !(songTime - r.hitTime < 0.25))
+                continue;
+            const denom = Math.max(1, r.hitTime - r.spawnTime);
+            const progress = clamp((songTime - r.spawnTime) / denom, 0, 1);
+            const radius = 68 + (14 - 68) * progress;
+            ctx.strokeStyle = r.resolved ? (r.hit ? "#00ff88" : "#666") : "#ffaa00";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(TW_JUDGE_X, r.targetY, Math.max(radius, 4), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeStyle = "#666";
+            ctx.beginPath();
+            ctx.arc(TW_JUDGE_X, r.targetY, 14, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        particles.forEach(p => {
+            ctx.globalAlpha = Math.max(0, p.life / p.max);
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        });
+        ctx.fillStyle = tierColorsTW[tier];
         ctx.beginPath();
-        ctx.moveTo(jx, 0);
-        ctx.lineTo(jx, H);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        const beatPhase = (songTime % beatMs) / beatMs;
-        const ringR = 10 + Math.sin(beatPhase * Math.PI * 2) * 4;
-        strokeCircle(jx, waveY, ringR, "#e94560", 2);
-        const diff = Math.abs(playerY - waveY);
-        fillCircle(jx, waveY, 7, "rgba(233, 69, 96, 0.4)");
-        fillCircle(jx, playerY, 9, "#00d2ff");
-        strokeCircle(jx, playerY, 16, diff < 10 ? "#00ff88" : diff < 25 ? "#ffaa00" : "#00d2ff", 2);
-        for (const t of trail) {
-            fillCircle(t.x, t.y, 3, "rgba(0, 210, 255, 0.25)");
-        }
-        if (judgeFlash > 0) {
-            drawText(judgeText, jx, 80, judgeColor, 24 + judgeFlash * 8);
-        }
+        ctx.arc(TW_JUDGE_X, cursorY, 9 + tier, 0, Math.PI * 2);
+        ctx.fill();
         drawText(`Score: ${Math.floor(score)}`, 20, 30, "#fff", 18, "left");
-        drawText(`Accuracy: ${(accuracy * 100).toFixed(0)}%`, 20, 55, "#fff", 18, "left");
-        drawText(`Hits: ${hitCount}  Miss: ${missCount}`, 20, 80, "#fff", 18, "left");
-        const bx = 20, by = 105, bw = 160, bh = 10;
-        ctx.fillStyle = "#222";
-        ctx.fillRect(bx, by, bw, bh);
-        ctx.fillStyle = diff < 10 ? "#00ff88" : diff < 25 ? "#ffaa00" : "#ff3333";
-        ctx.fillRect(bx, by, bw * accuracy, bh);
-        drawText("↑ ↓ で波形をトレース  Space=波に重ねた瞬間に判定!  (ビートで叩くと高得点)", CX, H - 20, "#888", 13);
-        if (gameOver) {
-            ctx.fillStyle = "rgba(0,0,0,0.75)";
-            ctx.fillRect(0, 0, W, H);
-            drawText("GAME OVER", CX, CY - 20, "#e94560", 48);
-            drawText(`Score: ${Math.floor(score)}`, CX, CY + 40, "#fff", 28);
-            drawText("R: リスタート  ESC: メニュー", CX, CY + 80, "#fff", 18);
-        }
+        drawText(`Combo: ${combo}`, 20, 55, "#fff", 18, "left");
+        if (judgeFlash > 0)
+            drawText(judgeText, TW_JUDGE_X, 90, judgeColor, 26 + judgeFlash * 8);
+        drawText("↑ ↓ で波形をなぞる  リングが最小になった瞬間に SPACE = HIT!", CX, H - 20, "#888", 13);
     }
-    twState = state;
+    twState = { update, render };
 }
 // ─── Main Loop ───
 let lastLoopTime = 0;
