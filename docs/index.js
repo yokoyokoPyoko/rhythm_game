@@ -80,11 +80,22 @@ function resetAudioClock() {
     }
     perfStart = performance.now();
 }
+// オーディオ出力遅延の推定値 (s)。
+function audioLatency() {
+    if (!audioCtx)
+        return 0;
+    const base = audioCtx.baseLatency || 0;
+    const out = audioCtx.outputLatency || 0;
+    // outputLatency が明らかに大きすぎる場合は baseLatency のみを使用
+    return out > 0 && out < 0.35 ? out : base;
+}
 function songNow() {
-    // outputLatency は Linux/AMD で過大報告されるため使わない。
-    // オーディオクロックをそのまま曲時間として使う。
-    if (audioCtx && audioStarted)
-        return (audioCtx.currentTime - audioStartTime) * 1000;
+    // オーディオクロックからオーディオデバイスの出力遅延(audioLatency)を引いたものを
+    // 曲時間として扱う。これにより「今スピーカーから鳴っている音の時間」と
+    // ゲーム内の視覚的な時間が完全に一致する。
+    if (audioCtx && audioStarted) {
+        return (audioCtx.currentTime - audioStartTime - audioLatency()) * 1000;
+    }
     return performance.now() - perfStart;
 }
 function audioTimeToSong(t) {
@@ -114,25 +125,12 @@ function playClickAt(time, beat) {
         o.stop(time + 0.06);
     }
 }
-// オーディオ出力遅延の推定値 (s)。
-// baseLatency はOSバッファ固定分、outputLatency はソフトウェアミキシング分を含む。
-// outputLatency は Linux で不正確な場合があるので上限を引いてクランプ。
-function audioLatency() {
-    if (!audioCtx)
-        return 0;
-    const base = audioCtx.baseLatency || 0;
-    const out = audioCtx.outputLatency || 0;
-    // outputLatency が明らかに大きすぎる場合は baseLatency のみを使用
-    return out > 0 && out < 0.35 ? out : base;
-}
 function scheduleMetronome() {
     if (!audioCtx || !audioStarted || muted)
         return;
     const ahead = 0.20; // ルックアヘッドを少し広げて左記されることを防ぎます
-    const lat = audioLatency();
     while (nextBeatTime < audioCtx.currentTime + ahead) {
-        // 「耳に届く時刻」が nextBeatTime になるよう、lat 分早めにスケジュールする。
-        const sched = Math.max(audioCtx.currentTime + 0.001, nextBeatTime - lat);
+        const sched = Math.max(audioCtx.currentTime + 0.001, nextBeatTime);
         playClickAt(sched, schedulerBeat);
         nextBeatTime += beatMs / 1000;
         schedulerBeat++;
