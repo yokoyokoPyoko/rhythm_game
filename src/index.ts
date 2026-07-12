@@ -1,8 +1,14 @@
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
-canvas.width = 800;
-canvas.height = 600;
+const W = 800;
+const H = 600;
+const DPR = window.devicePixelRatio || 1;
+canvas.width = W * DPR;
+canvas.height = H * DPR;
+canvas.style.width = W + "px";
+canvas.style.height = H + "px";
+ctx.scale(DPR, DPR);
 
 function showError(msg: string) {
   ctx.fillStyle = "#0a0a1a";
@@ -24,8 +30,6 @@ ctx.font = "20px sans-serif";
 ctx.textAlign = "center";
 ctx.fillText("初期化中... (Initializing)", 400, 300);
 
-const W = canvas.width;
-const H = canvas.height;
 const CX = W / 2;
 const CY = H / 2;
 
@@ -613,7 +617,7 @@ function initTraceWave() {
       ctx.globalAlpha = 1;
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 4]);
     ctx.beginPath();
@@ -622,18 +626,15 @@ function initTraceWave() {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.strokeStyle = "#e94560";
-    ctx.lineWidth = 3;
-    ctx.shadowColor = "#e94560";
-    ctx.shadowBlur = 6;
+    ctx.strokeStyle = "#8ba3c7";
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    for (let x = 0; x <= W; x += 4) {
+    for (let x = 0; x <= W; x += 2) {
       const y = waveY(offset + x);
       if (x === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    ctx.shadowBlur = 0;
 
     if (beatPulse > 0) {
       ctx.globalAlpha = beatPulse * 0.55;
