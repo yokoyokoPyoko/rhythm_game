@@ -330,9 +330,17 @@ function initSoundWave() {
     if (gameOver) return;
     if (health <= 0) { gameOver = true; return; }
 
-    if (keys["ArrowLeft"]) playerAngle -= 3.5 * dt;
-    if (keys["ArrowRight"]) playerAngle += 3.5 * dt;
-    playerAngle = wrapAngle(playerAngle);
+    let dx = 0, dy = 0;
+    if (keys["ArrowLeft"]) dx -= 1;
+    if (keys["ArrowRight"]) dx += 1;
+    if (keys["ArrowUp"]) dy -= 1;
+    if (keys["ArrowDown"]) dy += 1;
+    if (dx !== 0 || dy !== 0) {
+      const tx = -Math.sin(playerAngle), ty = Math.cos(playerAngle);
+      const dot = tx * dx + ty * dy;
+      playerAngle += Math.sign(dot) * 3.5 * dt;
+      playerAngle = wrapAngle(playerAngle);
+    }
 
     const beat = songTime / beatMs;
     const beatIndex = Math.floor(beat);
@@ -444,7 +452,7 @@ function initSoundWave() {
 
     drawText(`Score: ${Math.floor(score)}`, 20, 30, "#fff", 18, "left");
     drawText(`Combo: ${combo}`, 20, 55, "#fff", 18, "left");
-    drawText("← → 回転  SPACEでビートに合わせて迎撃", CX, H - 20, "#888", 13);
+    drawText("← → ↑ ↓ で移動(画面方向)  SPACEでビートに合わせて迎撃", CX, H - 20, "#888", 13);
 
     if (gameOver) {
       ctx.fillStyle = "rgba(0,0,0,0.75)";
