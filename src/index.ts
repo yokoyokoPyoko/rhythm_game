@@ -151,9 +151,13 @@ function scheduleMetronome() {
   }
 }
 
-function hitSound(quality: "perfect" | "good" | "miss") {
+function hitSound(quality: "perfect" | "good" | "miss", schedTime?: number) {
   if (!audioCtx || muted) return;
-  const t = audioCtx.currentTime;
+  // schedTimeが指定された場合はその時刻にスケジュール。
+  // 指定なしの場合は現在時刻に即時再生。
+  const t = schedTime !== undefined
+    ? Math.max(audioCtx.currentTime + 0.001, schedTime)
+    : audioCtx.currentTime + 0.001;
   const o = audioCtx.createOscillator();
   const g = audioCtx.createGain();
   o.connect(g).connect(audioCtx.destination);
@@ -369,7 +373,12 @@ function initTraceWave() {
       judgeText = result === "perfect" ? `PERFECT! (${signStr} ${msStr})` : `GOOD (${signStr} ${msStr})`;
       judgeColor = result === "perfect" ? POSITIVE : "#ffb454";
       judgeFlash = 1;
-      hitSound(result);
+      // ヒット音をリングの hitTime（実際に音が鳴るべき瞬間）に合わせてスケジュール。
+      // outputLatency 分だけ早めに登録することで、メトロノームと同じ到達タイミングになる。
+      const hitSoundTime = audioCtx
+        ? audioStartTime + best.hitTime / 1000 - audioOutputLatency()
+        : undefined;
+      hitSound(result, hitSoundTime);
     }
   }
 
