@@ -33,7 +33,7 @@ ctx.fillText("初期化中... (Initializing)", 400, 300);
 const CX = W / 2;
 const CY = H / 2;
 
-let gameMode: "menu" | "soundwave" | "tracewave" = "menu";
+let gameMode: "menu" | "tracewave" = "menu";
 let bpm = 120;
 let beatMs = 60000 / bpm;
 let gameOver = false;
@@ -142,29 +142,8 @@ window.addEventListener("keydown", e => {
 window.addEventListener("keyup", e => { keys[e.key] = false; });
 canvas.addEventListener("click", () => ensureAudio());
 
-function fillCircle(x: number, y: number, r: number, color: string) {
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-}
-
-function strokeCircle(x: number, y: number, r: number, color: string, w = 2) {
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = w;
-  ctx.stroke();
-}
-
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function clamp(v: number, mn: number, mx: number) { return Math.max(mn, Math.min(mx, v)); }
-
-function wrapAngle(a: number) {
-  while (a < 0) a += Math.PI * 2;
-  while (a >= Math.PI * 2) a -= Math.PI * 2;
-  return a;
-}
 
 function drawText(text: string, x: number, y: number, color: string, size: number, align: CanvasTextAlign = "center") {
   ctx.fillStyle = color;
@@ -190,19 +169,7 @@ function drawMenu() {
   const bg = `rgba(15, 52, 96, ${0.7 + pulse * 0.3})`;
 
   ctx.save();
-  ctx.translate(CX - 170, 260);
-  ctx.scale(s, s);
-  ctx.fillStyle = bg;
-  ctx.fillRect(-120, -50, 240, 100);
-  ctx.strokeStyle = "#e94560";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(-120, -50, 240, 100);
-  drawText("音波サバイバル", 0, 8, "#fff", 22);
-  drawText("← キー", 0, 32, "#aaa", 14);
-  ctx.restore();
-
-  ctx.save();
-  ctx.translate(CX + 170, 260);
+  ctx.translate(CX, 260);
   ctx.scale(s, s);
   ctx.fillStyle = bg;
   ctx.fillRect(-120, -50, 240, 100);
@@ -210,19 +177,10 @@ function drawMenu() {
   ctx.lineWidth = 3;
   ctx.strokeRect(-120, -50, 240, 100);
   drawText("トレース・ウェーブ", 0, 8, "#fff", 22);
-  drawText("→ キー", 0, 32, "#aaa", 14);
+  drawText("Space / → キー", 0, 32, "#aaa", 14);
   ctx.restore();
 
   drawText("ESC=メニュー  R=リスタート  Space=決定/アクション  M=ミュート", CX, 430, "#555", 13);
-}
-
-function startSoundWave() {
-  gameMode = "soundwave";
-  gameOver = false;
-  score = 0;
-  songTime = 0;
-  resetAudioClock();
-  initSoundWave();
 }
 
 function startTraceWave() {
@@ -235,225 +193,11 @@ function startTraceWave() {
 }
 
 function updateMenu() {
-  if (keysJust["ArrowLeft"]) { startSoundWave(); keysJust["ArrowLeft"] = false; }
-  if (keysJust["ArrowRight"]) { startTraceWave(); keysJust["ArrowRight"] = false; }
+  if (keysJust["ArrowRight"] || keysJust[" "]) { startTraceWave(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
   if (keysJust["ArrowUp"]) { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
   if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5); beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
 }
 
-// ─── Sound Wave Survival (Taiko-circular, beat-timed) ───
-
-interface Note {
-  angle: number;
-  targetBeat: number;
-  judged: boolean;
-  result?: "perfect" | "good" | "miss";
-  hitAnim: number;
-  inWindow: boolean;
-}
-
-let swState: {
-  notes: Note[];
-  health: number;
-  combo: number;
-  maxCombo: number;
-  judgeFlash: number;
-  judgeText: string;
-  judgeColor: string;
-  beatPulse: number;
-  shockAnim: number;
-  lastSpawnBeat: number;
-  update: (dt: number) => void;
-  render: () => void;
-} | null = null;
-
-const JUDGE_R = 150;
-const APPROACH_BEATS = 2;
-const HIT_WINDOW = 0.4;
-
-function initSoundWave() {
-  let notes: Note[] = [];
-  let health = 100;
-  let combo = 0;
-  let maxCombo = 0;
-  let judgeFlash = 0;
-  let judgeText = "";
-  let judgeColor = "#fff";
-  let beatPulse = 0;
-  let shockAnim = 0;
-  let lastSpawnBeat = -1;
-
-  const state = {
-    notes, health, combo, maxCombo,
-    judgeFlash: 0, judgeText: "", judgeColor: "#fff",
-    beatPulse: 0, shockAnim: 0, lastSpawnBeat: -1, update, render
-  };
-
-  function spawnNote(targetBeat: number) {
-    const angle = Math.random() * Math.PI * 2;
-    notes.push({ angle, targetBeat, judged: false, hitAnim: 0, inWindow: false });
-  }
-
-  function judgePress() {
-    let hitAny = false;
-    let bestErr = Infinity;
-    let bestResult: "perfect" | "good" = "good";
-    for (const n of notes) {
-      if (n.judged) continue;
-      const targetTime = n.targetBeat * beatMs;
-      const err = Math.abs(songTime - targetTime);
-      if (err < beatMs * HIT_WINDOW) {
-        hitAny = true;
-        if (err < bestErr) {
-          bestErr = err;
-          bestResult = err < 55 ? "perfect" : err < 120 ? "good" : "good";
-        }
-        n.judged = true;
-        n.result = err < 55 ? "perfect" : "good";
-        n.hitAnim = 1;
-      }
-    }
-    if (hitAny) {
-      const mult = bestResult === "perfect" ? 1 : 0.5;
-      score += Math.round(100 * mult);
-      combo++;
-      if (combo > maxCombo) maxCombo = combo;
-      judgeText = bestResult === "perfect" ? "PERFECT!" : "GOOD";
-      judgeColor = bestResult === "perfect" ? "#00ff88" : "#ffaa00";
-      judgeFlash = 1;
-      shockAnim = 1;
-      hitSound(bestResult);
-    } else {
-      combo = 0;
-      judgeText = "MISS";
-      judgeColor = "#ff3333";
-      judgeFlash = 0.6;
-      hitSound("miss");
-    }
-  }
-
-  function update(dt: number) {
-    if (gameOver) return;
-    if (health <= 0) { gameOver = true; return; }
-
-    const beatIndex = Math.floor(songTime / beatMs);
-    if (beatIndex !== lastSpawnBeat && beatIndex > 0) {
-      lastSpawnBeat = beatIndex;
-      if (Math.random() < 0.85) {
-        spawnNote(beatIndex + APPROACH_BEATS);
-        if (Math.random() < 0.3) spawnNote(beatIndex + APPROACH_BEATS);
-      }
-    }
-
-    beatPulse = 1 - (songTime % beatMs) / beatMs;
-    judgeFlash = Math.max(0, judgeFlash - dt * 2.5);
-    shockAnim = Math.max(0, shockAnim - dt * 3);
-
-    if (keysJust[" "]) {
-      keysJust[" "] = false;
-      judgePress();
-    }
-
-    for (const n of notes) {
-      if (n.hitAnim > 0) n.hitAnim = Math.max(0, n.hitAnim - dt * 3);
-      const targetTime = n.targetBeat * beatMs;
-      n.inWindow = !n.judged && Math.abs(songTime - targetTime) < beatMs * HIT_WINDOW;
-      if (!n.judged && songTime > targetTime + beatMs * HIT_WINDOW) {
-        n.judged = true;
-        n.result = "miss";
-        health -= 15;
-        combo = 0;
-        judgeText = "MISS";
-        judgeColor = "#ff3333";
-        judgeFlash = 0.6;
-        hitSound("miss");
-      }
-    }
-
-    notes = notes.filter(n => !n.judged || n.hitAnim > 0);
-    health = clamp(health + dt * 1.5, 0, 100);
-    if (combo > 0) score += dt * 3;
-  }
-
-  function render() {
-    ctx.fillStyle = "#0a0a1a";
-    ctx.fillRect(0, 0, W, H);
-
-    if (shockAnim > 0) {
-      const r = JUDGE_R + (1 - shockAnim) * 80;
-      strokeCircle(CX, CY, r, `rgba(0, 255, 136, ${shockAnim * 0.5})`, 4);
-    }
-
-    if (beatPulse > 0) {
-      const r = JUDGE_R * (1 + (1 - beatPulse) * 0.12);
-      strokeCircle(CX, CY, r, `rgba(233, 69, 96, ${beatPulse * 0.25})`, 2);
-    }
-
-    strokeCircle(CX, CY, JUDGE_R, "rgba(0, 210, 255, 0.5)", 3);
-    strokeCircle(CX, CY, JUDGE_R, "rgba(255,255,255,0.12)", 1);
-    strokeCircle(CX, CY, 200, "rgba(255,255,255,0.05)", 1);
-
-    fillCircle(CX, CY, 6, "#e94560");
-
-    for (const n of notes) {
-      if (n.hitAnim > 0) {
-        const gr = (1 - n.hitAnim) * 50 + 10;
-        const nx = CX + Math.cos(n.angle) * JUDGE_R;
-        const ny = CY + Math.sin(n.angle) * JUDGE_R;
-        const g = ctx.createRadialGradient(nx, ny, 0, nx, ny, gr);
-        g.addColorStop(0, `rgba(0,255,136,${n.hitAnim * 0.6})`);
-        g.addColorStop(1, "rgba(0,255,136,0)");
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(nx, ny, gr, 0, Math.PI * 2);
-        ctx.fill();
-        continue;
-      }
-      if (n.judged) continue;
-
-      const targetTime = n.targetBeat * beatMs;
-      const progress = clamp((songTime - (targetTime - APPROACH_BEATS * beatMs)) / (APPROACH_BEATS * beatMs), 0, 1.1);
-      const r = progress * JUDGE_R;
-      const x = CX + Math.cos(n.angle) * r;
-      const y = CY + Math.sin(n.angle) * r;
-      if (n.inWindow) {
-        strokeCircle(CX, CY, r, "#ffaa00", 4);
-        fillCircle(x, y, 10, "#ffaa00");
-      } else {
-        strokeCircle(CX, CY, r, `rgba(233,69,96,${0.7 - progress * 0.3})`, 3);
-        fillCircle(x, y, 7, "#e94560");
-      }
-    }
-
-    if (judgeFlash > 0) {
-      drawText(judgeText, CX, CY - 180, judgeColor, 28 + judgeFlash * 10);
-    }
-    if (combo > 1) {
-      drawText(`${combo} COMBO`, CX, CY - 210, "#fff", 18);
-    }
-
-    const hp = health / 100;
-    ctx.fillStyle = "#222";
-    ctx.fillRect(W - 200, 20, 180, 14);
-    ctx.fillStyle = hp > 0.5 ? "#00ff88" : hp > 0.25 ? "#ffaa00" : "#ff3333";
-    ctx.fillRect(W - 200, 20, 180 * hp, 14);
-    drawText(`HP ${Math.floor(health)}`, W - 210, 32, "#fff", 12, "right");
-
-    drawText(`Score: ${Math.floor(score)}`, 20, 30, "#fff", 18, "left");
-    drawText(`Combo: ${combo}`, 20, 55, "#fff", 18, "left");
-    drawText("音符が青い輪に重なったら SPACE!  (ビートに合わせて)", CX, H - 20, "#888", 13);
-
-    if (gameOver) {
-      ctx.fillStyle = "rgba(0,0,0,0.75)";
-      ctx.fillRect(0, 0, W, H);
-      drawText("GAME OVER", CX, CY - 20, "#e94560", 48);
-      drawText(`Score: ${Math.floor(score)}  Max Combo: ${maxCombo}`, CX, CY + 40, "#fff", 28);
-      drawText("R: リスタート  ESC: メニュー", CX, CY + 80, "#fff", 18);
-    }
-  }
-
-  swState = state;
-}
 
 // ─── Trace Wave (beat-synced scoring) ───
 
@@ -700,13 +444,6 @@ function gameLoop(time: number) {
     if (gameMode === "menu") {
       updateMenu();
       drawMenu();
-    } else if (gameMode === "soundwave") {
-      if (swState) {
-        swState.update(dt);
-        swState.render();
-      }
-      if (keysJust["r"] || keysJust["R"]) { keysJust["r"] = false; keysJust["R"] = false; startSoundWave(); }
-      if (keysJust["Escape"]) { keysJust["Escape"] = false; gameMode = "menu"; }
     } else if (gameMode === "tracewave") {
       if (twState) {
         twState.update(dt);
