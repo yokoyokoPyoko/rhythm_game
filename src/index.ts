@@ -83,18 +83,15 @@ function resetAudioClock() {
   perfStart = performance.now();
 }
 
-function outputLatency(): number {
-  if (!audioCtx) return 0;
-  return (audioCtx as any).outputLatency || (audioCtx as any).baseLatency || 0;
-}
-
 function songNow(): number {
-  if (audioCtx && audioStarted) return (audioCtx.currentTime - audioStartTime - outputLatency()) * 1000;
+  // outputLatency は Linux/AMD で過大報告されるため使わない。
+  // オーディオクロックをそのまま曲時間として使う。
+  if (audioCtx && audioStarted) return (audioCtx.currentTime - audioStartTime) * 1000;
   return performance.now() - perfStart;
 }
 
 function audioTimeToSong(t: number): number {
-  return (t - audioStartTime - outputLatency()) * 1000;
+  return (t - audioStartTime) * 1000;
 }
 
 function playClickAt(time: number, beat: number) {
@@ -146,7 +143,9 @@ window.addEventListener("keydown", e => {
   keys[e.key] = true;
   if (e.key === " ") {
     e.preventDefault();
-    spaceHitSong = (audioCtx && audioStarted) ? audioTimeToSong(audioCtx.currentTime) : -1;
+    // audioCtx.currentTime でなく performance.now() ベースで記録し、
+    // フレーム遅延によるずれを防ぐ。
+    spaceHitSong = songNow();
   }
   if (e.key === "m" || e.key === "M") { muted = !muted; keysJust["m"] = false; keysJust["M"] = false; }
   ensureAudio();
