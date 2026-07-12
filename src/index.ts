@@ -39,6 +39,9 @@ let gameOver = false;
 let score = 0;
 let songTime = 0;
 let muted = false;
+// タイミング補正 (ms): 正 = ヒット判定を後ろへ、負 = 前へ。localStorage に保存。
+let timingOffset: number = parseInt(localStorage.getItem("rhythmTimingOffset") || "0", 10);
+function saveTimingOffset() { localStorage.setItem("rhythmTimingOffset", String(timingOffset)); }
 
 const keys: Record<string, boolean> = {};
 let keysJust: Record<string, boolean> = {};
@@ -198,17 +201,26 @@ function drawMenu() {
   drawText("トレース・ウェーブ", CX, 142, TEXT, 46);
   drawText("T R A C E   W A V E", CX, 178, ACCENT, 14);
 
-  drawText("BPM", CX, 262, MUTED, 14);
-  drawText(`${bpm}`, CX, 296, TEXT, 30);
-  drawText("↑ ↓ でテンポ変更", CX, 322, MUTED, 13);
+  // BPM
+  drawText("BPM", CX, 240, MUTED, 14);
+  drawText(`${bpm}`, CX, 272, TEXT, 30);
+  drawText("↑ ↓ でテンポ変更", CX, 296, MUTED, 13);
 
-  drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
+  // タイミング補正
+  const offsetColor = timingOffset === 0 ? MUTED : ACCENT;
+  const offsetSign = timingOffset >= 0 ? "+" : "";
+  drawText("タイミング補正", CX, 334, MUTED, 14);
+  drawText(`${offsetSign}${timingOffset} ms`, CX, 360, offsetColor, 28);
+  drawText("[ で −10ms (早める)    ] で +10ms (遅らせる)", CX, 384, MUTED, 13);
+  drawText("押すのが遅れる → + 方向、早すぎる → − 方向", CX, 402, MUTED, 12);
+
+  drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 432, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
 
   const s = 1 + pulse * 0.025;
   ctx.save();
-  ctx.translate(CX, 446);
+  ctx.translate(CX, 492);
   ctx.scale(s, s);
-  const cw = 220, ch = 62, x = -cw / 2, y = -ch / 2, r = 14;
+  const cw = 220, ch = 56, x = -cw / 2, y = -ch / 2, r = 14;
   ctx.fillStyle = SURFACE;
   roundRect(x, y, cw, ch, r);
   ctx.fill();
@@ -218,10 +230,10 @@ function drawMenu() {
   ctx.stroke();
   drawText("▶  PLAY", 0, -2, TEXT, 24);
   ctx.restore();
-  drawText("Space / →", CX, 492, MUTED, 13);
+  drawText("Space / →", CX, 528, MUTED, 13);
 
-  drawText("R リスタート    ESC メニュー    M ミュート", CX, 552, MUTED, 13);
-  drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE", CX, 574, MUTED, 13);
+  drawText("R リスタート    ESC メニュー    M ミュート", CX, 562, MUTED, 13);
+  drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE", CX, 582, MUTED, 12);
 }
 
 function startTraceWave() {
@@ -236,8 +248,12 @@ function startTraceWave() {
 
 function updateMenu() {
   if (keysJust["ArrowRight"] || keysJust[" "]) { startTraceWave(); keysJust["ArrowRight"] = false; keysJust[" "] = false; }
-  if (keysJust["ArrowUp"]) { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
-  if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5); beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
+  if (keysJust["ArrowUp"])   { bpm = Math.min(200, bpm + 5); beatMs = 60000 / bpm; keysJust["ArrowUp"] = false; }
+  if (keysJust["ArrowDown"]) { bpm = Math.max(60, bpm - 5);  beatMs = 60000 / bpm; keysJust["ArrowDown"] = false; }
+  // タイミング補正: [ で -10ms, ] で +10ms。-500〜+500ms の範囲に制限。
+  if (keysJust["["] || keysJust["{"]) { timingOffset = Math.max(-500, timingOffset - 10); saveTimingOffset(); keysJust["["] = false; keysJust["{"] = false; }
+  if (keysJust["]"]) { timingOffset = Math.min(500, timingOffset + 10); saveTimingOffset(); keysJust["]"] = false; }
+  if (keysJust["}"])                 { timingOffset = Math.min(500, timingOffset + 10); saveTimingOffset(); keysJust["}"] = false; }
 }
 
 
@@ -313,7 +329,8 @@ function initTraceWave() {
     spaceHitSong = -1;
     for (const r of rings) {
       if (r.resolved) continue;
-      const err = Math.abs(pressTime - r.hitTime);
+      // timingOffset: 補正分だけヒット判定ウィンドウをずらす
+      const err = Math.abs(pressTime - (r.hitTime + timingOffset));
       if (err < beatMs * 0.4 && err < bestErr) { best = r; bestErr = err; }
     }
     if (best) {
@@ -357,7 +374,8 @@ function initTraceWave() {
 
     for (const r of rings) {
       if (r.resolved) continue;
-      if (songTime > r.hitTime + beatMs * 0.4) {
+      // timingOffset が大きい場合でもMISS判定ウィンドウをずらす
+      if (songTime > r.hitTime + timingOffset + beatMs * 0.4) {
         r.resolved = true;
         r.hit = false;
         combo = 0;
