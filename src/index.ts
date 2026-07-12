@@ -145,14 +145,17 @@ function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function clamp(v: number, mn: number, mx: number) { return Math.max(mn, Math.min(mx, v)); }
 
 const FONT = "'M PLUS Rounded 1c', 'Hiragino Sans', 'Yu Gothic', sans-serif";
-const ACCENT = "#22e0ff";
-const ACCENT2 = "#a96bff";
-const DANGER = "#ff3b5c";
+const ACCENT = "#5b9dff";
+const POSITIVE = "#56e39f";
+const DANGER = "#ff5d6c";
+const TEXT = "#e8edf4";
+const MUTED = "#8b95a6";
+const SURFACE = "rgba(255,255,255,0.04)";
+const BORDER = "rgba(255,255,255,0.10)";
 
-const bgGrad = ctx.createRadialGradient(CX, CY, 40, CX, CY, 560);
-bgGrad.addColorStop(0, "#171738");
-bgGrad.addColorStop(0.6, "#0b0b1e");
-bgGrad.addColorStop(1, "#04040a");
+const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+bgGrad.addColorStop(0, "#0e1118");
+bgGrad.addColorStop(1, "#080a0f");
 
 function drawBackground() {
   ctx.fillStyle = bgGrad;
@@ -172,14 +175,6 @@ function drawText(text: string, x: number, y: number, color: string, size: numbe
   ctx.fillText(text, x, y);
 }
 
-function glowText(text: string, x: number, y: number, color: string, size: number, glow: string, blur: number, align: CanvasTextAlign = "center") {
-  ctx.save();
-  ctx.shadowColor = glow;
-  ctx.shadowBlur = blur;
-  drawText(text, x, y, color, size, align);
-  ctx.restore();
-}
-
 // ─── Menu ───
 
 function drawMenu() {
@@ -188,38 +183,33 @@ function drawMenu() {
   const phase = (songTime % beatMs) / beatMs;
   const pulse = Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
 
-  glowText("トレース・ウェーブ", CX, 132, "#ffffff", 52, ACCENT, 26);
-  drawText("T R A C E   W A V E", CX, 172, ACCENT, 16);
+  drawText("トレース・ウェーブ", CX, 142, TEXT, 46);
+  drawText("T R A C E   W A V E", CX, 178, ACCENT, 14);
 
-  drawText(`BPM  ${bpm}`, CX, 238, "#dff1ff", 24);
-  drawText("↑ ↓ でテンポ変更", CX, 264, "#7fa8c9", 13);
+  drawText("BPM", CX, 262, MUTED, 14);
+  drawText(`${bpm}`, CX, 296, TEXT, 30);
+  drawText("↑ ↓ でテンポ変更", CX, 322, MUTED, 13);
 
-  drawText(muted ? "🔇 ミュート中 (Mで解除)" : (audioStarted ? "🔊 ビート再生中 (Mでミュート)" : "🔈 クリック / キーでスタート"), CX, 300, muted ? "#8aa" : (audioStarted ? "#00ff88" : "#ffaa00"), 13);
+  drawText(muted ? "ミュート中" : (audioStarted ? "再生中" : "クリック / キーでスタート"), CX, 366, muted ? MUTED : (audioStarted ? POSITIVE : "#ffb454"), 13);
 
-  const s = 1 + pulse * 0.04;
+  const s = 1 + pulse * 0.025;
   ctx.save();
-  ctx.translate(CX, 392);
+  ctx.translate(CX, 446);
   ctx.scale(s, s);
-  const cw = 260, ch = 78, x = -cw / 2, y = -ch / 2, r = 18;
-  const cg = ctx.createLinearGradient(x, 0, x + cw, 0);
-  cg.addColorStop(0, ACCENT);
-  cg.addColorStop(1, ACCENT2);
-  ctx.shadowColor = ACCENT;
-  ctx.shadowBlur = 16 + pulse * 16;
-  ctx.fillStyle = "rgba(10,14,30,0.85)";
+  const cw = 220, ch = 62, x = -cw / 2, y = -ch / 2, r = 14;
+  ctx.fillStyle = SURFACE;
   roundRect(x, y, cw, ch, r);
   ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = cg;
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 1.5;
   roundRect(x, y, cw, ch, r);
   ctx.stroke();
-  ctx.shadowBlur = 0;
-  drawText("▶  PLAY", 0, -3, "#ffffff", 28);
-  drawText("Space / →", 0, 22, "#a9d8ef", 13);
+  drawText("▶  PLAY", 0, -2, TEXT, 24);
   ctx.restore();
+  drawText("Space / →", CX, 492, MUTED, 13);
 
-  drawText("R = リスタート    ESC = メニュー    M = ミュート", CX, 522, "#5a6b8c", 13);
-  drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE = HIT", CX, 550, "#7fa8c9", 14);
+  drawText("R リスタート    ESC メニュー    M ミュート", CX, 552, MUTED, 13);
+  drawText("↑ ↓ で波形をなぞり、リングが最小になった瞬間に SPACE", CX, 574, MUTED, 13);
 }
 
 function startTraceWave() {
@@ -250,7 +240,7 @@ const TW_SCROLL = 150;
 const TW_LEAD_BEATS = 2;
 const TW_TOLERANCE = 26;
 const TW_SNAP = 0.14;
-const tierColorsTW = ["#00d2ff", "#00ff88", "#ffaa00", "#ff3333"];
+const tierColorsTW = ["#4cc9f0", "#56e39f", "#ffb454", "#ff5d6c"];
 
 let twState: {
   update: (dt: number) => void;
@@ -299,7 +289,7 @@ function initTraceWave() {
   function spawnRing(beat: number) {
     const hitTime = (beat + TW_LEAD_BEATS) * beatMs;
     const futureOffset = (hitTime / 1000) * TW_SCROLL;
-    const targetY = waveY(futureOffset + TW_JUDGE_X);
+    const targetY = waveY(futureOffset);
     rings.push({ spawnTime: songTime, hitTime, targetY, resolved: false, hit: false });
   }
 
@@ -321,7 +311,7 @@ function initTraceWave() {
       flash = 0.15;
       for (let k = 0; k < 18; k++) spawnParticle(TW_JUDGE_X, best.targetY, tierColorsTW[tier], 160);
       judgeText = result === "perfect" ? "PERFECT!" : "GOOD";
-      judgeColor = result === "perfect" ? "#00ff88" : "#ffaa00";
+      judgeColor = result === "perfect" ? POSITIVE : "#ffb454";
       judgeFlash = 1;
       hitSound(result);
     }
@@ -336,13 +326,12 @@ function initTraceWave() {
     if (keys["ArrowDown"]) cursorY += ms * dt;
     cursorY = clamp(cursorY, 12, H - 12);
 
-    const idx = Math.floor((offset + TW_JUDGE_X) / worldPerBeat);
-    if (idx !== lastCornerIdx) { lastCornerIdx = idx; onBeat(idx); }
-
     const beatIndex = Math.floor(songTime / beatMs);
+    if (beatIndex !== lastCornerIdx) { lastCornerIdx = beatIndex; onBeat(beatIndex); }
+
     if (beatIndex !== lastSpawnBeat && beatIndex > 0) {
       lastSpawnBeat = beatIndex;
-      if (beatIndex % 2 === 0) spawnRing(beatIndex);
+      spawnRing(beatIndex);
     }
 
     beatPulse = Math.max(0, beatPulse - dt / 0.2);
@@ -358,14 +347,14 @@ function initTraceWave() {
         r.hit = false;
         combo = 0;
         judgeText = "MISS";
-        judgeColor = "#ff3333";
+        judgeColor = DANGER;
         judgeFlash = 0.6;
         hitSound("miss");
       }
     }
     rings = rings.filter(r => songTime - r.hitTime < 1200);
 
-    const nowWaveY = waveY(offset + TW_JUDGE_X);
+    const nowWaveY = waveY(offset);
     const diff = Math.abs(cursorY - nowWaveY);
     const tier = tierFor(combo);
     if (diff < TW_TOLERANCE) {
@@ -394,48 +383,39 @@ function initTraceWave() {
     const tierCol = tierColorsTW[tier];
 
     if (flash > 0) {
-      ctx.globalAlpha = flash * 0.5;
+      ctx.globalAlpha = flash * 0.35;
       ctx.fillStyle = tierCol;
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
     }
 
-    ctx.save();
-    ctx.shadowColor = tierCol;
-    ctx.shadowBlur = 8 + beatPulse * 14;
-    ctx.strokeStyle = tierCol;
-    ctx.globalAlpha = 0.4 + beatPulse * 0.4;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 8]);
+    // judge line: thin, beat-synced subtle brighten
+    ctx.strokeStyle = `rgba(255,255,255,${0.10 + beatPulse * 0.22})`;
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(TW_JUDGE_X, 0);
     ctx.lineTo(TW_JUDGE_X, H);
     ctx.stroke();
-    ctx.restore();
 
-    ctx.save();
-    ctx.shadowColor = tierCol;
-    ctx.shadowBlur = 12;
-    const wg = ctx.createLinearGradient(0, TW_CENTER_Y - TW_AMP, 0, TW_CENTER_Y + TW_AMP);
-    wg.addColorStop(0, tierCol);
-    wg.addColorStop(0.5, ACCENT);
-    wg.addColorStop(1, tierCol);
-    ctx.strokeStyle = wg;
+    // wave: clean tier-tinted line, no heavy glow
+    ctx.strokeStyle = tierCol;
+    ctx.globalAlpha = 0.92;
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     for (let x = 0; x <= W; x += 2) {
-      const y = waveY(offset + x);
+      const y = waveY(offset + x - TW_JUDGE_X);
       if (x === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    ctx.restore();
+    ctx.globalAlpha = 1;
 
+    // beat marker at the wave's extremum on the judge line
     if (beatPulse > 0) {
-      ctx.globalAlpha = beatPulse * 0.55;
-      ctx.fillStyle = "#ffaa00";
+      ctx.globalAlpha = beatPulse * 0.5;
+      ctx.fillStyle = tierCol;
       ctx.beginPath();
-      ctx.arc(TW_JUDGE_X, lastBeatY, 16 + (1 - beatPulse) * 10, 0, Math.PI * 2);
+      ctx.arc(TW_JUDGE_X, lastBeatY, 9 + (1 - beatPulse) * 7, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
@@ -444,13 +424,13 @@ function initTraceWave() {
       if (r.resolved && !(songTime - r.hitTime < 0.25)) continue;
       const denom = Math.max(1, r.hitTime - r.spawnTime);
       const progress = clamp((songTime - r.spawnTime) / denom, 0, 1);
-      const radius = 68 + (14 - 68) * progress;
-      ctx.strokeStyle = r.resolved ? (r.hit ? "#00ff88" : "#666") : "#ffaa00";
+      const radius = 64 + (14 - 64) * progress;
+      ctx.strokeStyle = r.resolved ? (r.hit ? POSITIVE : MUTED) : tierCol;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(TW_JUDGE_X, r.targetY, Math.max(radius, 4), 0, Math.PI * 2);
       ctx.stroke();
-      ctx.strokeStyle = "#666";
+      ctx.strokeStyle = BORDER;
       ctx.beginPath();
       ctx.arc(TW_JUDGE_X, r.targetY, 14, 0, Math.PI * 2);
       ctx.stroke();
@@ -465,30 +445,30 @@ function initTraceWave() {
       ctx.globalAlpha = 1;
     });
 
+    // cursor: subtle glow only
     ctx.save();
     ctx.shadowColor = tierCol;
-    ctx.shadowBlur = 16;
+    ctx.shadowBlur = 10;
     ctx.fillStyle = tierCol;
     ctx.beginPath();
-    ctx.arc(TW_JUDGE_X, cursorY, 9 + tier, 0, Math.PI * 2);
+    ctx.arc(TW_JUDGE_X, cursorY, 8 + tier * 0.8, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    ctx.save();
-    ctx.fillStyle = "rgba(10,14,30,0.55)";
-    roundRect(14, 14, 210, 66, 12);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(34,224,255,0.35)";
-    ctx.lineWidth = 1;
-    roundRect(14, 14, 210, 66, 12);
-    ctx.stroke();
-    ctx.restore();
-    drawText(`SCORE  ${Math.floor(score)}`, 26, 42, "#ffffff", 18, "left");
-    drawText(`COMBO  ${combo}`, 26, 66, combo > 0 ? ACCENT : "#7fa8c9", 16, "left");
+    // HUD: minimal, label + value
+    drawText("SCORE", 26, 36, MUTED, 13, "left");
+    drawText(`${Math.floor(score)}`, 26, 62, TEXT, 26, "left");
+    drawText("COMBO", 26, 96, MUTED, 13, "left");
+    drawText(`${combo}`, 26, 122, combo > 0 ? ACCENT : TEXT, 22, "left");
 
-    if (judgeFlash > 0) glowText(judgeText, TW_JUDGE_X, 92, judgeColor, 28 + judgeFlash * 8, judgeColor, 18);
+    if (judgeFlash > 0) {
+      ctx.save();
+      ctx.globalAlpha = judgeFlash;
+      drawText(judgeText, TW_JUDGE_X, 96, judgeColor, 30, "center");
+      ctx.restore();
+    }
 
-    drawText("↑ ↓ で波形をなぞる  リングが最小になった瞬間に SPACE = HIT!", CX, H - 20, "#7fa8c9", 14);
+    drawText("↑ ↓ で波形をなぞる   リングが最小になった瞬間に SPACE", CX, H - 22, MUTED, 14);
   }
 
   twState = { update, render };
