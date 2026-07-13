@@ -364,6 +364,7 @@ function onCalibrationSpace() {
         localStorage.setItem("rhythmOffset", manualOffsetMs.toString());
         gameMode = "menu";
         songTime = 0;
+        keysJust[" "] = false;
     }
 }
 function updateCalibration(dt) {

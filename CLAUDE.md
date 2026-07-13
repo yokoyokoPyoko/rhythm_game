@@ -35,6 +35,7 @@ git add src/index.ts docs/index.js && git commit && git push   # デプロイ
 - **音声クロック（重要）**: `songNow()` は `audioCtx.currentTime` ベース。メトロノームは lookahead スケジューラで `audioStartTime + beat*beatSec` に予約。
 - **ループ内状態**: `gameMode`("menu"|"tracewave"), `bpm`, `songTime`, `twState`。
 - **キー入力**: `keydown` で `keysJust` / `keys` をセット。`Space` 押下時は `audioCtx.currentTime` を `spaceHitSong` に即座保存し、判定に使う（フレーム遅延排除）。
+- **オフセット調整**: `manualOffsetMs`（localStorage 保存）。`<`/`>` で±10ms手動調整、`L` キーでオートキャリブレーション（Space×8回、完了後メニューに戻る）。
 
 ## トレース・ウェーブの定数（`src/index.ts`）
 - `TW_JUDGE_X = W*0.26`, `TW_CENTER_Y = H/2`, `TW_AMP = 120`, `TW_SCROLL = 110`

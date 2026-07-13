@@ -345,6 +345,7 @@ function onCalibrationSpace() {
     
     gameMode = "menu";
     songTime = 0;
+    keysJust[" "] = false;
   }
 }
 
