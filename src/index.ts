@@ -339,8 +339,8 @@ function onCalibrationSpace() {
     for (let i = 2; i < 8; i++) sum += calibPresses[i];
     const avg = sum / 6;
     
-    // 早く押しすぎている(avgがマイナス)場合、音を早くする必要がある(offsetをプラスにする)
-    manualOffsetMs = -Math.round(avg);
+    // SLOW(avg>0)→音を早く(offset+), FAST(avg<0)→音を遅く(offset-)
+    manualOffsetMs = Math.round(avg);
     localStorage.setItem("rhythmOffset", manualOffsetMs.toString());
     
     gameMode = "menu";
