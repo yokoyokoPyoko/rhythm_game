@@ -388,7 +388,7 @@ function drawCalibration() {
 }
 const TW_JUDGE_X = Math.round(W * 0.26);
 const TW_CENTER_Y = H / 2;
-const TW_AMP = 120;
+const TW_AMP = 100;
 const TW_SCROLL = 110;
 const TW_LEAD_BEATS = 3;
 const TW_TOLERANCE = 26;
