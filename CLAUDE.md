@@ -37,15 +37,15 @@ git add src/index.ts docs/index.js && git commit && git push   # デプロイ
 - **キー入力**: `keydown` で `keysJust` / `keys` をセット。`Space` 押下時は `audioCtx.currentTime` を `spaceHitSong` に即座保存し、判定に使う（フレーム遅延排除）。
 
 ## トレース・ウェーブの定数（`src/index.ts`）
-- `TW_JUDGE_X = W*0.26`, `TW_CENTER_Y = H/2`, `TW_AMP = 120`, `TW_SCROLL = 150`
-- `TW_LEAD_BEATS = 2`, `TW_TOLERANCE = 26`, `TW_SNAP = 0.14`
+- `TW_JUDGE_X = W*0.26`, `TW_CENTER_Y = H/2`, `TW_AMP = 120`, `TW_SCROLL = 110`
+- `TW_LEAD_BEATS = 3`, `TW_TOLERANCE = 26`, `TW_SNAP = 0.10`
 - `tierColorsTW = ["#4cc9f0","#56e39f","#ffb454","#ff5d6c"]`（コンボ段階の状態色）
 
 ## タイミングの同期設計（解決済み）
 トレース・ウェーブにおける「波形の進行」「メトロノーム音」「リング判定」の3つのタイミング系は、以下の仕組みで完全に同期（単一の真理）するよう解決されています。
 - **基準クロック**: `audioCtx.currentTime` を唯一の真理として `songNow()` を計算。
 - **入力の即時性**: Space押下時に即座に打鍵音を再生し、`currentTime` を保存してフレーム遅延を排除。
-- **環境遅延の自動補正**: Linux等のオーディオバッファ過大報告バグに対し、自動で補正係数（0.375等）を適用することで、物理的な出力遅延とゲーム内判定を完璧に一致させています。
+- **環境遅延の手動補正**: 環境ごとの物理的な特大遅延（250ms等）に対応するため、オートキャリブレーション等ではなく手動オフセット（`<`, `>`キー）による `manualOffsetMs` 加算方式を採用。プレイヤー自身で最適な値に調整できる。
 
 ## 開発ルール（ENV.md より）
 - コードは OpenCode が記述。バグ調査のみ `./debug-investigate.sh "<症状>"` で agy(Claude Sonnet 4.6) に依頼（原因特定のみ、編集なし）。
