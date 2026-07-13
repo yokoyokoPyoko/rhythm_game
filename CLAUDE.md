@@ -38,7 +38,7 @@ git add src/index.ts docs/index.js && git commit && git push   # デプロイ
 - **オフセット調整**: `manualOffsetMs`（localStorage 保存）。`<`/`>` で±10ms手動調整、`L` キーでオートキャリブレーション（Space×8回、完了後メニューに戻る）。
 
 ## トレース・ウェーブの定数（`src/index.ts`）
-- `TW_JUDGE_X = W*0.26`, `TW_CENTER_Y = H/2`, `TW_AMP = 100`, `TW_SCROLL = 110`
+- `TW_JUDGE_X = W*0.26`, `TW_CENTER_Y = H/2`, `TW_AMP = 80`, `TW_SCROLL = 110`
 - `TW_LEAD_BEATS = 3`, `TW_TOLERANCE = 26`, `TW_SNAP = 0.10`
 - `tierColorsTW = ["#4cc9f0","#56e39f","#ffb454","#ff5d6c"]`（コンボ段階の状態色）
 
