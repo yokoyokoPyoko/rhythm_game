@@ -1,0 +1,602 @@
+# AGENTS.md — リズムゲーム自律開発仕様書
+
+対象読者: AIエージェント（実装者）
+このファイルを必ず最初に読め。各タスクIDの仕様セクションのみを参照して実装すること。
+
+---
+
+## 行動ルール（全タスク共通・最優先）
+
+1. **質問禁止**: 不明点は自分で最善を判断して実装。迷ったら最もシンプルな実装を選ぶ。
+2. **ゲーミング禁止**: 虹色・過剰グロー・パーティクル爆発・レインボーRGBは一切使わない。
+3. **スコープ厳守**: 当該タスクの仕様に書いてない機能を追加しない。追加したい場合はTODOコメントのみ。
+4. **ビルドエラー即修正**: `tsc --noEmit` エラーは次ファイルを触る前に必ず修正。
+5. **迷ったらLinear**: デザイン判断はLinear.app / Vercel dashboardを基準にする。
+6. **詰まったら30分でスキップ**: 30分解決しなければTODOコメントを書いて次タスクへ。
+
+---
+
+## プロジェクト概要
+
+文化祭展示用リズムゲーム。ブラウザ(Chrome)で動作。GitHub Pages公開。
+
+- **ゲームタイトル**: トレース・ウェーブ（Trace Wave）
+- **リポジトリ**: `/home/p-yoko/Program/TypeScript/rhythm_game/`（既存。全て書き直す）
+- **デプロイ**: `npm run build` → `docs/` に出力 → `git push` → GitHub Pages
+
+---
+
+## 技術スタック
+
+- Vite + React 18 + TypeScript
+- smol-toml (TOMLパーサー)
+- react-router-dom v6 (HashRouter使用。GitHub Pages対応)
+- CSS Variables のみ (外部UIライブラリ禁止)
+- Web Audio API (音声・タイミング)
+- Canvas 2D (ゲーム描画)
+
+**Vite設定**: `build.outDir = "docs"` かつ `base = "/rhythm_game/"` (GitHub Pages用)
+
+---
+
+## ゲームデザイン仕様
+
+### 波形（Wave）システム
+- チャートで定義された折れ線（セグメント列）。純粋な三角波ではない。
+- 各セグメント: `{ direction: "up" | "down", beats: number }`
+- カーソルは↑↓キーで移動。速度 = `(2 * TW_AMP) / (beatMs / 1000)` px/sec
+- 初期位置: 上端 `TW_CENTER_Y - TW_AMP`（波形のピーク位置）
+
+### リングシステム
+- チャートで独立して配置。波形のカドと無関係にどのbeat位置にも置ける。
+- リングは画面右からスクロールし、hitTimeちょうどに判定線に到達。
+- リングのY座標 = `waveYAt(hitBeat)`（その拍での波形のY位置）
+
+### ヒット判定
+- タイミング誤差: `|pressTime - ring.hitTime| < beatMs * 0.4`
+- Y距離: `|cursorY - ring.targetY| < 60` px
+- 両方満たしてヒット。
+- PERFECT: 誤差 < 50ms AND Y距離 < 30px
+- GOOD: それ以外のヒット
+- MISS: ウィンドウ超過 or 未押し
+
+### スコア・ランク
+- PERFECT: 300点、GOOD: 100点、MISS: コンボリセット
+- トレースボーナス: カーソルが波形±26px内で0.15秒ごとにcombo+1、score+8+combo
+- ランク: S=95%PERFECT以上、A=80%、B=60%、C=40%、D=それ以下
+
+### 重要定数
+```
+TW_JUDGE_X = Math.round(800 * 0.26)
+TW_CENTER_Y = 600 / 2
+TW_AMP = 80
+TW_SCROLL = 110
+TW_LEAD_BEATS = 3
+TW_TOLERANCE = 26
+```
+
+---
+
+## オーディオアーキテクチャ
+
+- 基準クロック: `audioCtx.currentTime` のみ
+- ゲーム時刻: `songNow() = (audioCtx.currentTime - audioStartTime) * 1000` (ms)
+- Space押下: keydownイベント内で即座にaudioCtx.currentTimeを保存
+- メトロノーム: lookahead=200msで先読みスケジュール
+- 音楽ファイル: `public/audio/` に置き、相対URLで参照
+  - 例: `audio = "/rhythm_game/audio/08.Reply.flac"`
+- manualOffsetMs: localStorageに保存、メトロノームスケジュールに加算
+
+---
+
+## チャートフォーマット（TOML）
+
+```toml
+title = "Reply"
+artist = ""
+bpm = 120
+audio = "/rhythm_game/audio/08.Reply.flac"
+
+[[bpm_changes]]
+beat = 64
+bpm = 150
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+```
+
+---
+
+## 曲マニフェスト (public/songs.toml)
+
+```toml
+[[songs]]
+id = "reply"
+title = "Reply"
+artist = ""
+chartPath = "/rhythm_game/charts/reply.toml"
+difficulty = 5
+```
+
+---
+
+## デザインシステム
+
+```css
+--bg: #0a0a0a;
+--bg-surface: #111111;
+--border: rgba(255,255,255,0.08);
+--text: #ededed;
+--text-muted: #71717a;
+--accent: #6366f1;
+--accent-sub: #22d3ee;
+--positive: #4ade80;
+--warning: #fbbf24;
+--danger: #f87171;
+--radius: 8px;
+--font: 'Inter', system-ui, sans-serif;
+```
+
+禁止: 色付きグロー多用・派手なグラデーション背景・ネオン発光・ゲーミング風
+許可: 白の微グロー・opacity/transformアニメーション・アクセントカラー単色使用
+
+---
+
+## タスク別仕様
+
+### [T82] Playwright スモークテスト
+
+`tests/smoke.spec.ts` を作成:
+```typescript
+import { test, expect } from '@playwright/test';
+test('smoke test', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', msg => {
+    if (msg.type() === 'error') {
+      const t = msg.text();
+      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+    }
+  });
+  await page.goto('http://localhost:5173/');
+  await page.waitForLoadState('networkidle', { timeout: 5000 });
+  await expect(page.locator('#root')).toBeVisible();
+  await page.waitForTimeout(2000);
+  expect(errors).toHaveLength(0);
+});
+```
+
+`playwright.config.ts` も作成 (headless:true, chromium)。
+
+---
+
+### [T00] プロジェクトスキャフォールド
+
+既存の src/ と docs/ を削除し、Vite+React+TSを新規作成:
+
+```bash
+rm -rf src docs
+npm create vite@latest . -- --template react-ts
+npm install
+npm install smol-toml react-router-dom
+npm install -D @playwright/test
+npx playwright install chromium
+```
+
+vite.config.ts に追加:
+```typescript
+export default defineConfig({
+  base: '/rhythm_game/',
+  build: { outDir: 'docs', emptyOutDir: true },
+  plugins: [react()],
+})
+```
+
+public/audio/.gitkeep, public/charts/.gitkeep を作成。
+public/charts/reply.toml を仮データで作成（上記チャートフォーマット参照）。
+public/songs.toml を作成（上記マニフェスト参照）。
+
+完了条件: `npm run dev` でブラウザ表示。`tsc --noEmit` エラーなし。
+
+---
+
+### [T01] TypeScript型定義
+
+`src/types.ts`:
+
+```typescript
+export interface Segment { direction: 'up' | 'down'; beats: number; }
+export interface BpmChange { beat: number; bpm: number; }
+export interface RingDef { beat: number; }
+export interface Chart {
+  title: string; artist: string; bpm: number; audio: string;
+  bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
+}
+export interface SongEntry {
+  id: string; title: string; artist: string; chartPath: string; difficulty: number;
+}
+export interface RingState {
+  id: number; spawnTime: number; hitTime: number; targetY: number;
+  resolved: boolean; hit: boolean;
+}
+export type HitResult = 'perfect' | 'good' | 'miss';
+export type GameMode = 'select' | 'playing' | 'result' | 'editor' | 'calibration';
+export interface HitJudgement { result: HitResult; errorMs: number; }
+```
+
+---
+
+### [T02] CSSデザインシステム
+
+src/index.css を上書き。上記デザインシステムのCSS変数を定義。
+body: background=var(--bg), color=var(--text), font-family=var(--font)。
+* { box-sizing: border-box; margin: 0; padding: 0; }
+index.html の <head> に Inter フォント (Google Fonts) を追加。
+src/App.css を削除。
+
+---
+
+### [T10] AudioContextマネージャ
+
+`src/audio/AudioManager.ts`:
+- シングルトンパターン
+- `ensure()`: ユーザー操作後にAudioContextを初期化・resume
+- `get ctx()`, `get baseLatency()`, `get outputLatency()`
+
+---
+
+### [T11] メトロノームスケジューラ
+
+`src/audio/metronome.ts`:
+- lookahead=200ms
+- `schedule(audioCtx, nextBeatTime, beat, latency)` で音を予約
+- 強拍(beat%4===0): 880Hz, 弱拍: 440Hz, 短いクリック音
+
+---
+
+### [T12] ゲームクロック
+
+`src/audio/clock.ts`:
+- `songNow()`: (audioCtx.currentTime - audioStartTime) * 1000 (ms)
+- `resetClock(audioCtx)`: audioStartTime をリセット
+- `manualOffsetMs`: localStorageから読み込み
+- `setManualOffset(ms)`: 変更+保存
+- メトロノームの先読みスケジュールに manualOffsetMs/1000 を加算
+
+---
+
+### [T13] 音楽ファイルローダー
+
+`src/audio/loader.ts`:
+- `loadAudio(url: string, audioCtx: AudioContext): Promise<AudioBuffer | null>`
+- fetch → arrayBuffer → decodeAudioData
+- 失敗時: console.warn して null を返す（例外を外に投げない）
+
+---
+
+### [T14] BPMタイムライン
+
+`src/audio/bpmTimeline.ts`:
+- `BpmTimeline` クラス
+- コンストラクタ: baseBpm, bpmChanges[]
+- `beatToMs(beat)`: beat位置をmsに変換
+- `msToBeat(ms)`: msをbeat位置に変換
+- `bpmAt(beat)`: その時点のBPM
+- `beatMsAt(beat)`: その時点の1beatのms
+
+---
+
+### [T40] TOMLチャートローダー
+
+`src/chart/loader.ts`:
+- `loadChart(url: string): Promise<Chart>`
+- fetch → text → parse (smol-toml)
+- 不足キーはデフォルト値補完: bpm_changes=[], segments=[], rings=[]
+
+---
+
+### [T41] 曲マニフェスト
+
+`src/chart/manifest.ts`:
+- `loadSongList(): Promise<SongEntry[]>`
+- `/rhythm_game/songs.toml` をfetch→parse
+
+---
+
+### [T20] 波形エンジン
+
+`src/game/waveEngine.ts`:
+- `WaveEngine` クラス
+- コンストラクタ: segments[], bpmTimeline
+- `waveYAt(beat: number): number`
+  - beat=0 のとき: TW_CENTER_Y - TW_AMP (上端)
+  - 各セグメントを累積ビートで管理し、線形補間
+  - direction="up" は下端→上端、"down" は上端→下端
+  - 注意: 最初のセグメントは上端スタート
+- `waveYAtMs(ms: number): number`
+
+---
+
+### [T21] カーソル
+
+`src/game/cursor.ts`:
+- `Cursor` クラス
+- 初期Y: TW_CENTER_Y - TW_AMP
+- `update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number)`
+- 速度: (2 * TW_AMP) / (beatMs / 1000) px/sec
+- clamp: [TW_CENTER_Y - TW_AMP, TW_CENTER_Y + TW_AMP]
+
+---
+
+### [T22] リングスポーナー
+
+`src/game/ringSpawner.ts`:
+- `RingSpawner` クラス
+- `update(songTimeMs, rings: RingDef[], bpmTimeline, waveEngine): RingState[]`
+- TW_LEAD_BEATS=3 拍前にspawn
+- X描画位置: TW_JUDGE_X + (ring.hitTime - songTimeMs) / 1000 * TW_SCROLL
+
+---
+
+### [T23] ヒット判定
+
+`src/game/hitJudge.ts`:
+- `judgeHit(pressTimeMs, cursorY, rings: RingState[], currentBeatMs): HitJudgement | null`
+- 最近傍リング（タイミング的に最も近い未解決リング）を選択
+- タイミング誤差 < beatMs*0.4 AND Y距離 < 60: ヒット
+- PERFECT条件: 誤差 < 50ms AND Y < 30px
+
+---
+
+### [T24] スコア管理
+
+`src/game/score.ts`:
+- `ScoreManager` クラス
+- `recordHit(result: HitResult)`
+- `recordTrace(dt: number, isOnWave: boolean)`
+- `getStats()`: { score, combo, maxCombo, perfect, good, miss }
+- `getRank()`: 'S'|'A'|'B'|'C'|'D'
+
+---
+
+### [T25] Canvasレンダラー
+
+`src/game/renderer.ts`:
+- `Renderer` クラス
+- `render(ctx, { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline })`
+- 描画順: 背景 → 判定線 → 波形 → リング → カーソル → HUD
+- 波形: アクセントカラー、線幅2.5px
+- カーソル: コンボtier(0-3)で色変化 (accent→sub→positive→warning)
+- リング: 半径64→14pxに縮小
+- 背景: #0a0a0aのみ（装飾最小限）
+
+---
+
+### [T30] Reactアプリシェル
+
+`src/App.tsx`:
+- HashRouter + Routes
+- / → SelectScreen
+- /play/:songId → GameScreen
+- /result → ResultScreen
+- /editor → EditorScreen
+- /calibration → CalibrationScreen
+
+---
+
+### [T60] 手動オフセット
+
+ゲーム画面内: </> キーで±10ms。右下に `offset: +Xms` 表示。
+clock.ts の setManualOffset() を呼ぶ。
+
+---
+
+### [T61] オートキャリブレーション
+
+`src/screens/CalibrationScreen.tsx`:
+- メトロノームを鳴らしながら Space×8 回
+- 最初の2サンプルを破棄、残り6の平均から offset を設定
+- progress: X/8 を表示
+- ESC でキャンセル（変更を保存しない）
+
+---
+
+### [T62] キー効果音
+
+K キーでトグル。localStorage('rhythmKeySound') に保存。
+Space押下時に即座に 1320Hz sin波クリックを再生（ON時のみ）。
+
+---
+
+### [T32] ゲーム画面
+
+`src/screens/GameScreen.tsx`:
+- useRef で Canvas を参照
+- useEffect でゲームループ (requestAnimationFrame) 起動
+- ゲームループ: songNow() → update all engines → render
+- ESC → navigate('/')
+- R → resetGame()
+- 曲終了（最後のリングのhitTime+2秒後）→ navigate('/result', { state: stats })
+
+---
+
+### [T33] リザルト画面
+
+`src/screens/ResultScreen.tsx`:
+- useLocation で stats を受け取る
+- スコア: 0から実値へ1秒カウントアップ (requestAnimationFrame)
+- ランク: 大きく中央表示
+- PERFECT/GOOD/MISS 数
+- ボタン: 「もう一回」（/play/:songId）「曲選択」（/）
+
+---
+
+### [T50] エディタ基盤
+
+`src/screens/EditorScreen.tsx`:
+- 左ペイン320px: 音楽制御・BPM設定
+- 右ペイン flex: タイムライン表示
+- ヘッダー: 「オーサリングツール」タイトル + 「/ に戻る」リンク
+
+---
+
+### [T42] ゲームとチャートの統合
+
+GameScreen 内:
+1. useParams でsongIdを取得
+2. songs.tomlからSongEntryを検索
+3. chartPathからChart読み込み
+4. AudioBuffer読み込み（失敗してもゲーム続行）
+5. BpmTimeline, WaveEngine, RingSpawner 初期化
+6. ゲームループ開始
+
+---
+
+### [T31] 曲選択画面
+
+`src/screens/SelectScreen.tsx`:
+- loadSongList()で曲一覧取得
+- カード一覧 (grid or flex)
+- カード: タイトル・アーティスト・難易度バー
+- ホバー: translateY(-2px) transform, transition 150ms
+- クリック: navigate('/play/' + song.id)
+- Lキー: navigate('/calibration')
+
+---
+
+### [T51] エディタ内オーディオ
+
+左ペインに追加:
+- URL入力フィールド（デフォルト: /rhythm_game/audio/08.Reply.flac）
+- 再生/停止ボタン
+- 現在位置表示 (秒 / beat)
+- BPM入力フィールド
+
+---
+
+### [T52] リング録音
+
+- 再生中にSpaceキーで現在beat位置をスタンプ
+- スナップ: 最近傍0.25beatに丸める
+- 右ペインにリスト表示 (beat: X.XX)
+- 削除ボタン付き
+
+---
+
+### [T53] セグメントエディタ
+
+右ペインに追加:
+- セグメントリスト（上から順に）
+- 各行: direction select (↑/↓) + beats input
+- 追加ボタン、削除ボタン
+- 変更するとリアルタイムで波形プレビュー（Canvas小）を更新
+
+---
+
+### [T54] BPMエディタ
+
+左ペインに追加:
+- 基本BPMフィールド
+- BPM変更リスト（beat, newBpm）
+- タップテンポボタン（4回タップで平均BPMを計算）
+
+---
+
+### [T55] TOMLエクスポート
+
+「エクスポート」ボタン:
+- 現在の状態をTOML文字列に変換
+- Blob でダウンロード (reply.toml)
+
+---
+
+### [T56] エディタ内プレイテスト
+
+「プレイテスト」ボタン:
+- 現在の譜面をメモリ上でChartオブジェクト化
+- GameScreenをモーダルorフルスクリーンで起動
+
+---
+
+### [T70] 曲選択画面ポリッシュ
+
+- カードに border: 1px solid var(--border)
+- 難易度: 星またはドット5個
+- ローディング時スケルトン表示
+
+---
+
+### [T71] ゲーム画面ポリッシュ
+
+- 判定テキスト (PERFECT!/GOOD/MISS) を判定線付近にフェードアウト表示
+- コンボ数: 大きく表示、コンボ切れで揺れアニメーション
+- ビートに合わせて背景が微妙にパルス（opacity 1→0.97→1、禁止: 色変化）
+
+---
+
+### [T72] リザルト画面ポリッシュ
+
+- ランクを画面中央に大きく表示（font-size: 120px）
+- スコアカウントアップ: ease-out
+- 統計: PERFECT/GOOD/MISS を横並びカード
+
+---
+
+### [T73] エディタポリッシュ
+
+- 右ペインのタイムラインにリング縦線を表示（X軸=beat位置）
+- セグメントを色分け（up=accent, down=sub）
+
+---
+
+### [T74] 画面遷移アニメーション
+
+CSS Transition のみ（ライブラリ不使用）:
+- フェードイン: opacity 0→1, 200ms ease
+- 各画面にクラス付与で制御
+
+---
+
+### [T80] E2E統合確認
+
+手動で以下を確認:
+1. `/` で曲一覧が表示される
+2. 曲をクリックするとゲームが起動する
+3. ゲームをプレイしてリザルト画面が出る
+4. 「もう一回」で再プレイできる
+5. コンソールに Uncaught エラーがない
+
+---
+
+### [T81] エラーハンドリング
+
+- src/components/ErrorBoundary.tsx 作成
+- App.tsx でラップ
+- 音楽ロード失敗: 「音楽ファイルの読み込みに失敗しました（メトロノームのみで続行）」
+- チャートロード失敗: 「譜面ファイルが見つかりません」
+- songs.toml 失敗: 「曲リストの読み込みに失敗しました」
+
+---
+
+## よくある迷い → デフォルト
+
+| 迷った場合 | デフォルト |
+|---|---|
+| 派手 vs 地味 | 地味 (transition 200ms) |
+| 分割 vs 1ファイル | 200行超えたら分割 |
+| 状態管理ライブラリ | 使わない (useState/useReducer) |
+| anyで型を誤魔化す | 禁止。unknownを使え |
+| 仕様にない機能追加 | TODOコメントのみ |
+| TOMLにないキー | デフォルト値で補完 |
+| アニメーション時間 | 150-200ms |
+| z-index | 10刻みで管理 |
