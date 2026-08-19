@@ -14,9 +14,15 @@
       "finished": 1787100346.2055345
     },
     "T01": {
+      "attempts": 1,
+      "status": "passed",
+      "started": 1787100346.2058885,
+      "finished": 1787100366.6368518
+    },
+    "T02": {
       "attempts": 0,
       "status": "running",
-      "started": 1787100346.2058885
+      "started": 1787100366.6371086
     }
   },
   "consecutive_failures": 0
