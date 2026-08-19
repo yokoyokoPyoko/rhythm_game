@@ -1,2 +1,10 @@
 node_modules/
-bug_analysis.md
+dist/
+docs/
+.opencode/
+orchestrator.log
+orchestrator_state.json
+orchestrator_logs/
+screenshots/
+test-results/
+playwright-report/

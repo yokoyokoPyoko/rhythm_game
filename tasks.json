@@ -90,19 +90,9 @@
     "depends_on": ["T01", "T02"]
   },
   {
-    "id": "T60",
-    "desc": "手動オフセット調整: </> キーでmanualOffsetMsを±10ms変更。localStorageに保存。ゲーム内右下に表示。",
-    "depends_on": ["T12"]
-  },
-  {
-    "id": "T61",
-    "desc": "Lキーキャリブレーション画面: メトロノームに合わせてSpace×8回、最初の2サンプル破棄して平均からoffset自動設定。",
-    "depends_on": ["T11", "T60"]
-  },
-  {
-    "id": "T62",
-    "desc": "キー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
-    "depends_on": ["T11"]
+    "id": "T31",
+    "desc": "src/screens/SelectScreen.tsx: songs.tomlからカード一覧表示。タイトル・アーティスト・難易度。クリックで/play/:songIdへ。",
+    "depends_on": ["T30", "T41"]
   },
   {
     "id": "T32",
@@ -115,19 +105,14 @@
     "depends_on": ["T30", "T24"]
   },
   {
+    "id": "T42",
+    "desc": "統合: /play/:songId でsongs.toml→chart.toml→音楽ロード→波形・リング同期再生。全システムを繋げる。",
+    "depends_on": ["T31", "T32", "T41", "T13", "T14", "T20", "T22"]
+  },
+  {
     "id": "T50",
     "desc": "src/screens/EditorScreen.tsx: /editor のレイアウト基盤。左ペイン（音楽制御）・右ペイン（タイムライン）の二分割UI。",
     "depends_on": ["T30", "T40"]
-  },
-  {
-    "id": "T42",
-    "desc": "統合: /play/:songId でsongs.toml→chart.toml→音楽ロード→波形・リング同期再生。全システムを繋げる。",
-    "depends_on": ["T32", "T41", "T13", "T14", "T20", "T22"]
-  },
-  {
-    "id": "T31",
-    "desc": "src/screens/SelectScreen.tsx: songs.tomlからカード一覧表示。タイトル・アーティスト・難易度。クリックで/play/:songIdへ。",
-    "depends_on": ["T30", "T41"]
   },
   {
     "id": "T51",
@@ -160,6 +145,21 @@
     "depends_on": ["T55", "T42"]
   },
   {
+    "id": "T60",
+    "desc": "手動オフセット調整: </> キーでmanualOffsetMsを±10ms変更。localStorageに保存。ゲーム内右下に表示。",
+    "depends_on": ["T12"]
+  },
+  {
+    "id": "T61",
+    "desc": "Lキーキャリブレーション画面: メトロノームに合わせてSpace×8回、最初の2サンプル破棄して平均からoffset自動設定。",
+    "depends_on": ["T11", "T60"]
+  },
+  {
+    "id": "T62",
+    "desc": "キー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
+    "depends_on": ["T11"]
+  },
+  {
     "id": "T70",
     "desc": "曲選択画面ポリッシュ: カードホバーアニメーション、難易度バー、フォント整備。Linear風。",
     "depends_on": ["T31"]
@@ -185,13 +185,13 @@
     "depends_on": ["T31", "T32", "T33"]
   },
   {
-    "id": "T80",
-    "desc": "E2E統合確認: 曲選択→ゲーム→リザルト→再プレイ→曲選択の完全フロー手動確認。コンソールエラーなし。",
-    "depends_on": ["T71", "T72", "T73", "T74", "T56", "T61", "T62"]
-  },
-  {
     "id": "T81",
     "desc": "エラーハンドリング: TOML構文エラー・チャートファイル404・音楽ロード失敗を分かりやすいUIメッセージで表示。",
     "depends_on": ["T42", "T13"]
+  },
+  {
+    "id": "T80",
+    "desc": "E2E統合確認: 曲選択→ゲーム→リザルト→再プレイ→曲選択の完全フロー手動確認。コンソールエラーなし。",
+    "depends_on": ["T70", "T71", "T72", "T73", "T74", "T56", "T61", "T62", "T81"]
   }
 ]
