@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""汎用自律運用オーケストレーター (リアルタイム可観測性・詳細ログ強化版)
+"""汎用自律運用オーケストレーター (堅牢タイムアウト＆非ブロッキングストリーミング版)
 
 - Coder: opencode/deepseek-v4-flash-free (実装担当)
 - QA Test Generator: moonshotai/kimi-k2.7-code (仕様を読みPlaywright動的テスト&5連フレーム撮影スクリプトを生成)
@@ -13,10 +13,12 @@ import argparse
 import json
 import logging
 import os
+import queue
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -124,7 +126,7 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = ROOT, prefix: str = "") -> tuple[int, str, bool]:
-    """リアルタイムで出力をコンソールに流しながら実行する"""
+    """非ブロッキングキュー＋別スレッドで安全にストリーミングと厳密タイムアウトを行う"""
     e = os.environ.copy()
     e["FORCE_COLOR"] = "0"
     try:
@@ -141,42 +143,54 @@ def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = 
     except Exception as err:
         return 127, f"コマンド実行失敗: {cmd[0]} ({err})", False
 
-    collected_output: list[str] = []
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def reader_thread() -> None:
+        try:
+            if proc.stdout:
+                for line in iter(proc.stdout.readline, ""):
+                    q.put(line)
+        except Exception:
+            pass
+        finally:
+            q.put(None)
+
+    t = threading.Thread(target=reader_thread, daemon=True)
+    t.start()
+
+    collected: list[str] = []
     start_t = time.time()
     timed_out = False
 
     while True:
-        line = proc.stdout.readline() if proc.stdout else ""
-        if line:
-            collected_output.append(line)
-            # コンソールにAIのアクションをインデント付きでリアルタイム表示
+        try:
+            line = q.get(timeout=0.1)
+            if line is None:
+                break
+            collected.append(line)
             cleaned = line.rstrip()
             if cleaned and not re.search(r"^\s*$", cleaned):
                 print(f"  │ {prefix}{cleaned}", flush=True)
-
-        if proc.poll() is not None:
-            # 残りの出力を読み切る
-            if proc.stdout:
-                for rem in proc.stdout.readlines():
-                    collected_output.append(rem)
-                    rem_clean = rem.rstrip()
-                    if rem_clean:
-                        print(f"  │ {prefix}{rem_clean}", flush=True)
-            break
+        except queue.Empty:
+            pass
 
         if timeout and (time.time() - start_t > timeout):
             timed_out = True
+            log.warning("⏰ タイムアウト (%d秒) に達したためプロセスを強制終了します", timeout)
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                time.sleep(2)
+                time.sleep(1)
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            print(f"  └─ [タイムアウト {timeout}秒で強制終了]", flush=True)
+            print(f"  └─ ⏰ [タイムアウト {timeout}秒で強制終了]", flush=True)
             break
-        time.sleep(0.05)
 
-    full_out = "".join(collected_output)
+        if proc.poll() is not None and q.empty():
+            break
+
+    proc.wait()
+    full_out = "".join(collected)
     return (proc.returncode if not timed_out else -1), full_out, timed_out
 
 
@@ -189,15 +203,19 @@ def rate_limit_sleep(model: str) -> None:
         time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int = 480, label: str = "OpenCode") -> tuple[int, str]:
+def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode") -> tuple[int, str]:
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model, prompt]
 
     for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
         rate_limit_sleep(model)
-        log.info("🤖 [%s] 実行開始 (model=%s, 試行 %d/%d)", label, model, attempt, len(BACKOFF_DELAYS))
+        log.info("🤖 [%s] 実行開始 (model=%s, 試行 %d/%d, タイムアウト=%d秒)", label, model, attempt, len(BACKOFF_DELAYS), timeout)
         print(f"  ┌─ ▼ {label} 出力ストリーム開始 ───", flush=True)
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix="🤖 ")
         print(f"  └─ ▲ {label} 出力終了 (exit={code}) ───", flush=True)
+
+        if timed_out:
+            log.warning("⚠️ タイムアウトが発生しました。再試行します...")
+            continue
 
         if "429" in out or "Too Many Requests" in out:
             log.warning("⚠️ 429 Too Many Requests 検知。%d秒 バックオフ待機して再試行します...", delay)
@@ -206,7 +224,7 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 480, label: 
 
         return code, out
 
-    log.error("❌ 429 バックオフ リトライ上限に達しました")
+    log.error("❌ リトライ上限に達しました")
     return code, out
 
 
@@ -476,13 +494,15 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
     head_hash = head_hash.strip()
 
     max_attempts = 2
-    while st["attempts"] < max_attempts:
-        st["attempts"] += 1
-        log.info("🔄 [%s] 実装試行 %d/%d", task.id, st["attempts"], max_attempts)
+    attempts_done = 0
+    while attempts_done < max_attempts:
+        attempts_done += 1
+        st["attempts"] = attempts_done
+        log.info("🔄 [%s] 実装試行 %d/%d", task.id, attempts_done, max_attempts)
 
-        # 1. Coder 実装 (DeepSeek)
+        # 1. Coder 実装 (DeepSeek) - 5分(300秒)タイムアウト
         prompt = build_coder_prompt(task)
-        code, out = run_opencode_with_retry(CODER_MODEL, prompt, timeout=480, label=f"DeepSeek-Coder({task.id})")
+        code, out = run_opencode_with_retry(CODER_MODEL, prompt, timeout=300, label=f"DeepSeek-Coder({task.id})")
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
         # 2. Gate A (tsc 静的型チェック)
@@ -533,7 +553,7 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (可観測性強化版)")
+    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (堅牢タイムアウト版)")
     parser.add_argument("--dry-run", action="store_true", help="実行計画のみ表示")
     parser.add_argument("--only", metavar="TID", help="指定タスクIDのみ実行")
     parser.add_argument("--from", dest="start_from", metavar="TID", help="指定タスクID以降を実行")
