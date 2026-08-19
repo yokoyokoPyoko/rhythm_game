@@ -11,7 +11,7 @@ import { Cursor } from '../game/cursor'
 import { judgeHit } from '../game/hitJudge'
 import { Renderer } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
-import { ScoreManager } from '../game/score'
+import { ScoreManager, type ScoreStats } from '../game/score'
 import { WaveEngine } from '../game/waveEngine'
 import type { Chart, RingState } from '../types'
 
@@ -23,7 +23,12 @@ const METRONOME_TICK_MS = 25
 
 type LoadStatus = 'loading' | 'error' | 'ready'
 
-export default function GameScreen() {
+export interface GameScreenProps {
+  playtestChart?: Chart
+  onExit?: (stats?: ScoreStats) => void
+}
+
+export default function GameScreen({ playtestChart, onExit }: GameScreenProps = {}) {
   const { songId } = useParams<{ songId: string }>()
   const navigate = useNavigate()
 
@@ -45,10 +50,15 @@ export default function GameScreen() {
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
   const statusRef = useRef<LoadStatus>('loading')
+  const onExitRef = useRef(onExit)
 
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  useEffect(() => {
+    onExitRef.current = onExit
+  }, [onExit])
 
   const stopMusic = useCallback(() => {
     if (musicSourceRef.current) {
@@ -151,12 +161,17 @@ export default function GameScreen() {
 
     async function init() {
       try {
-        const songs = await loadSongList()
-        const song = songs.find((s) => s.id === songId)
-        if (!song) {
-          throw new Error('譜面ファイルが見つかりません')
+        let chart: Chart
+        if (playtestChart) {
+          chart = playtestChart
+        } else {
+          const songs = await loadSongList()
+          const song = songs.find((s) => s.id === songId)
+          if (!song) {
+            throw new Error('譜面ファイルが見つかりません')
+          }
+          chart = await loadChart(song.chartPath)
         }
-        const chart = await loadChart(song.chartPath)
         await audioMgr.ensure()
         const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes)
         chartRef.current = chart
@@ -179,7 +194,7 @@ export default function GameScreen() {
     return () => {
       cancelled = true
     }
-  }, [songId])
+  }, [songId, playtestChart])
 
   useEffect(() => {
     if (status !== 'ready') return
@@ -245,7 +260,12 @@ export default function GameScreen() {
           endedRef.current = true
           stopMusic()
           stopMetronome()
-          navigate('/result', { state: { stats: scoreRef.current.getStats(), songId } })
+          const stats = scoreRef.current.getStats()
+          if (onExitRef.current) {
+            onExitRef.current(stats)
+          } else {
+            navigate('/result', { state: { stats, songId } })
+          }
           return
         }
       }
@@ -265,7 +285,11 @@ export default function GameScreen() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        navigate('/')
+        if (onExitRef.current) {
+          onExitRef.current()
+        } else {
+          navigate('/')
+        }
         return
       }
       if (e.key === 'r' || e.key === 'R') {

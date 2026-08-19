@@ -295,6 +295,13 @@ button:focus-visible {
   min-height: 100vh;
 }
 
+.playtest-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background-color: var(--bg);
+}
+
 .editor-header {
   display: flex;
   align-items: center;

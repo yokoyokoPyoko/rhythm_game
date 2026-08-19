@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
@@ -8,6 +8,7 @@ import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
 import WavePreview from './editor/WavePreview'
+import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
 
@@ -31,6 +32,7 @@ export default function EditorScreen() {
   const [rings, setRings] = useState<RingDef[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
+  const [playtest, setPlaytest] = useState<Chart | null>(null)
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
@@ -180,9 +182,9 @@ export default function EditorScreen() {
     }
   }
 
-  const exportChart = () => {
+  const buildChart = useCallback((): Chart => {
     // TODO: title / artist の編集UI（現在は固定値）
-    const chart: Chart = {
+    return {
       title: 'Reply',
       artist: '',
       bpm: safeBpm,
@@ -191,7 +193,10 @@ export default function EditorScreen() {
       segments,
       rings,
     }
-    const toml = chartToToml(chart)
+  }, [safeBpm, url, bpmChanges, segments, rings])
+
+  const exportChart = () => {
+    const toml = chartToToml(buildChart())
     const blob = new Blob([toml], { type: 'text/toml' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
@@ -199,6 +204,10 @@ export default function EditorScreen() {
     link.click()
     URL.revokeObjectURL(link.href)
   }
+
+  const closePlaytest = useCallback(() => {
+    setPlaytest(null)
+  }, [])
 
   return (
     <div className="editor-screen">
@@ -266,8 +275,11 @@ export default function EditorScreen() {
               <button type="button" onClick={exportChart}>
                 エクスポート
               </button>
+              <button type="button" onClick={() => setPlaytest(buildChart())}>
+                プレイテスト
+              </button>
             </div>
-            <p className="editor-hint">現在の状態をTOMLとして reply.toml に書き出し</p>
+            <p className="editor-hint">現在の状態をTOMLとして reply.toml に書き出し。プレイテストはエクスポートせずその場で確認</p>
           </section>
         </aside>
 
@@ -317,6 +329,12 @@ export default function EditorScreen() {
           </section>
         </main>
       </div>
+
+      {playtest && (
+        <div className="playtest-overlay">
+          <GameScreen playtestChart={playtest} onExit={closePlaytest} />
+        </div>
+      )}
     </div>
   )
 }
