@@ -89,10 +89,9 @@ export class Renderer {
     height: number,
     beatPhase: number,
   ): void {
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, width, height);
     const pulse = 0.5 * (1 - Math.cos(beatPhase * Math.PI * 2));
-    ctx.fillStyle = `rgba(255, 255, 255, ${(BG_PULSE_MAX_ALPHA * pulse).toFixed(4)})`;
+    const alpha = 1 - 0.03 * pulse;
+    ctx.fillStyle = `rgba(10, 10, 10, ${alpha.toFixed(4)})`;
     ctx.fillRect(0, 0, width, height);
   }
 
