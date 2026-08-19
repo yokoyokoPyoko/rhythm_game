@@ -1,4 +1,193 @@
 [0m
-> build · z-ai/glm-5.2
+> build · deepseek-v4-flash-free
 [0m
-[91m[1mError: [0mToo Many Requests: {"status":429,"title":"Too Many Requests"}
+[0m$ [0mls -R src 2>/dev/null; echo "---"; cat src/game/waveEngine.ts 2>/dev/null; echo "---"; cat src/audio/bpmTimeline.ts 2>/dev/null
+src:
+App.tsx
+assets
+audio
+chart
+game
+index.css
+main.tsx
+types.ts
+vite-env.d.ts
+
+src/assets:
+react.svg
+
+src/audio:
+AudioManager.ts
+bpmTimeline.ts
+clock.ts
+loader.ts
+metronome.ts
+
+src/chart:
+loader.ts
+manifest.ts
+
+src/game:
+waveEngine.ts
+---
+import type { BpmTimeline } from '../audio/bpmTimeline';
+import type { Segment } from '../types';
+
+const TW_CENTER_Y = 600 / 2;
+const TW_AMP = 80;
+
+const WAVE_TOP = TW_CENTER_Y - TW_AMP;
+const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;
+
+interface WavePoint {
+  beat: number;
+  y: number;
+}
+
+export class WaveEngine {
+  private readonly timeline: BpmTimeline;
+  private readonly points: WavePoint[];
+
+  constructor(segments: Segment[], bpmTimeline: BpmTimeline) {
+    this.timeline = bpmTimeline;
+    this.points = this.buildPoints(segments);
+  }
+
+  private buildPoints(segments: Segment[]): WavePoint[] {
+    const points: WavePoint[] = [{ beat: 0, y: WAVE_TOP }];
+    let beat = 0;
+    for (const seg of segments) {
+      beat += seg.beats;
+      points.push({ beat, y: seg.direction === 'up' ? WAVE_TOP : WAVE_BOTTOM });
+    }
+    return points;
+  }
+
+  waveYAt(beat: number): number {
+    if (beat <= 0) {
+      return WAVE_TOP;
+    }
+    const last = this.points[this.points.length - 1];
+    if (beat >= last.beat) {
+      return last.y;
+    }
+    for (let i = 0; i < this.points.length - 1; i++) {
+      const p0 = this.points[i];
+      const p1 = this.points[i + 1];
+      if (beat >= p0.beat && beat <= p1.beat) {
+        if (p1.beat === p0.beat) {
+          return p1.y;
+        }
+        const t = (beat - p0.beat) / (p1.beat - p0.beat);
+        return p0.y + (p1.y - p0.y) * t;
+      }
+    }
+    return last.y;
+  }
+
+  waveYAtMs(ms: number): number {
+    return this.waveYAt(this.timeline.msToBeat(ms));
+  }
+}---
+import type { BpmChange } from '../types';
+
+interface BpmSegment {
+  startBeat: number;
+  endBeat: number;
+  bpm: number;
+  startMs: number;
+}
+
+function beatMs(bpm: number): number {
+  return 60000 / bpm;
+}
+
+export class BpmTimeline {
+  private segments: BpmSegment[];
+
+  constructor(baseBpm: number, bpmChanges: BpmChange[]) {
+    this.segments = this.buildSegments(baseBpm, bpmChanges);
+  }
+
+  private buildSegments(baseBpm: number, bpmChanges: BpmChange[]): BpmSegment[] {
+    const sorted = [...bpmChanges].sort((a, b) => a.beat - b.beat);
+    const segments: BpmSegment[] = [];
+    let cursorBeat = 0;
+    let cursorMs = 0;
+    let bpm = baseBpm;
+    for (const change of sorted) {
+      if (change.beat <= cursorBeat) {
+        continue;
+      }
+      segments.push({
+        startBeat: cursorBeat,
+        endBeat: change.beat,
+        bpm,
+        startMs: cursorMs,
+      });
+      cursorMs += (change.beat - cursorBeat) * beatMs(bpm);
+      cursorBeat = change.beat;
+      bpm = change.bpm;
+    }
+    segments.push({
+      startBeat: cursorBeat,
+      endBeat: Number.POSITIVE_INFINITY,
+      bpm,
+      startMs: cursorMs,
+    });
+    return segments;
+  }
+
+  private segmentAtBeat(beat: number): BpmSegment {
+    let current = this.segments[0];
+    for (const seg of this.segments) {
+      if (seg.startBeat <= beat) {
+        current = seg;
+      } else {
+        break;
+      }
+    }
+    return current;
+  }
+
+  private segmentAtMs(ms: number): BpmSegment {
+    let current = this.segments[0];
+    for (const seg of this.segments) {
+      if (seg.startMs <= ms) {
+        current = seg;
+      } else {
+        break;
+      }
+    }
+    return current;
+  }
+
+  beatToMs(beat: number): number {
+    const seg = this.segmentAtBeat(beat);
+    return seg.startMs + (beat - seg.startBeat) * beatMs(seg.bpm);
+  }
+
+  msToBeat(ms: number): number {
+    const seg = this.segmentAtMs(ms);
+    return seg.startBeat + (ms - seg.startMs) / beatMs(seg.bpm);
+  }
+
+  bpmAt(beat: number): number {
+    return this.segmentAtBeat(beat).bpm;
+  }
+
+  beatMsAt(beat: number): number {
+    return beatMs(this.segmentAtBeat(beat).bpm);
+  }
+}
+[0m
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -30; echo "exit: $?"
+exit: 0
+[0m
+src/game/waveEngine.ts は仕様通り実装済みで、`tsc --noEmit` もエラーなしでした。
+
+- `waveYAt(beat)`: beat=0 で上端、segmentsを累積ビートで線形補間
+- `direction="up"` は上端終端、`"down"` は下端終端（最初のセグメントは上端スタート）
+- `waveYAtMs(ms)`: `bpmTimeline.msToBeat()` 経由で変換
+
+DONE
