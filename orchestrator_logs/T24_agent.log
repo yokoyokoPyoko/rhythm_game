@@ -1,4 +1,34 @@
 [0m
-> build · z-ai/glm-5.2
+> build · deepseek-v4-flash-free
 [0m
-[91m[1mError: [0mToo Many Requests: {"status":429,"title":"Too Many Requests"}
+[0m$ [0mls -la src/game/ 2>/dev/null; echo "---"; ls src/ 2>/dev/null
+合計 24
+drwxrwxr-x 2 p-yoko p-yoko 4096  8月 19 09:56 .
+drwxrwxr-x 6 p-yoko p-yoko 4096  8月 19 09:53 ..
+-rw-rw-r-- 1 p-yoko p-yoko  523  8月 19 09:55 cursor.ts
+-rw-rw-r-- 1 p-yoko p-yoko 1053  8月 19 09:56 hitJudge.ts
+-rw-rw-r-- 1 p-yoko p-yoko 1196  8月 19 09:55 ringSpawner.ts
+-rw-rw-r-- 1 p-yoko p-yoko 1510  8月 19 09:53 waveEngine.ts
+---
+App.tsx
+assets
+audio
+chart
+game
+index.css
+main.tsx
+types.ts
+vite-env.d.ts
+[0m
+[0m→ [0mRead src/types.ts
+[0m→ [0mRead src/game/hitJudge.ts
+[0m
+[0m← [0mWrite src/game/score.ts
+Wrote file successfully.
+[0m
+[0m$ [0mnpx tsc --noEmit
+(no output)
+[0m
+`src/game/score.ts` を実装しました。`tsc --noEmit` エラーなし。PERFECT=300, GOOD=100, MISS=コンボリセット、トレースボーナスは0.15秒ごとにcombo+1・score+8+combo、ランクはPERFECT比率でS/A/B/C/D判定します。
+
+DONE
