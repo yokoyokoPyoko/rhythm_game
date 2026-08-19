@@ -1,0 +1,102 @@
+import type { Segment } from '../../types'
+
+interface SegmentEditorProps {
+  segments: Segment[]
+  onSegmentsChange: (next: Segment[]) => void
+}
+
+export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEditorProps) {
+  const addSegment = () => {
+    onSegmentsChange([...segments, { direction: 'up', beats: 1 }])
+  }
+
+  const removeSegment = (index: number) => {
+    onSegmentsChange(segments.filter((_, i) => i !== index))
+  }
+
+  const updateDirection = (index: number, direction: 'up' | 'down') => {
+    onSegmentsChange(segments.map((seg, i) => (i === index ? { ...seg, direction } : seg)))
+  }
+
+  const updateBeats = (index: number, beats: number) => {
+    const v = Number.isFinite(beats) && beats > 0 ? beats : 1
+    onSegmentsChange(segments.map((seg, i) => (i === index ? { ...seg, beats: v } : seg)))
+  }
+
+  const move = (index: number, dir: -1 | 1) => {
+    const target = index + dir
+    if (target < 0 || target >= segments.length) return
+    const next = [...segments]
+    const [item] = next.splice(index, 1)
+    next.splice(target, 0, item)
+    onSegmentsChange(next)
+  }
+
+  return (
+    <section className="editor-pane">
+      <div className="segment-editor-head">
+        <h2>セグメント</h2>
+        <button type="button" onClick={addSegment}>
+          追加
+        </button>
+      </div>
+      {segments.length === 0 ? (
+        <p className="editor-empty">セグメントなし</p>
+      ) : (
+        <ul className="segment-list">
+          {segments.map((seg, i) => (
+            <li key={i} className="segment-list-item">
+              <span className="segment-index">{i + 1}</span>
+              <select
+                className="editor-input segment-direction"
+                value={seg.direction}
+                onChange={(e) => updateDirection(i, e.target.value as 'up' | 'down')}
+                aria-label={`セグメント${i + 1}の方向`}
+              >
+                <option value="up">↑</option>
+                <option value="down">↓</option>
+              </select>
+              <input
+                className="editor-input segment-beats"
+                type="number"
+                min={0.25}
+                step={0.25}
+                value={seg.beats}
+                onChange={(e) => updateBeats(i, Number(e.target.value))}
+                aria-label={`セグメント${i + 1}の拍数`}
+              />
+              <div className="segment-actions">
+                <button
+                  type="button"
+                  className="segment-move"
+                  disabled={i === 0}
+                  onClick={() => move(i, -1)}
+                  aria-label={`セグメント${i + 1}を上に移動`}
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  className="segment-move"
+                  disabled={i === segments.length - 1}
+                  onClick={() => move(i, 1)}
+                  aria-label={`セグメント${i + 1}を下に移動`}
+                >
+                  ▼
+                </button>
+                <button
+                  type="button"
+                  className="segment-delete"
+                  onClick={() => removeSegment(i)}
+                  aria-label={`セグメント${i + 1}を削除`}
+                >
+                  削除
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}

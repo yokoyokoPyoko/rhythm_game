@@ -3,7 +3,9 @@ import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio } from '../audio/loader'
-import type { RingDef } from '../types'
+import type { RingDef, Segment } from '../types'
+import SegmentEditor from './editor/SegmentEditor'
+import WavePreview from './editor/WavePreview'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
 
@@ -25,6 +27,7 @@ export default function EditorScreen() {
   const [error, setError] = useState<string | null>(null)
   const [snap, setSnap] = useState(0.25)
   const [rings, setRings] = useState<RingDef[]>([])
+  const [segments, setSegments] = useState<Segment[]>([])
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
@@ -244,6 +247,9 @@ export default function EditorScreen() {
         </aside>
 
         <main className="editor-main">
+          <WavePreview segments={segments} bpm={safeBpm} />
+          <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
+
           <section className="editor-pane">
             <h2>リング録音</h2>
             <div className="editor-field">
@@ -284,10 +290,6 @@ export default function EditorScreen() {
               </ul>
             )}
           </section>
-
-          <div className="editor-timeline">
-            {/* TODO(T53/T73): セグメントエディタ・タイムライン */}
-          </div>
         </main>
       </div>
     </div>
