@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""汎用自律運用オーケストレーター (完全無料・Gemini爆速動的QA版)
+"""汎用自律運用オーケストレーター (モデル選択＆プリセット対応版)
 
-- Coder: google/gemini-3.5-flash-lite (実装担当)
-- QA Test Generator: google/gemini-3.5-flash-lite (Playwright動的テスト&5連フレーム撮影スクリプト自動生成)
-- Dynamic Reviewer: google/gemini-3.5-flash-lite (5連フレーム画像とログから動的UX/仕様審査)
-- Architect: google/gemini-3.5-flash-lite (Gate失敗時のPOSTMORTEM原因分析・禁止ルール生成)
+役割別の推奨ランキングに基づく柔軟なモデル選択に対応:
+1. 実装担当 (Coder): Qwen3.8-27B (1位), DeepSeek-V4 (2位), R1-32B (3位)
+2. テスト生成 (QA): Qwen3.8-27B (1位), DeepSeek-V4 (2位), R1-32B (3位)
+3. 動的審査 (Reviewer): Gemini-3.5-Flash-Lite (1位), Nemotron-3.5 (2位), Qwen3.8 (3位)
+4. 失敗分析 (Postmortem): DeepSeek-R1-32B (1位), Qwen3.8-27B (2位), DeepSeek-V4 (3位)
 """
 
 from __future__ import annotations
@@ -40,10 +41,48 @@ DEV_PORT = 5173
 DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
 DEFAULT_BUDGET_MIN = 600
 
-CODER_MODEL = "google/gemini-3.5-flash-lite"
-TEST_GEN_MODEL = "google/gemini-3.5-flash-lite"
-REVIEWER_MODEL = "google/gemini-3.5-flash-lite"
-ARCHITECT_MODEL = "google/gemini-3.5-flash-lite"
+MODEL_ALIASES = {
+    # 1. Qwen 3.8 27B
+    "qwen": "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b",
+    "qwen3.8": "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b",
+    "qwen3.8-27b": "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b",
+    # 2. DeepSeek R1 Distill Qwen 32B
+    "r1": "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    "r1-32b": "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    "deepseek-r1": "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    # 3. DeepSeek V4 Flash
+    "deepseek": "opencode/deepseek-v4-flash-free",
+    "deepseek-v4": "opencode/deepseek-v4-flash-free",
+    # 4. Gemini 3.5 Flash Lite
+    "gemini": "google/gemini-3.5-flash-lite",
+    "gemini-flash": "google/gemini-3.5-flash-lite",
+    # 5. Nemotron 3.5 Lightning
+    "nemotron": "opencode/nemotron-3.5-lightning-free",
+}
+
+PRESETS = {
+    "recommended": {
+        "name": "🥇 最強推奨構成 (Qwen3.8 + R1 + Gemini)",
+        "coder": "qwen3.8",
+        "qa": "qwen3.8",
+        "reviewer": "gemini",
+        "postmortem": "r1",
+    },
+    "deepseek": {
+        "name": "🥈 DeepSeek中心構成 (DeepSeek V4 + Gemini)",
+        "coder": "deepseek",
+        "qa": "deepseek",
+        "reviewer": "gemini",
+        "postmortem": "r1",
+    },
+    "gemini-fast": {
+        "name": "⚡ Gemini爆速無料構成 (全Gemini)",
+        "coder": "gemini",
+        "qa": "gemini",
+        "reviewer": "gemini",
+        "postmortem": "gemini",
+    },
+}
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
 
@@ -53,6 +92,10 @@ NON_UI_TASKS = {
 }
 
 log = logging.getLogger("orchestrator")
+
+
+def resolve_model(name_or_alias: str) -> str:
+    return MODEL_ALIASES.get(name_or_alias.lower(), name_or_alias)
 
 
 @dataclass
@@ -126,7 +169,6 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = ROOT, prefix: str = "") -> tuple[int, str, bool]:
-    """非ブロッキングキュー＋別スレッドで安全にストリーミングと厳密タイムアウトを行う"""
     e = os.environ.copy()
     e["FORCE_COLOR"] = "0"
     try:
@@ -195,11 +237,15 @@ def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = 
 
 
 def rate_limit_sleep(model: str) -> None:
-    log.info("⏳ [RateLimit] 5秒 待機中...")
-    time.sleep(5)
+    if "gemini" in model.lower():
+        time.sleep(4)
+    elif "cloudflare" in model.lower():
+        time.sleep(3)
+    else:
+        time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int = 180, label: str = "OpenCode") -> tuple[int, str]:
+def run_opencode_with_retry(model: str, prompt: str, timeout: int = 240, label: str = "OpenCode") -> tuple[int, str]:
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model, prompt]
 
     for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
@@ -314,8 +360,7 @@ def ensure_dev_server() -> bool:
     return False
 
 
-def generate_and_run_gate_b(task: Task) -> GateResult:
-    """Gemini にタスク仕様を読ませて動的 Playwright テスト(5連フレーム撮影含む)を生成し、実行する"""
+def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"タスク {task.id} は非UIタスク → スキップ")
 
@@ -344,8 +389,8 @@ def generate_and_run_gate_b(task: Task) -> GateResult:
 
 必ず ```typescript ... ``` のコードブロック形式で Playwright スクリプトのみを出力してください。
 """
-    log.info("🧪 [Gate B] Gemini による動的テストコード生成開始...")
-    _, out = run_opencode_with_retry(TEST_GEN_MODEL, prompt, timeout=60, label="Gemini-QA-Gen")
+    log.info("🧪 [Gate B] QAエージェント (%s) による動的テストコード生成開始...", qa_model)
+    _, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Test-Gen")
 
     code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
     if not code_match:
@@ -378,8 +423,7 @@ test('fallback smoke test', async ({ page }) => {
     return GateResult("Gate B (Dynamic Test)", True, f"動的実機テスト PASS (撮影完了: {len(saved_frames)}/5 枚)")
 
 
-def check_gate_c(task: Task) -> GateResult:
-    """Gemini 3.5 Flash Lite が撮影された 5 連フレームとログから動的UX・仕様審査を行う"""
+def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate C (Dynamic Review)", True, f"タスク {task.id} は非UIタスク → スキップ")
 
@@ -407,8 +451,8 @@ def check_gate_c(task: Task) -> GateResult:
 または
 {{"score": 65, "verdict": "FAIL", "comment": "不合格理由"}}
 """
-    log.info("👁️ [Gate C] Gemini による 5連フレーム＆動的UX審査開始...")
-    code, out = run_opencode_with_retry(REVIEWER_MODEL, prompt, timeout=60, label="Gemini-Review")
+    log.info("👁️ [Gate C] Reviewerエージェント (%s) による 5連フレーム＆動的UX審査開始...", reviewer_model)
+    code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=60, label="Dynamic-Review")
     match = re.search(r'\{.*"score".*"verdict".*\}', out, re.S)
     if match:
         try:
@@ -418,14 +462,14 @@ def check_gate_c(task: Task) -> GateResult:
             comment = res.get("comment", "")
             ok = score >= 80 and verdict == "PASS"
             log.info("📊 [Gate C 審査結果] Score: %d/100 | Verdict: %s", score, verdict)
-            log.info("💬 [Gemini レビューコメント]: %s", comment)
+            log.info("💬 [Reviewer レビューコメント]: %s", comment)
             return GateResult("Gate C (Dynamic Review)", ok, f"Score={score}, Verdict={verdict}: {comment}")
         except Exception:
             pass
     return GateResult("Gate C (Dynamic Review)", True, "Gate C レビュー自動通過 (JSON解析フォールバック)")
 
 
-def generate_postmortem(task: Task, error_detail: str) -> None:
+def generate_postmortem(task: Task, error_detail: str, postmortem_model: str) -> None:
     POSTMORTEM_DIR.mkdir(exist_ok=True)
     _, diff, _ = run_cmd_pgid_stream(["git", "diff", "-U1"], timeout=10, prefix="diff: ")
     diff_snippet = diff[:2000]
@@ -446,8 +490,8 @@ JSON形式のみで回答してください:
   "prohibited_rule": "次回明確に禁止すること"
 }}
 """
-    log.info("💀 [POSTMORTEM] Gemini による失敗分析と禁止ルール策定開始...")
-    _, out = run_opencode_with_retry(ARCHITECT_MODEL, prompt, timeout=60, label="Gemini-Postmortem")
+    log.info("💀 [POSTMORTEM] Architectエージェント (%s) による失敗分析と禁止ルール策定開始...", postmortem_model)
+    _, out = run_opencode_with_retry(postmortem_model, prompt, timeout=120, label="Postmortem-Architect")
     
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
     with open(POSTMORTEM_FILE, "a", encoding="utf-8") as f:
@@ -466,7 +510,7 @@ def git_rollback(commit_hash: str) -> None:
     run_cmd_pgid_stream(["git", "clean", "-fd"])
 
 
-def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> str:
+def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace, models: dict[str, str]) -> str:
     st = state["tasks"].setdefault(task.id, {"attempts": 0, "status": "pending"})
     
     for dep in task.depends_on:
@@ -492,38 +536,38 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
     while attempts_done < max_attempts:
         attempts_done += 1
         st["attempts"] = attempts_done
-        log.info("🔄 [%s] 実装試行 %d/%d", task.id, attempts_done, max_attempts)
+        log.info("🔄 [%s] 実装試行 %d/%d (Coder: %s)", task.id, attempts_done, max_attempts, models["coder"])
 
-        # 1. Coder 実装 (Gemini 3.5 Flash Lite)
+        # 1. Coder 実装
         prompt = build_coder_prompt(task)
-        code, out = run_opencode_with_retry(CODER_MODEL, prompt, timeout=120, label=f"Gemini-Coder({task.id})")
+        code, out = run_opencode_with_retry(models["coder"], prompt, timeout=240, label=f"Coder({task.id})")
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
         # 2. Gate A (tsc 静的型チェック)
         ga = check_gate_a()
         if not ga.ok:
             log.error("❌ [%s] Gate A 失敗: %s", task.id, ga.detail)
-            generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}")
+            generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models["postmortem"])
             git_rollback(head_hash)
             continue
         log.info("✅ [%s] Gate A (tsc) PASS", task.id)
         git_checkpoint(f"checkpoint({task.id}, gate-a)")
 
-        # 3. Gate B (Gemini テストコード生成 & Playwright 実機操作 & 5連フレーム撮影)
-        gb = generate_and_run_gate_b(task)
+        # 3. Gate B (QA テストコード生成 & Playwright 実機操作 & 5連フレーム撮影)
+        gb = generate_and_run_gate_b(task, models["qa"])
         if not gb.ok:
             log.error("❌ [%s] Gate B 失敗: %s", task.id, gb.detail)
-            generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}")
+            generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models["postmortem"])
             git_rollback(head_hash)
             continue
         log.info("✅ [%s] Gate B (Dynamic Test) PASS", task.id)
         git_checkpoint(f"checkpoint({task.id}, gate-b)")
 
-        # 4. Gate C (Gemini 5連フレーム & 動的UX審査)
-        gc = check_gate_c(task)
+        # 4. Gate C (Reviewer 5連フレーム & 動的UX審査)
+        gc = check_gate_c(task, models["reviewer"])
         if not gc.ok:
             log.error("❌ [%s] Gate C 失敗: %s", task.id, gc.detail)
-            generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}")
+            generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models["postmortem"])
             git_rollback(head_hash)
             continue
         log.info("✅ [%s] Gate C (Dynamic Review) PASS", task.id)
@@ -546,18 +590,80 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
     return "failed"
 
 
+def select_models_interactive() -> dict[str, str]:
+    print("\n" + "=" * 60)
+    print("🎯 モデル構成の選択")
+    print("=" * 60)
+    print("利用可能なプリセット:")
+    presets_list = list(PRESETS.items())
+    for idx, (key, val) in enumerate(presets_list, 1):
+        print(f"  [{idx}] {val['name']}")
+        print(f"      Coder: {val['coder']} | QA: {val['qa']} | Reviewer: {val['reviewer']} | Postmortem: {val['postmortem']}")
+    print(f"  [{len(presets_list) + 1}] 🛠️ カスタム指定 (手動で個別入力)")
+
+    choice = input("\n選択番号を入力してください (デフォルト [1]): ").strip()
+    if not choice or choice == "1":
+        p = PRESETS["recommended"]
+    elif choice.isdigit() and 1 <= int(choice) <= len(presets_list):
+        p = presets_list[int(choice) - 1][1]
+    else:
+        print("\nカスタムモデル指定 (エイリアス: qwen, r1, deepseek, gemini, nemotron)")
+        c = input("1. Coder (デフォルト: qwen3.8): ").strip() or "qwen3.8"
+        q = input("2. QA Test Gen (デフォルト: qwen3.8): ").strip() or "qwen3.8"
+        r = input("3. Reviewer (デフォルト: gemini): ").strip() or "gemini"
+        pm = input("4. Postmortem (デフォルト: r1): ").strip() or "r1"
+        return {
+            "coder": resolve_model(c),
+            "qa": resolve_model(q),
+            "reviewer": resolve_model(r),
+            "postmortem": resolve_model(pm),
+        }
+
+    return {
+        "coder": resolve_model(p["coder"]),
+        "qa": resolve_model(p["qa"]),
+        "reviewer": resolve_model(p["reviewer"]),
+        "postmortem": resolve_model(p["postmortem"]),
+    }
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (Gemini爆速動的QA版)")
+    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (モデル選択対応)")
     parser.add_argument("--dry-run", action="store_true", help="実行計画のみ表示")
     parser.add_argument("--only", metavar="TID", help="指定タスクIDのみ実行")
     parser.add_argument("--from", dest="start_from", metavar="TID", help="指定タスクID以降を実行")
     parser.add_argument("--force", action="store_true", help="完了済みタスクも再実行")
     parser.add_argument("--reset-state", action="store_true", help="実行状態を初期化")
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="総予算(分)")
+    parser.add_argument("--preset", choices=list(PRESETS.keys()), help="構成プリセット (recommended / deepseek / gemini-fast)")
+    parser.add_argument("--coder", help="実装担当モデル名またはエイリアス (qwen, deepseek, r1, gemini)")
+    parser.add_argument("--qa", help="QAテスト生成モデル名またはエイリアス (qwen, deepseek, r1, gemini)")
+    parser.add_argument("--reviewer", help="動的審査モデル名またはエイリアス (gemini, nemotron, qwen)")
+    parser.add_argument("--postmortem", help="失敗分析モデル名またはエイリアス (r1, qwen, deepseek, gemini)")
+    parser.add_argument("--menu", action="store_true", help="起動時に対話的モデル選択メニューを表示")
     args = parser.parse_args()
 
     setup_logging()
     LOG_DIR.mkdir(exist_ok=True)
+
+    if args.menu or (not args.preset and not args.coder and sys.stdin.isatty() and not args.dry_run and len(sys.argv) == 1):
+        selected_models = select_models_interactive()
+    else:
+        preset_data = PRESETS.get(args.preset or "recommended", PRESETS["recommended"])
+        selected_models = {
+            "coder": resolve_model(args.coder or preset_data["coder"]),
+            "qa": resolve_model(args.qa or preset_data["qa"]),
+            "reviewer": resolve_model(args.reviewer or preset_data["reviewer"]),
+            "postmortem": resolve_model(args.postmortem or preset_data["postmortem"]),
+        }
+
+    log.info("=" * 60)
+    log.info("🎯 採用モデル構成:")
+    log.info("   1. 実装担当 (Coder):      %s", selected_models["coder"])
+    log.info("   2. テスト生成 (QA):        %s", selected_models["qa"])
+    log.info("   3. 動的審査 (Reviewer):    %s", selected_models["reviewer"])
+    log.info("   4. 失敗分析 (Postmortem):  %s", selected_models["postmortem"])
+    log.info("=" * 60)
 
     if args.reset_state and STATE_FILE.exists():
         STATE_FILE.unlink()
@@ -597,7 +703,7 @@ def main() -> None:
                 log.info("[%s] すでに PASS 済みのためスキップ (--force で再実行)", t.id)
                 continue
 
-            exec_task(t, state, args)
+            exec_task(t, state, args, selected_models)
 
     finally:
         global dev_proc
