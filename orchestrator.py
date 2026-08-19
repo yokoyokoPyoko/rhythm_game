@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""汎用自律運用オーケストレーター (堅牢タイムアウト＆非ブロッキングストリーミング版)
+"""汎用自律運用オーケストレーター (完全無料・Gemini爆速動的QA版)
 
-- Coder: opencode/deepseek-v4-flash-free (実装担当)
-- QA Test Generator: moonshotai/kimi-k2.7-code (仕様を読みPlaywright動的テスト&5連フレーム撮影スクリプトを生成)
+- Coder: google/gemini-3.5-flash-lite (実装担当)
+- QA Test Generator: google/gemini-3.5-flash-lite (Playwright動的テスト&5連フレーム撮影スクリプト自動生成)
 - Dynamic Reviewer: google/gemini-3.5-flash-lite (5連フレーム画像とログから動的UX/仕様審査)
-- Architect: moonshotai/kimi-k2.7-code (Gate失敗時のPOSTMORTEM原因分析・禁止ルール生成)
+- Architect: google/gemini-3.5-flash-lite (Gate失敗時のPOSTMORTEM原因分析・禁止ルール生成)
 """
 
 from __future__ import annotations
@@ -40,10 +40,10 @@ DEV_PORT = 5173
 DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
 DEFAULT_BUDGET_MIN = 600
 
-CODER_MODEL = "opencode/deepseek-v4-flash-free"
-TEST_GEN_MODEL = "moonshotai/kimi-k2.7-code"
+CODER_MODEL = "google/gemini-3.5-flash-lite"
+TEST_GEN_MODEL = "google/gemini-3.5-flash-lite"
 REVIEWER_MODEL = "google/gemini-3.5-flash-lite"
-ARCHITECT_MODEL = "moonshotai/kimi-k2.7-code"
+ARCHITECT_MODEL = "google/gemini-3.5-flash-lite"
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
 
@@ -195,20 +195,16 @@ def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = 
 
 
 def rate_limit_sleep(model: str) -> None:
-    if "kimi" in model.lower():
-        log.info("⏳ [RateLimit] Kimiモデルのため 21秒 待機中...")
-        time.sleep(21)
-    else:
-        log.info("⏳ [RateLimit] 5秒 待機中...")
-        time.sleep(5)
+    log.info("⏳ [RateLimit] 5秒 待機中...")
+    time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode") -> tuple[int, str]:
+def run_opencode_with_retry(model: str, prompt: str, timeout: int = 180, label: str = "OpenCode") -> tuple[int, str]:
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model, prompt]
 
     for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
         rate_limit_sleep(model)
-        log.info("🤖 [%s] 実行開始 (model=%s, 試行 %d/%d, タイムアウト=%d秒)", label, model, attempt, len(BACKOFF_DELAYS), timeout)
+        log.info("🤖 [%s] 実行開始 (model=%s, 試行 %d/%d)", label, model, attempt, len(BACKOFF_DELAYS))
         print(f"  ┌─ ▼ {label} 出力ストリーム開始 ───", flush=True)
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix="🤖 ")
         print(f"  └─ ▲ {label} 出力終了 (exit={code}) ───", flush=True)
@@ -319,7 +315,7 @@ def ensure_dev_server() -> bool:
 
 
 def generate_and_run_gate_b(task: Task) -> GateResult:
-    """Kimi にタスク仕様を読ませて動的 Playwright テスト(5連フレーム撮影含む)を生成し、実行する"""
+    """Gemini にタスク仕様を読ませて動的 Playwright テスト(5連フレーム撮影含む)を生成し、実行する"""
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"タスク {task.id} は非UIタスク → スキップ")
 
@@ -328,7 +324,6 @@ def generate_and_run_gate_b(task: Task) -> GateResult:
 
     SCREENSHOT_DIR.mkdir(exist_ok=True)
 
-    # 1. Kimi による動的テスト生成
     prompt = f"""あなたは厳格なQAエンジニアです。以下のタスク仕様を検証するための Playwright テストスクリプト (TypeScript) を作成してください。
 
 【タスク】
@@ -349,12 +344,12 @@ def generate_and_run_gate_b(task: Task) -> GateResult:
 
 必ず ```typescript ... ``` のコードブロック形式で Playwright スクリプトのみを出力してください。
 """
-    log.info("🧪 [Gate B] Kimi による動的テストコード生成開始...")
-    _, out = run_opencode_with_retry(TEST_GEN_MODEL, prompt, timeout=120, label="Kimi-QA-Gen")
+    log.info("🧪 [Gate B] Gemini による動的テストコード生成開始...")
+    _, out = run_opencode_with_retry(TEST_GEN_MODEL, prompt, timeout=60, label="Gemini-QA-Gen")
 
     code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
     if not code_match:
-        log.warning("⚠️ Kimi からテストコードを抽出できなかったため、フォールバックテストを実行します")
+        log.warning("⚠️ テストコード抽出フォールバックを実行します")
         test_code = """import { test, expect } from '@playwright/test';
 test('fallback smoke test', async ({ page }) => {
   await page.goto('http://localhost:5173/');
@@ -372,7 +367,6 @@ test('fallback smoke test', async ({ page }) => {
     DYNAMIC_SPEC_FILE.write_text(test_code, encoding="utf-8")
     log.info("📝 tests/dynamic.spec.ts を生成しました (Playwright実機テスト実行開始)")
 
-    # 2. 生成されたテストを実行
     code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=90, prefix="Playwright: ")
     if code != 0:
         fatal_lines = [l for l in test_out.splitlines() if re.search(r"Error:|failed|Timed out", l)]
@@ -452,8 +446,8 @@ JSON形式のみで回答してください:
   "prohibited_rule": "次回明確に禁止すること"
 }}
 """
-    log.info("💀 [POSTMORTEM] Kimi による失敗分析と禁止ルール策定開始...")
-    _, out = run_opencode_with_retry(ARCHITECT_MODEL, prompt, timeout=120, label="Kimi-Postmortem")
+    log.info("💀 [POSTMORTEM] Gemini による失敗分析と禁止ルール策定開始...")
+    _, out = run_opencode_with_retry(ARCHITECT_MODEL, prompt, timeout=60, label="Gemini-Postmortem")
     
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
     with open(POSTMORTEM_FILE, "a", encoding="utf-8") as f:
@@ -500,9 +494,9 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
         st["attempts"] = attempts_done
         log.info("🔄 [%s] 実装試行 %d/%d", task.id, attempts_done, max_attempts)
 
-        # 1. Coder 実装 (DeepSeek) - 5分(300秒)タイムアウト
+        # 1. Coder 実装 (Gemini 3.5 Flash Lite)
         prompt = build_coder_prompt(task)
-        code, out = run_opencode_with_retry(CODER_MODEL, prompt, timeout=300, label=f"DeepSeek-Coder({task.id})")
+        code, out = run_opencode_with_retry(CODER_MODEL, prompt, timeout=120, label=f"Gemini-Coder({task.id})")
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
         # 2. Gate A (tsc 静的型チェック)
@@ -515,7 +509,7 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
         log.info("✅ [%s] Gate A (tsc) PASS", task.id)
         git_checkpoint(f"checkpoint({task.id}, gate-a)")
 
-        # 3. Gate B (Kimi テストコード生成 & Playwright 実機操作 & 5連フレーム撮影)
+        # 3. Gate B (Gemini テストコード生成 & Playwright 実機操作 & 5連フレーム撮影)
         gb = generate_and_run_gate_b(task)
         if not gb.ok:
             log.error("❌ [%s] Gate B 失敗: %s", task.id, gb.detail)
@@ -553,7 +547,7 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (堅牢タイムアウト版)")
+    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (Gemini爆速動的QA版)")
     parser.add_argument("--dry-run", action="store_true", help="実行計画のみ表示")
     parser.add_argument("--only", metavar="TID", help="指定タスクIDのみ実行")
     parser.add_argument("--from", dest="start_from", metavar="TID", help="指定タスクID以降を実行")
