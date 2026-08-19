@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """汎用自律運用オーケストレーター (Linear風ミニマル・モダンCLI)
 
+- 審査エラー/タイムアウト時の勝手な自動PASSを完全廃止 (厳格Gate検証)
 - 絵文字完全排除 & ANSIカラーによる洗練されたモダンUI
 - 起動前ヘルスチェック（残高・APIキー・疎通）
 - CUI 対話型モデル選択システム (Coder / QA / Reviewer / Postmortem)
@@ -52,7 +53,6 @@ DEV_PORT = 5173
 DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
 DEFAULT_BUDGET_MIN = 600
 
-# モデル定義カタログ
 MODEL_CATALOG = {
     "qwen38": ("Qwen3.8-27B (Cloudflare)", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
     "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B (Cloudflare)", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
@@ -391,6 +391,7 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
 
         if "insufficient balance" in out or "suspended" in out:
             print(f"\n{RED}{BOLD}[CRITICAL] Account suspended due to insufficient balance on {model}{RESET}\n")
+            return -1, out
 
         if timed_out:
             log.warning("Process timed out (%ds). Retrying...", timeout)
@@ -404,7 +405,7 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
         return code, out
 
     log.error("Retry limit exceeded for %s", label)
-    return code, out
+    return -1, out
 
 
 def extract_compact_spec(task_id: str) -> str:
@@ -518,7 +519,9 @@ Requirements:
 Output only ```typescript ... ``` code block.
 """
     log.info("QA generating dynamic test script...")
-    _, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen")
+    code, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen")
+    if code != 0:
+        return GateResult("Gate B (Dynamic Test)", False, "QA model failed to generate test script")
 
     code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
     if not code_match:
@@ -573,7 +576,12 @@ Output JSON only:
 {{"score": 85, "verdict": "PASS", "comment": "reason"}} or {{"score": 65, "verdict": "FAIL", "comment": "reason"}}
 """
     log.info("Reviewer evaluating captured frames & dynamic UX...")
-    code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=60, label="Dynamic-Review")
+    code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=90, label="Dynamic-Review")
+    
+    if code != 0:
+        log.error("Reviewer model failed/timed out. Rejecting Gate C.")
+        return GateResult("Gate C (Dynamic Review)", False, f"Reviewer model execution failed (exit={code})")
+
     match = re.search(r'\{.*"score".*"verdict".*\}', out, re.S)
     if match:
         try:
@@ -587,7 +595,9 @@ Output JSON only:
             return GateResult("Gate C (Dynamic Review)", ok, f"Score={score}, Verdict={verdict}: {comment}")
         except Exception:
             pass
-    return GateResult("Gate C (Dynamic Review)", True, "PASS (Fallback JSON Parse)")
+
+    log.error("Reviewer response did not contain valid evaluation JSON.")
+    return GateResult("Gate C (Dynamic Review)", False, "Reviewer output format invalid")
 
 
 def generate_postmortem(task: Task, error_detail: str, postmortem_model: str) -> None:
@@ -654,8 +664,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         prompt = build_compact_coder_prompt(task)
         code, out = run_opencode_with_retry(models.coder, prompt, timeout=300, label=f"Coder({task.id})")
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
+        if code != 0:
+            log.error("[%s] Coder model execution failed.", task.id)
+            git_rollback(head_hash)
+            continue
 
-        # 2. Gate A
+        # 2. Gate A (tsc)
         ga = check_gate_a()
         if not ga.ok:
             log.error("[%s] Gate A failed: %s", task.id, ga.detail)
@@ -665,7 +679,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         log.info("[%s] %sGate A (tsc) PASS%s", task.id, GREEN, RESET)
         git_checkpoint(f"checkpoint({task.id}, gate-a)")
 
-        # 3. Gate B
+        # 3. Gate B (Playwright)
         gb = generate_and_run_gate_b(task, models.qa)
         if not gb.ok:
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
@@ -675,7 +689,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         log.info("[%s] %sGate B (Dynamic Test) PASS%s", task.id, GREEN, RESET)
         git_checkpoint(f"checkpoint({task.id}, gate-b)")
 
-        # 4. Gate C
+        # 4. Gate C (Reviewer)
         gc = check_gate_c(task, models.reviewer)
         if not gc.ok:
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
@@ -691,6 +705,11 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         state["consecutive_failures"] = 0
         save_state(state)
         print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
+
+        # ステップ実行モード (--step) の場合はユーザーの Enter を待つ
+        if args.step:
+            input(f"{CYAN}Task [{task.id}] passed. Press Enter to proceed to next task...{RESET}")
+
         return "passed"
 
     st["status"] = "failed"
@@ -707,6 +726,7 @@ def main() -> None:
     parser.add_argument("--only", metavar="TID", help="Execute specific task ID")
     parser.add_argument("--from", dest="start_from", metavar="TID", help="Execute from specific task ID onwards")
     parser.add_argument("--force", action="store_true", help="Force re-execution of passed tasks")
+    parser.add_argument("--step", action="store_true", help="1タスク完了ごとにEnterキー確認を挟む（ステップ実行モード）")
     parser.add_argument("--reset-state", action="store_true", help="Reset state file")
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="Total budget in minutes")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive model selector")
