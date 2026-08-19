@@ -215,6 +215,13 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     let raf = 0
     let lastTime = performance.now()
 
+    const initChart = chartRef.current
+    const initTimeline = timelineRef.current
+    const lastHitTime =
+      initChart && initTimeline && initChart.rings.length > 0
+        ? initTimeline.beatToMs(initChart.rings.reduce((m, r) => Math.max(m, r.beat), -Infinity))
+        : null
+
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - lastTime) / 1000)
       lastTime = now
@@ -271,21 +278,17 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         judgementEvents: judgementEventsRef.current,
       })
 
-      if (!endedRef.current && chart.rings.length > 0) {
-        const lastRing = chart.rings[chart.rings.length - 1]
-        const lastHitTime = timeline.beatToMs(lastRing.beat)
-        if (songTimeMs > lastHitTime + END_DELAY_MS) {
-          endedRef.current = true
-          stopMusic()
-          stopMetronome()
-          const stats = scoreRef.current.getStats()
-          if (onExitRef.current) {
-            onExitRef.current(stats)
-          } else {
-            navigate('/result', { state: { stats, songId } })
-          }
-          return
+      if (!endedRef.current && lastHitTime !== null && songTimeMs > lastHitTime + END_DELAY_MS) {
+        endedRef.current = true
+        stopMusic()
+        stopMetronome()
+        const stats = scoreRef.current.getStats()
+        if (onExitRef.current) {
+          onExitRef.current(stats)
+        } else {
+          navigate('/result', { state: { stats, songId } })
         }
+        return
       }
 
       raf = requestAnimationFrame(tick)
@@ -298,7 +301,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       stopMusic()
       stopMetronome()
     }
-  }, [status, navigate, stopMusic, stopMetronome])
+  }, [status, navigate, stopMusic, stopMetronome, songId])
 
   const adjustOffset = useCallback((delta: number) => {
     const next = Math.round(getManualOffsetMs() + delta)
