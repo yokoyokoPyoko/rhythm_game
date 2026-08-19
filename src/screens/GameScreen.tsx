@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
-import { resetClock, songNow } from '../audio/clock'
+import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audio/clock'
 import { loadAudio } from '../audio/loader'
 import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
 import { loadChart } from '../chart/loader'
@@ -49,6 +49,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
 
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
+  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
   const statusRef = useRef<LoadStatus>('loading')
   const onExitRef = useRef(onExit)
 
@@ -282,6 +283,12 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     }
   }, [status, navigate, stopMusic, stopMetronome])
 
+  const adjustOffset = useCallback((delta: number) => {
+    const next = Math.round(getManualOffsetMs() + delta)
+    setManualOffset(next)
+    setOffsetMs(next)
+  }, [])
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -294,6 +301,14 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       }
       if (e.key === 'r' || e.key === 'R') {
         resetGame()
+        return
+      }
+      if (e.key === ',' || e.key === '<') {
+        adjustOffset(-10)
+        return
+      }
+      if (e.key === '.' || e.key === '>') {
+        adjustOffset(10)
         return
       }
       if (e.key === 'ArrowUp') {
@@ -326,7 +341,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [navigate, startGame, handleHit, resetGame])
+  }, [navigate, startGame, handleHit, resetGame, adjustOffset])
 
   return (
     <div className="screen game-screen">
@@ -345,7 +360,11 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
             height={CANVAS_HEIGHT}
             className="game-canvas"
           />
-          <div className="game-hint">Space: 判定 / ↑↓: 移動 / R: リセット / ESC: 戻る</div>
+          <div className="game-offset">
+            offset: {offsetMs >= 0 ? '+' : ''}
+            {offsetMs}ms
+          </div>
+          <div className="game-hint">Space: 判定 / ↑↓: 移動 / &lt;&gt;: オフセット±10ms / R: リセット / ESC: 戻る</div>
         </>
       )}
     </div>
