@@ -189,14 +189,14 @@
     },
     "T62": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1787140371.628938,
-      "finished": 1787104043.168098
+      "finished": 1787140468.848057
     },
     "T70": {
       "attempts": 1,
-      "status": "passed",
-      "started": 1787104043.1688144,
+      "status": "running",
+      "started": 1787140468.8484876,
       "finished": 1787104148.6375022
     },
     "T71": {
