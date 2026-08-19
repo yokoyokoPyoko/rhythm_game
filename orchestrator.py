@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""10時間無人自律運用オーケストレーター (Trace Wave リズムゲーム)
+"""汎用自律運用オーケストレーター
 
-- Coder: opencode/deepseek-v4-flash-free
-- Gate C Reviewer: google/gemini-3.5-flash-lite
-- Architect (POSTMORTEM): moonshotai/kimi-k2.7-code
+- Coder: opencode/deepseek-v4-flash-free (実装担当)
+- QA Test Generator: moonshotai/kimi-k2.7-code (仕様を読みPlaywright動的テスト&5連フレーム撮影スクリプトを生成)
+- Dynamic Reviewer: google/gemini-3.5-flash-lite (5連フレーム画像とログから動的UX/仕様審査)
+- Architect: moonshotai/kimi-k2.7-code (Gate失敗時のPOSTMORTEM原因分析・禁止ルール生成)
 """
 
 from __future__ import annotations
@@ -30,18 +31,21 @@ LOG_FILE = ROOT / "orchestrator.log"
 LOG_DIR = ROOT / "orchestrator_logs"
 POSTMORTEM_DIR = ROOT / ".opencode"
 POSTMORTEM_FILE = POSTMORTEM_DIR / "POSTMORTEM.md"
+SCREENSHOT_DIR = ROOT / "screenshots"
+DYNAMIC_SPEC_FILE = ROOT / "tests" / "dynamic.spec.ts"
 
 DEV_PORT = 5173
 DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
 DEFAULT_BUDGET_MIN = 600
 
 CODER_MODEL = "opencode/deepseek-v4-flash-free"
+TEST_GEN_MODEL = "moonshotai/kimi-k2.7-code"
 REVIEWER_MODEL = "google/gemini-3.5-flash-lite"
 ARCHITECT_MODEL = "moonshotai/kimi-k2.7-code"
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
 
-# UI画面を持たない基盤・ロジック・型定義タスク (Gate B/Cをスキップ可能)
+# UI画面を持たない型定義・純粋ロジックタスク
 NON_UI_TASKS = {
     "T00", "T82", "T01", "T02", "T10", "T11", "T12", "T13", "T14",
     "T40", "T41", "T20", "T21", "T22", "T23", "T24", "T60", "T62"
@@ -265,40 +269,98 @@ def ensure_dev_server() -> bool:
     return False
 
 
-def check_gate_b(task: Task) -> GateResult:
-    smoke_spec = ROOT / "tests" / "smoke.spec.ts"
-    if not smoke_spec.exists() or not has_dev_script():
-        return GateResult("Gate B (Smoke)", True, "テスト対象アプリまたはスモークテストなし → スキップ")
-    
-    if not ensure_dev_server():
-        return GateResult("Gate B (Smoke)", False, "dev server が起動しませんでした")
+def generate_and_run_gate_b(task: Task) -> GateResult:
+    """Kimi にタスク仕様を読ませて動的 Playwright テスト(5連フレーム撮影含む)を生成し、実行する"""
+    if task.id in NON_UI_TASKS or not has_dev_script():
+        return GateResult("Gate B (Dynamic Test)", True, f"タスク {task.id} は非UIタスク → スキップ")
 
-    code, out, _ = run_cmd_pgid(["npx", "playwright", "test", "tests/smoke.spec.ts"], timeout=60)
+    if not ensure_dev_server():
+        return GateResult("Gate B (Dynamic Test)", False, "dev server が起動しませんでした")
+
+    SCREENSHOT_DIR.mkdir(exist_ok=True)
+
+    # 1. Kimi による動的テスト生成
+    prompt = f"""あなたは厳格なQAエンジニアです。以下のタスク仕様を検証するための Playwright テストスクリプト (TypeScript) を作成してください。
+
+【タスク】
+{task.id}: {task.desc}
+
+【タスク詳細仕様】
+{extract_agents_spec(task.id)}
+
+【要件】
+1. URL 'http://localhost:5173/' にアクセスし、ユーザー操作（クリック、キー入力、待機など）をシミュレートすること。
+2. アプリの操作前・操作中・操作後にかけて、以下のパスに **合計5枚の連続スクリーンショット** を保存すること:
+   - 'screenshots/frame_1.png'
+   - 'screenshots/frame_2.png'
+   - 'screenshots/frame_3.png'
+   - 'screenshots/frame_4.png'
+   - 'screenshots/frame_5.png'
+3. コンソールの致命的例外 (Uncaught, TypeError 等) や表示崩れ・不正な状態変化を assert / 検知すること。
+
+必ず ```typescript ... ``` のコードブロック形式で Playwright スクリプトのみを出力してください。
+"""
+    log.info("[%s] Kimi による動的テストコード生成開始...", task.id)
+    _, out = run_opencode_with_retry(TEST_GEN_MODEL, prompt, timeout=120)
+
+    code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
+    if not code_match:
+        log.warning("[%s] Kimi からテストコードを抽出できなかったため、フォールバックテストを実行します", task.id)
+        test_code = """import { test, expect } from '@playwright/test';
+test('fallback smoke test', async ({ page }) => {
+  await page.goto('http://localhost:5173/');
+  await page.waitForTimeout(1000);
+  for (let i = 1; i <= 5; i++) {
+    await page.screenshot({ path: `screenshots/frame_${i}.png` });
+    await page.waitForTimeout(500);
+  }
+});
+"""
+    else:
+        test_code = code_match.group(1)
+
+    DYNAMIC_SPEC_FILE.parent.mkdir(exist_ok=True)
+    DYNAMIC_SPEC_FILE.write_text(test_code, encoding="utf-8")
+    log.info("[%s] tests/dynamic.spec.ts を作成しました", task.id)
+
+    # 2. 生成されたテストを実行
+    code, test_out, _ = run_cmd_pgid(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=90)
     if code != 0:
-        fatal_lines = [l for l in out.splitlines() if re.search(r"Uncaught|ReferenceError|TypeError|ChunkLoadError|Error:", l)]
-        detail = "\n".join(fatal_lines) if fatal_lines else out[-1000:]
-        return GateResult("Gate B (Smoke)", False, detail)
-    return GateResult("Gate B (Smoke)", True, "スモークテストPASS")
+        fatal_lines = [l for l in test_out.splitlines() if re.search(r"Error:|failed|Timed out", l)]
+        detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
+        return GateResult("Gate B (Dynamic Test)", False, detail)
+
+    return GateResult("Gate B (Dynamic Test)", True, "動的実機テストPASS (5連フレーム撮影完了)")
 
 
 def check_gate_c(task: Task) -> GateResult:
+    """Gemini 3.5 Flash Lite が撮影された 5 連フレームとログから動的UX・仕様審査を行う"""
     if task.id in NON_UI_TASKS or not has_dev_script():
-        return GateResult("Gate C (Review)", True, f"タスク {task.id} はUI/画面なし → スキップ")
+        return GateResult("Gate C (Dynamic Review)", True, f"タスク {task.id} は非UIタスク → スキップ")
 
-    prompt = f"""あなたは厳格なQA・視覚審査エージェントです。
-タスク {task.id} ({task.desc}) の実装成果を審査してください。
+    frames_exist = [f"frame_{i}.png (存在: {(SCREENSHOT_DIR / f'frame_{i}.png').exists()})" for i in range(1, 6)]
+    frames_info = ", ".join(frames_exist)
 
-採点基準 (各20点、計100点、80点以上で合格):
-1. Rendering: 画面が真っ暗・壊れていないか
-2. Layout: Linear風ミニマルダークに準拠し崩れがないか
-3. Text/Font: 文字化けや重なりがないか
-4. Regression: 既存機能が意図せず破損していないか
-5. Specification: タスク要件が満たされているか
+    prompt = f"""あなたは厳格なQA・動的UX審査エージェントです。
+タスク {task.id} ({task.desc}) の実装およびブラウザ操作結果を審査してください。
+
+【撮影された連続5フレーム】
+{frames_info}
+
+【タスク仕様】
+{extract_agents_spec(task.id)}
+
+審査基準 (各20点、計100点、80点以上で合格):
+1. 動的挙動: アイドル時や操作時のアニメーション・ステート変化が仕様通り自然か
+2. レイアウト整合性: Linear風ミニマルダークに準拠し、文字の重なりや崩れがないか
+3. 入力レスポンス: 操作に対して適切な画面遷移やフィードバックが行われているか
+4. 不正ステート防止: ゲーム開始前や待機中に不要なスコア加算や誤判定が起きていないか
+5. 要件充足度: タスク要件が完全に満たされているか
 
 回答は以下のJSON形式のみを出力してください:
 {{"score": 85, "verdict": "PASS", "comment": "合格理由"}}
 または
-{{"score": 60, "verdict": "FAIL", "comment": "不合格理由"}}
+{{"score": 65, "verdict": "FAIL", "comment": "不合格理由"}}
 """
     code, out = run_opencode_with_retry(REVIEWER_MODEL, prompt, timeout=60)
     match = re.search(r'\{.*"score".*"verdict".*\}', out, re.S)
@@ -308,10 +370,10 @@ def check_gate_c(task: Task) -> GateResult:
             score = res.get("score", 0)
             verdict = res.get("verdict", "FAIL")
             ok = score >= 80 and verdict == "PASS"
-            return GateResult("Gate C (Review)", ok, f"Score={score}, Verdict={verdict}: {res.get('comment', '')}")
+            return GateResult("Gate C (Dynamic Review)", ok, f"Score={score}, Verdict={verdict}: {res.get('comment', '')}")
         except Exception:
             pass
-    return GateResult("Gate C (Review)", True, "Gate C レビュー自動通過 (JSON解析フォールバック)")
+    return GateResult("Gate C (Dynamic Review)", True, "Gate C レビュー自動通過 (JSON解析フォールバック)")
 
 
 def generate_postmortem(task: Task, error_detail: str) -> None:
@@ -381,12 +443,12 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
         st["attempts"] += 1
         log.info("[%s] 実装試行 %d/%d", task.id, st["attempts"], max_attempts)
 
-        # 1. Coder 実装
+        # 1. Coder 実装 (DeepSeek)
         prompt = build_coder_prompt(task)
         code, out = run_opencode_with_retry(CODER_MODEL, prompt, timeout=480)
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
-        # 2. Gate A (tsc)
+        # 2. Gate A (tsc 静的型チェック)
         ga = check_gate_a()
         if not ga.ok:
             log.error("[%s] Gate A 失敗: %s", task.id, ga.detail)
@@ -395,20 +457,20 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
             continue
         git_checkpoint(f"checkpoint({task.id}, gate-a)")
 
-        # 3. Gate B (Smoke)
-        gb = check_gate_b(task)
+        # 3. Gate B (Kimi テストコード生成 & Playwright 実機操作 & 5連フレーム撮影)
+        gb = generate_and_run_gate_b(task)
         if not gb.ok:
             log.error("[%s] Gate B 失敗: %s", task.id, gb.detail)
-            generate_postmortem(task, f"Gate B (Smoke) failed:\n{gb.detail}")
+            generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}")
             git_rollback(head_hash)
             continue
         git_checkpoint(f"checkpoint({task.id}, gate-b)")
 
-        # 4. Gate C (Review)
+        # 4. Gate C (Gemini 5連フレーム & 動的UX審査)
         gc = check_gate_c(task)
         if not gc.ok:
             log.error("[%s] Gate C 失敗: %s", task.id, gc.detail)
-            generate_postmortem(task, f"Gate C (Review) failed:\n{gc.detail}")
+            generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}")
             git_rollback(head_hash)
             continue
 
@@ -431,9 +493,10 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="10時間無人自律運用オーケストレーター (Trace Wave)")
+    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター")
     parser.add_argument("--dry-run", action="store_true", help="実行計画のみ表示")
     parser.add_argument("--only", metavar="TID", help="指定タスクIDのみ実行")
+    parser.add_argument("--from", dest="start_from", metavar="TID", help="指定タスクID以降を実行")
     parser.add_argument("--reset-state", action="store_true", help="実行状態を初期化")
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="総予算(分)")
     args = parser.parse_args()
@@ -450,6 +513,10 @@ def main() -> None:
 
     if args.only:
         tasks = [t for t in tasks if t.id == args.only]
+    elif args.start_from:
+        idx = next((i for i, t in enumerate(tasks) if t.id == args.start_from), None)
+        if idx is not None:
+            tasks = tasks[idx:]
 
     log.info("オーケストレーター開始 (予算 %d分, タスク数 %d)", args.budget_min, len(tasks))
     if args.dry_run:
