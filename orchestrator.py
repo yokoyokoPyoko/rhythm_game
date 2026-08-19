@@ -30,10 +30,6 @@ LOG_FILE = ROOT / "orchestrator.log"
 LOG_DIR = ROOT / "orchestrator_logs"
 POSTMORTEM_DIR = ROOT / ".opencode"
 POSTMORTEM_FILE = POSTMORTEM_DIR / "POSTMORTEM.md"
-SCREENSHOT_DIR = ROOT / "screenshots"
-BASELINE_DIR = ROOT / "screenshots" / "baseline"
-CURRENT_SCREENSHOT = ROOT / "screenshots" / "current.png"
-BASELINE_SCREENSHOT = ROOT / "screenshots" / "baseline" / "main.png"
 
 DEV_PORT = 5173
 DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
@@ -44,6 +40,12 @@ REVIEWER_MODEL = "google/gemini-3.5-flash-lite"
 ARCHITECT_MODEL = "moonshotai/kimi-k2.7-code"
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
+
+# UI画面を持たない基盤・ロジック・型定義タスク (Gate B/Cをスキップ可能)
+NON_UI_TASKS = {
+    "T00", "T82", "T01", "T02", "T10", "T11", "T12", "T13", "T14",
+    "T40", "T41", "T20", "T21", "T22", "T23", "T24", "T60", "T62"
+}
 
 log = logging.getLogger("orchestrator")
 
@@ -224,8 +226,21 @@ def check_gate_a() -> GateResult:
 dev_proc: subprocess.Popen | None = None
 
 
+def has_dev_script() -> bool:
+    pkg = ROOT / "package.json"
+    if not pkg.exists():
+        return False
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+        return "dev" in data.get("scripts", {})
+    except Exception:
+        return False
+
+
 def ensure_dev_server() -> bool:
     global dev_proc
+    if not has_dev_script():
+        return False
     if dev_proc is not None and dev_proc.poll() is None:
         return True
     try:
@@ -250,10 +265,10 @@ def ensure_dev_server() -> bool:
     return False
 
 
-def check_gate_b() -> GateResult:
+def check_gate_b(task: Task) -> GateResult:
     smoke_spec = ROOT / "tests" / "smoke.spec.ts"
-    if not smoke_spec.exists():
-        return GateResult("Gate B (Smoke)", True, "smoke.spec.ts 未作成 → スキップ")
+    if not smoke_spec.exists() or not has_dev_script():
+        return GateResult("Gate B (Smoke)", True, "テスト対象アプリまたはスモークテストなし → スキップ")
     
     if not ensure_dev_server():
         return GateResult("Gate B (Smoke)", False, "dev server が起動しませんでした")
@@ -267,9 +282,8 @@ def check_gate_b() -> GateResult:
 
 
 def check_gate_c(task: Task) -> GateResult:
-    pkg = ROOT / "package.json"
-    if not pkg.exists():
-        return GateResult("Gate C (Review)", True, "package.json なし → スキップ")
+    if task.id in NON_UI_TASKS or not has_dev_script():
+        return GateResult("Gate C (Review)", True, f"タスク {task.id} はUI/画面なし → スキップ")
 
     prompt = f"""あなたは厳格なQA・視覚審査エージェントです。
 タスク {task.id} ({task.desc}) の実装成果を審査してください。
@@ -382,7 +396,7 @@ def exec_task(task: Task, state: dict[str, Any], args: argparse.Namespace) -> st
         git_checkpoint(f"checkpoint({task.id}, gate-a)")
 
         # 3. Gate B (Smoke)
-        gb = check_gate_b()
+        gb = check_gate_b(task)
         if not gb.ok:
             log.error("[%s] Gate B 失敗: %s", task.id, gb.detail)
             generate_postmortem(task, f"Gate B (Smoke) failed:\n{gb.detail}")

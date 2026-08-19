@@ -1,13 +1,13 @@
 [
   {
-    "id": "T82",
-    "desc": "Playwright スモークテストスクリプト作成（Gate B用固定スクリプト。最初に作り、以後変更しない）",
-    "depends_on": []
-  },
-  {
     "id": "T00",
     "desc": "Vite + React + TypeScript プロジェクトスキャフォールド。smol-toml, react-router-dom をインストール。",
     "depends_on": []
+  },
+  {
+    "id": "T82",
+    "desc": "Playwright スモークテストスクリプト作成（Gate B用固定スクリプト。最初に作り、以後変更しない）",
+    "depends_on": ["T00"]
   },
   {
     "id": "T01",
@@ -101,7 +101,7 @@
   },
   {
     "id": "T62",
-    "desc": "Kキー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
+    "desc": "キー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
     "depends_on": ["T11"]
   },
   {
