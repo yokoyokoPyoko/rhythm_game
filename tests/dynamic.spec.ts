@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 test('fallback smoke test', async ({ page }) => {
   await page.goto('http://localhost:5173/');
   await page.waitForTimeout(1000);
