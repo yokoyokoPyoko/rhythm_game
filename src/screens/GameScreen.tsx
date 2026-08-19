@@ -10,7 +10,7 @@ import { loadChart } from '../chart/loader'
 import { loadSongList } from '../chart/manifest'
 import { Cursor } from '../game/cursor'
 import { judgeHit } from '../game/hitJudge'
-import { Renderer } from '../game/renderer'
+import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
 import { ScoreManager, type ScoreStats } from '../game/score'
 import { WaveEngine } from '../game/waveEngine'
@@ -21,6 +21,7 @@ const CANVAS_HEIGHT = 600
 const TW_TOLERANCE = 26
 const END_DELAY_MS = 2000
 const METRONOME_TICK_MS = 25
+const JUDGEMENT_LIFETIME_MS = 700
 
 type LoadStatus = 'loading' | 'error' | 'ready'
 
@@ -41,6 +42,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   const spawnerRef = useRef(new RingSpawner())
   const scoreRef = useRef(new ScoreManager())
   const ringsRef = useRef<RingState[]>([])
+  const judgementEventsRef = useRef<JudgementEvent[]>([])
   const bufferRef = useRef<AudioBuffer | null>(null)
   const musicSourceRef = useRef<AudioBufferSourceNode | null>(null)
   const metronomeTimerRef = useRef<number | null>(null)
@@ -134,6 +136,11 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       const judgement = judgeHit(songTimeMs, cursorRef.current.y, ringsRef.current, beatMs)
       if (judgement) {
         scoreRef.current.recordHit(judgement.result)
+        judgementEventsRef.current.push({
+          result: judgement.result,
+          y: cursorRef.current.y,
+          at: songTimeMs,
+        })
       }
     } catch {
       // AudioContext not initialized yet
@@ -157,6 +164,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     spawnerRef.current = new RingSpawner()
     scoreRef.current = new ScoreManager()
     ringsRef.current = []
+    judgementEventsRef.current = []
   }, [stopMusic, stopMetronome])
 
   useEffect(() => {
@@ -242,8 +250,13 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         if (songTimeMs > ring.hitTime + windowMs) {
           ring.resolved = true
           scoreRef.current.recordHit('miss')
+          judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: ring.hitTime + windowMs })
         }
       }
+
+      judgementEventsRef.current = judgementEventsRef.current.filter(
+        (e) => songTimeMs - e.at < JUDGEMENT_LIFETIME_MS,
+      )
 
       const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
       scoreRef.current.recordTrace(dt, isOnWave)
@@ -255,6 +268,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         score: scoreRef.current,
         songTimeMs,
         bpmTimeline: timeline,
+        judgementEvents: judgementEventsRef.current,
       })
 
       if (!endedRef.current && chart.rings.length > 0) {

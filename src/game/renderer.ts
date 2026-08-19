@@ -1,5 +1,5 @@
 import type { BpmTimeline } from '../audio/bpmTimeline';
-import type { RingState } from '../types';
+import type { HitResult, RingState } from '../types';
 import type { Cursor } from './cursor';
 import type { ScoreManager } from './score';
 import type { WaveEngine } from './waveEngine';
@@ -12,6 +12,7 @@ const ACCENT = '#6366f1';
 const ACCENT_SUB = '#22d3ee';
 const POSITIVE = '#4ade80';
 const WARNING = '#fbbf24';
+const DANGER = '#f87171';
 const TEXT = '#ededed';
 const TEXT_MUTED = '#71717a';
 const BORDER = 'rgba(255,255,255,0.08)';
@@ -30,6 +31,21 @@ const CURSOR_RADIUS = 8;
 
 const FONT_FAMILY = "'Inter', system-ui, sans-serif";
 
+const JUDGEMENT_LIFETIME_MS = 700;
+const JUDGEMENT_RISE_PX = 12;
+const COMBO_SHAKE_MS = 300;
+const COMBO_SHAKE_AMPLITUDE = 6;
+const BG_PULSE_MAX_ALPHA = 0.015;
+
+const COMBO_FONT_SIZE = 40;
+const SCORE_FONT_SIZE = 22;
+
+export interface JudgementEvent {
+  result: HitResult;
+  y: number;
+  at: number;
+}
+
 export interface RenderState {
   waveEngine: WaveEngine;
   cursor: Cursor;
@@ -37,24 +53,46 @@ export interface RenderState {
   score: ScoreManager;
   songTimeMs: number;
   bpmTimeline: BpmTimeline;
+  judgementEvents: JudgementEvent[];
 }
 
 export class Renderer {
+  private lastCombo = 0;
+  private shakeStart = -Infinity;
+
   render(ctx: CanvasRenderingContext2D, state: RenderState): void {
-    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline } = state;
+    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline, judgementEvents } = state;
     const width = ctx.canvas.width;
     const height = ctx.canvas.height;
 
-    this.drawBackground(ctx, width, height);
+    const beat = bpmTimeline.msToBeat(songTimeMs);
+    const beatPhase = beat - Math.floor(beat);
+
+    const stats = score.getStats();
+    if (stats.combo < this.lastCombo) {
+      this.shakeStart = songTimeMs;
+    }
+    this.lastCombo = stats.combo;
+
+    this.drawBackground(ctx, width, height, beatPhase);
     this.drawJudgeLine(ctx, height);
-    this.drawWave(ctx, waveEngine, songTimeMs, width);
+    this.drawWave(ctx, waveEngine, songTimeMs, width, height);
     this.drawRings(ctx, rings, songTimeMs);
     this.drawCursor(ctx, cursor, score);
-    this.drawHud(ctx, score, width, height, bpmTimeline, songTimeMs);
+    this.drawJudgements(ctx, judgementEvents, songTimeMs);
+    this.drawHud(ctx, stats, width, height, beat, songTimeMs);
   }
 
-  private drawBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  private drawBackground(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    beatPhase: number,
+  ): void {
     ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, width, height);
+    const pulse = 0.5 * (1 - Math.cos(beatPhase * Math.PI * 2));
+    ctx.fillStyle = `rgba(255, 255, 255, ${(BG_PULSE_MAX_ALPHA * pulse).toFixed(4)})`;
     ctx.fillRect(0, 0, width, height);
   }
 
@@ -72,8 +110,12 @@ export class Renderer {
     waveEngine: WaveEngine,
     songTimeMs: number,
     width: number,
+    height: number,
   ): void {
-    ctx.strokeStyle = ACCENT;
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, ACCENT);
+    grad.addColorStop(1, ACCENT_SUB);
+    ctx.strokeStyle = grad;
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     for (let x = WAVE_MIN_X; x <= Math.min(WAVE_MAX_X, width); x += WAVE_SAMPLE_STEP) {
@@ -144,16 +186,38 @@ export class Renderer {
     ctx.strokeRect(TW_JUDGE_X - CURSOR_RADIUS - 1, Math.max(0, cursor.y - 30), 2, 60);
   }
 
-  private drawHud(
+  private drawJudgements(
     ctx: CanvasRenderingContext2D,
-    score: ScoreManager,
-    width: number,
-    height: number,
-    bpmTimeline: BpmTimeline,
+    events: JudgementEvent[],
     songTimeMs: number,
   ): void {
-    const stats = score.getStats();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    for (const ev of events) {
+      const age = songTimeMs - ev.at;
+      if (age < 0 || age > JUDGEMENT_LIFETIME_MS) {
+        continue;
+      }
+      const t = age / JUDGEMENT_LIFETIME_MS;
+      const label = ev.result === 'perfect' ? 'PERFECT!' : ev.result === 'good' ? 'GOOD' : 'MISS';
+      const color = ev.result === 'perfect' ? ACCENT : ev.result === 'good' ? ACCENT_SUB : DANGER;
+      const rise = JUDGEMENT_RISE_PX * t;
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = color;
+      ctx.font = `700 22px ${FONT_FAMILY}`;
+      ctx.fillText(label, TW_JUDGE_X + 28, ev.y - 20 - rise);
+      ctx.globalAlpha = 1;
+    }
+  }
 
+  private drawHud(
+    ctx: CanvasRenderingContext2D,
+    stats: { score: number; combo: number; maxCombo: number; perfect: number; good: number; miss: number },
+    width: number,
+    height: number,
+    beat: number,
+    songTimeMs: number,
+  ): void {
     ctx.textBaseline = 'top';
 
     ctx.textAlign = 'left';
@@ -161,21 +225,32 @@ export class Renderer {
     ctx.font = `12px ${FONT_FAMILY}`;
     ctx.fillText('SCORE', 16, 12);
     ctx.fillStyle = TEXT;
-    ctx.font = `600 22px ${FONT_FAMILY}`;
+    ctx.font = `600 ${SCORE_FONT_SIZE}px ${FONT_FAMILY}`;
     ctx.fillText(String(stats.score), 16, 28);
 
+    const tier = Math.min(3, Math.floor(stats.combo / 10));
+    const comboColor = CURSOR_COLORS[tier];
+    const shakeX = this.comboShakeX(songTimeMs);
+
     ctx.textAlign = 'right';
-    ctx.fillStyle = TEXT;
-    ctx.font = `600 28px ${FONT_FAMILY}`;
-    ctx.fillText(String(stats.combo), width - 16, 14);
+    ctx.fillStyle = comboColor;
+    ctx.font = `700 ${COMBO_FONT_SIZE}px ${FONT_FAMILY}`;
+    ctx.fillText(String(stats.combo), width - 16 + shakeX, 14);
     ctx.fillStyle = TEXT_MUTED;
     ctx.font = `12px ${FONT_FAMILY}`;
-    ctx.fillText('COMBO', width - 16, 46);
+    ctx.fillText('COMBO', width - 16, 60);
 
-    const beat = bpmTimeline.msToBeat(songTimeMs);
     const beatLabel = Math.floor(beat) + 1;
     ctx.fillStyle = TEXT_MUTED;
     ctx.font = `12px ${FONT_FAMILY}`;
     ctx.fillText(`BEAT ${beatLabel}`, width - 16, height - 16);
+  }
+
+  private comboShakeX(songTimeMs: number): number {
+    const t = (songTimeMs - this.shakeStart) / COMBO_SHAKE_MS;
+    if (t < 0 || t >= 1) {
+      return 0;
+    }
+    return COMBO_SHAKE_AMPLITUDE * (1 - t) * Math.sin(t * Math.PI * 8);
   }
 }
