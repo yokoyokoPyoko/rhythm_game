@@ -5,6 +5,16 @@ const TAP_COUNT = 4
 const BPM_MIN = 1
 const BPM_MAX = 1000
 
+function safeBpm (v: number): number {
+  if (Number.isNaN(v) || v < BPM_MIN || v > BPM_MAX) return 120
+  return v
+}
+
+function safeBeat (v: number): number {
+  if (Number.isNaN(v) || v < 0) return 0
+  return v
+}
+
 interface BpmEditorProps {
   bpm: number
   onBpmChange: (bpm: number) => void
@@ -18,7 +28,7 @@ export default function BpmEditor({ bpm, onBpmChange, bpmChanges, onBpmChangesCh
 
   const addChange = () => {
     const defaultBeat = bpmChanges.length > 0 ? Math.floor(bpmChanges[bpmChanges.length - 1].beat) + 4 : 4
-    onBpmChangesChange([...bpmChanges, { beat: defaultBeat, bpm }])
+    onBpmChangesChange([...bpmChanges, { beat: defaultBeat, bpm: safeBpm(bpm) }])
   }
 
   const removeChange = (index: number) => {
@@ -68,8 +78,9 @@ export default function BpmEditor({ bpm, onBpmChange, bpmChanges, onBpmChangesCh
           className="editor-input"
           type="number"
           min={BPM_MIN}
-          value={bpm}
-          onChange={(e) => onBpmChange(Number(e.target.value))}
+          max={BPM_MAX}
+          value={safeBpm(bpm)}
+          onChange={(e) => onBpmChange(safeBpm(Number(e.target.value)))}
         />
       </div>
 
@@ -98,8 +109,8 @@ export default function BpmEditor({ bpm, onBpmChange, bpmChanges, onBpmChangesCh
                 type="number"
                 min={0}
                 step={0.25}
-                value={change.beat}
-                onChange={(e) => updateChange(i, { beat: Math.max(0, Number(e.target.value)) })}
+                value={safeBeat(change.beat)}
+                onChange={(e) => updateChange(i, { beat: safeBeat(Number(e.target.value)) })}
                 aria-label={`BPM変更${i + 1}のbeat`}
               />
               <input
@@ -107,8 +118,8 @@ export default function BpmEditor({ bpm, onBpmChange, bpmChanges, onBpmChangesCh
                 type="number"
                 min={BPM_MIN}
                 max={BPM_MAX}
-                value={change.bpm}
-                onChange={(e) => updateChange(i, { bpm: Number(e.target.value) })}
+                value={safeBpm(change.bpm)}
+                onChange={(e) => updateChange(i, { bpm: safeBpm(Number(e.target.value)) })}
                 aria-label={`BPM変更${i + 1}のBPM`}
               />
               <button
