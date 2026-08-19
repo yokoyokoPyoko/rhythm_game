@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio } from '../audio/loader'
-import type { RingDef, Segment } from '../types'
+import type { BpmChange, RingDef, Segment } from '../types'
+import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
 import WavePreview from './editor/WavePreview'
 
@@ -28,6 +29,7 @@ export default function EditorScreen() {
   const [snap, setSnap] = useState(0.25)
   const [rings, setRings] = useState<RingDef[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
+  const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
@@ -41,7 +43,7 @@ export default function EditorScreen() {
   }
 
   const safeBpm = bpm > 0 ? bpm : 120
-  const timeline = useMemo(() => new BpmTimeline(safeBpm, []), [safeBpm])
+  const timeline = useMemo(() => new BpmTimeline(safeBpm, bpmChanges), [safeBpm, bpmChanges])
   const beat = timeline.msToBeat(positionMs)
 
   useEffect(() => {
@@ -229,20 +231,12 @@ export default function EditorScreen() {
 
           <section className="editor-pane">
             <h2>BPM設定</h2>
-            <div className="editor-field">
-              <label className="editor-label" htmlFor="bpm">
-                基本BPM
-              </label>
-              <input
-                id="bpm"
-                className="editor-input"
-                type="number"
-                min={1}
-                value={bpm}
-                onChange={(e) => setBpm(Number(e.target.value))}
-              />
-            </div>
-            {/* TODO(T54): BPM変更リスト・タップテンポ */}
+            <BpmEditor
+              bpm={bpm}
+              onBpmChange={setBpm}
+              bpmChanges={bpmChanges}
+              onBpmChangesChange={setBpmChanges}
+            />
           </section>
         </aside>
 

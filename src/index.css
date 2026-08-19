@@ -541,3 +541,46 @@ button:focus-visible {
   color: var(--danger);
   background-color: transparent;
 }
+
+.editor-subhead {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0.5rem 0 0.5rem;
+}
+
+.bpm-change-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
+}
+
+.bpm-change-item {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.bpm-change-item input {
+  padding: 0.25em 0.5em;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.bpm-change-delete {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--danger);
+  background-color: transparent;
+}
+
+.bpm-change-add {
+  width: 100%;
+  font-size: 0.75rem;
+}
