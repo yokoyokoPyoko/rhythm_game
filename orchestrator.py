@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""汎用自律運用オーケストレーター (CUI 対話型モデル選択システム)
+"""汎用自律運用オーケストレーター (ヘルスチェック＆エラー即時可視化版)
 
-4つのフロー（Coder / QA Test Gen / Dynamic Reviewer / Postmortem Architect）
-に使用する AI モデルを起動時の CUI 対話で柔軟に選択・構成できます。
+- 起動時に選択された全AIモデルのヘルスチェック（残高・APIキー・疎通）を事前実行
+- 残高切れ (insufficient balance) や認証エラーを検知して即座に画面に警告・停止
+- CUI 対話で Coder / QA / Reviewer / Postmortem のモデルを自在に選択
 """
 
 from __future__ import annotations
@@ -119,6 +120,135 @@ def setup_logging() -> None:
     )
 
 
+def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = ROOT, prefix: str = "") -> tuple[int, str, bool]:
+    e = os.environ.copy()
+    e["FORCE_COLOR"] = "0"
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=e,
+            start_new_session=True,
+        )
+    except Exception as err:
+        return 127, f"コマンド実行失敗: {cmd[0]} ({err})", False
+
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def reader_thread() -> None:
+        try:
+            if proc.stdout:
+                for line in iter(proc.stdout.readline, ""):
+                    q.put(line)
+        except Exception:
+            pass
+        finally:
+            q.put(None)
+
+    t = threading.Thread(target=reader_thread, daemon=True)
+    t.start()
+
+    collected: list[str] = []
+    start_t = time.time()
+    timed_out = False
+
+    while True:
+        try:
+            line = q.get(timeout=0.1)
+            if line is None:
+                break
+            collected.append(line)
+            cleaned = line.rstrip()
+            if cleaned and not re.search(r"^\s*$", cleaned):
+                print(f"  │ {prefix}{cleaned}", flush=True)
+        except queue.Empty:
+            pass
+
+        if timeout and (time.time() - start_t > timeout):
+            timed_out = True
+            log.warning("⏰ タイムアウト (%d秒) に達したためプロセスを強制終了します", timeout)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                time.sleep(1)
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            print(f"  └─ ⏰ [タイムアウト {timeout}秒で強制終了]", flush=True)
+            break
+
+        if proc.poll() is not None and q.empty():
+            break
+
+    proc.wait()
+    full_out = "".join(collected)
+    return (proc.returncode if not timed_out else -1), full_out, timed_out
+
+
+def check_model_health(model_id: str, label: str) -> bool:
+    """起動前にモデルの疎通・残高・APIキーをチェックし、エラーがあれば即座に赤文字表示する"""
+    print(f"  🔍 [{label}] 疎通・残高チェック中 ({model_id})...", end="", flush=True)
+    cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model_id, "echo 'ping'"]
+    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=20, prefix="")
+
+    # 残高切れ検知
+    if "insufficient balance" in out or "suspended" in out:
+        print(" ❌ [残高切れ / アカウント停止!]")
+        print("\n" + "!" * 70)
+        print(f" 🚨 【エラー】{label} に指定されたモデル ({model_id}) は残高切れです！")
+        print(f"    詳細: {out.strip()}")
+        print("!" * 70 + "\n")
+        return False
+
+    # 認証エラー検知
+    if "CLOUDFLARE_ACCOUNT_ID is missing" in out or "API_KEY" in out or "unauthorized" in out.lower():
+        print(" ❌ [認証情報不足!]")
+        print("\n" + "!" * 70)
+        print(f" 🚨 【エラー】{label} ({model_id}) の認証情報 (API Key / Account ID) が不足しています！")
+        print(f"    詳細: {out.strip()}")
+        print("!" * 70 + "\n")
+        return False
+
+    if code != 0 or timed_out:
+        print(" ⚠️ [警告: 応答なし]")
+        print(f"    ※ 応答詳細: {out.strip()[:200]}")
+        return False
+
+    print(" ✅ OK!")
+    return True
+
+
+def perform_preflight_checks(models: FlowModels) -> bool:
+    """全4モデルの事前ヘルスチェックを一括実行"""
+    print("\n" + "=" * 70)
+    print(" 🩺 起動前 AI モデルヘルスチェック (残高・APIキー・疎通確認)")
+    print("=" * 70)
+    
+    all_ok = True
+    checked: set[str] = set()
+
+    for label, m in [("1. Coder", models.coder), ("2. QA", models.qa), ("3. Reviewer", models.reviewer), ("4. Postmortem", models.postmortem)]:
+        if m in checked:
+            print(f"  🔍 [{label}] {m} -> ✅ 検証済み")
+            continue
+        checked.add(m)
+        ok = check_model_health(m, label)
+        if not ok:
+            all_ok = False
+
+    print("=" * 70)
+    if not all_ok:
+        print("❌ ヘルスチェックでエラーが検出されました。設定や残高を確認してください。")
+        cont = input("このまま続行しますか？ (y/N): ").strip().lower()
+        return cont == "y"
+    
+    print("🎉 全モデルのヘルスチェックに合格しました！\n")
+    return True
+
+
 def interactive_model_selection() -> FlowModels:
     """CUI 対話メニューで各フローのモデルを選択する"""
     print("\n" + "=" * 70)
@@ -222,74 +352,6 @@ def save_state(state: dict[str, Any]) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = ROOT, prefix: str = "") -> tuple[int, str, bool]:
-    e = os.environ.copy()
-    e["FORCE_COLOR"] = "0"
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            env=e,
-            start_new_session=True,
-        )
-    except Exception as err:
-        return 127, f"コマンド実行失敗: {cmd[0]} ({err})", False
-
-    q: queue.Queue[str | None] = queue.Queue()
-
-    def reader_thread() -> None:
-        try:
-            if proc.stdout:
-                for line in iter(proc.stdout.readline, ""):
-                    q.put(line)
-        except Exception:
-            pass
-        finally:
-            q.put(None)
-
-    t = threading.Thread(target=reader_thread, daemon=True)
-    t.start()
-
-    collected: list[str] = []
-    start_t = time.time()
-    timed_out = False
-
-    while True:
-        try:
-            line = q.get(timeout=0.1)
-            if line is None:
-                break
-            collected.append(line)
-            cleaned = line.rstrip()
-            if cleaned and not re.search(r"^\s*$", cleaned):
-                print(f"  │ {prefix}{cleaned}", flush=True)
-        except queue.Empty:
-            pass
-
-        if timeout and (time.time() - start_t > timeout):
-            timed_out = True
-            log.warning("⏰ タイムアウト (%d秒) に達したためプロセスを強制終了します", timeout)
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                time.sleep(1)
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            print(f"  └─ ⏰ [タイムアウト {timeout}秒で強制終了]", flush=True)
-            break
-
-        if proc.poll() is not None and q.empty():
-            break
-
-    proc.wait()
-    full_out = "".join(collected)
-    return (proc.returncode if not timed_out else -1), full_out, timed_out
-
-
 def rate_limit_sleep(model: str) -> None:
     if "kimi" in model.lower():
         log.info("⏳ [RateLimit] Kimiモデルのため 21秒 待機中...")
@@ -308,6 +370,12 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
         print(f"  ┌─ ▼ {label} 出力ストリーム開始 ───", flush=True)
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix="🤖 ")
         print(f"  └─ ▲ {label} 出力終了 (exit={code}) ───", flush=True)
+
+        # 残高切れ即座検知
+        if "insufficient balance" in out or "suspended" in out:
+            print("\n" + "!" * 70)
+            print(f" 🚨 【重大警告】{label} ({model}) が残高切れのため停止しました！")
+            print("!" * 70 + "\n")
 
         if timed_out:
             log.warning("⚠️ タイムアウトが発生しました。再試行します...")
@@ -647,7 +715,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (CUI対話型モデル選択)")
+    parser = argparse.ArgumentParser(description="汎用自律運用オーケストレーター (ヘルスチェック＆エラー即時可視化版)")
     parser.add_argument("--dry-run", action="store_true", help="実行計画のみ表示")
     parser.add_argument("--only", metavar="TID", help="指定タスクIDのみ実行")
     parser.add_argument("--from", dest="start_from", metavar="TID", help="指定タスクID以降を実行")
@@ -677,7 +745,13 @@ def main() -> None:
     print(f"  2. テスト生成 (QA)       : {models.qa}")
     print(f"  3. 動的審査 (Reviewer)   : {models.reviewer}")
     print(f"  4. 失敗分析 (Postmortem) : {models.postmortem}")
-    print("=" * 70 + "\n")
+    print("=" * 70)
+
+    # 起動前ヘルスチェック（残高・APIキー・疎通の事前自動検証）
+    if not args.dry_run:
+        if not perform_preflight_checks(models):
+            log.warning("ヘルスチェック失敗により中断しました")
+            sys.exit(1)
 
     tasks = topo_sort(load_tasks())
     state = load_state()
