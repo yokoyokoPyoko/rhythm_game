@@ -171,14 +171,14 @@
     },
     "T56": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1787138306.5615535,
-      "finished": 1787131397.5906394
+      "finished": 1787139304.9192774
     },
     "T60": {
       "attempts": 2,
       "status": "running",
-      "started": 1787131397.5910215,
+      "started": 1787139304.9229226,
       "finished": 1787103715.8844008
     },
     "T61": {
