@@ -1,3 +1,47 @@
 [0m
-> build · deepseek-v4-flash-free
+> build · nemotron-3.5-lightning-free
 [0m
+[0m• [0mExplore codebase structure[90m Explore Agent[0m
+[0m✓ [0mExplore codebase structure[90m Explore Agent[0m
+[0m→ [0mRead src/audio/clock.ts
+[0m→ [0mRead src/screens/GameScreen.tsx
+Let me read the key files to understand the current implementation.
+The codebase appears to already have T60 implemented. Let me verify by checking for TypeScript errors and ensuring everything compiles.
+[0m
+[0m$ [0mnpx tsc --noEmit 2>&1
+(no output)
+[0m
+[0m$ [0mnpx vite --version 2>&1
+vite/5.4.21 linux-x64 node-v18.19.1
+[0m
+[0m$ [0mrg 'adjustOffset|setManualOffset|game-offset' --context 2 /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+/bin/bash: 行 1: rg: コマンドが見つかりません
+[0m
+TypeScript compilation passes with no errors. Let me verify the implementation is complete by checking the key aspects of T60:
+[0m✱ [0mGrep "adjustOffset|setManualOffset|game-offset"[90m in src · 11 matches[0m
+[0m
+[0m$ [0mecho 'DONE'
+DONE
+[0m
+The T60 implementation is already complete in the codebase. All components are in place:
+
+- **`src/audio/clock.ts`**: `setManualOffset(ms)` function exists (line 25)
+- **`src/screens/GameScreen.tsx`**: 
+  - Imports `setManualOffset` from clock (line 5)
+  - `adjustOffset(delta)` calls `setManualOffset(next)` (line 308)
+  - `</>` keys (`,`<` and `.`) trigger `adjustOffset(-10)` / `adjustOffset(10)` (lines 326-333)
+  - Offset display `<div className="game-offset">` shows `offset: +Xms`/`-Xms` (lines 391-394)
+- **TypeScript**: `tsc --noEmit` passes with zero errors
+[0m$ [0mecho 'DONE'
+DONE
+[0m
+T60 手動オフセット調整は既に実装されています。
+
+**実装確認:**
+- `src/audio/clock.ts:25` - `setManualOffset(ms)` 関数が定義済み
+- `src/screens/GameScreen.tsx:306-310` - `adjustOffset()` が `setManualOffset(next)` を呼び出し、localStorage に保存
+- `src/screens/GameScreen.tsx:326-333` - `</>` キー (`,`<` / `.`) で ±10ms 変更
+- `src/screens/GameScreen.tsx:391-394` - 右下に `offset: +Xms` / `-Xms` を表示
+- `tsc --noEmit` - エラーゼロ
+
+「DONE」を出力します。
