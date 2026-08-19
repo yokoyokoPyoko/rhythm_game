@@ -485,6 +485,63 @@ button:focus-visible {
   color: var(--danger);
 }
 
+.calibration-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  text-align: center;
+  max-width: none;
+}
+
+.calibration-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.calibration-progress {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.calibration-progress-count {
+  font-size: 3rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.calibration-progress-total {
+  color: var(--text-muted);
+  font-size: 1.25rem;
+}
+
+.calibration-offset {
+  padding: 1rem 1.5rem;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.calibration-offset-value {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.calibration-hint {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.calibration-done {
+  color: var(--positive);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
 .wave-preview {
   display: block;
   width: 100%;
