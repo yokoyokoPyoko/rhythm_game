@@ -53,7 +53,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
   const [keySoundOn, setKeySoundOn] = useState(isKeySoundEnabled)
   const statusRef = useRef<LoadStatus>('loading')
-  const keySoundOnRef = useRef(isKeySoundEnabled)
+  const keySoundOnRef = useRef(isKeySoundEnabled())
   const onExitRef = useRef(onExit)
 
   useEffect(() => {
