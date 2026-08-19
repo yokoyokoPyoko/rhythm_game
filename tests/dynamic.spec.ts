@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('T51 editor audio player and BPM setting test', async ({ page }) => {
+test('T52 ring recording test', async ({ page }) => {
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -31,31 +31,29 @@ test('T51 editor audio player and BPM setting test', async ({ page }) => {
   await page.waitForSelector('.editor-screen', { timeout: 5000 });
 
   // Frame 2: Editor screen loaded
-  const urlInput = page.locator('#audio-url');
-  await expect(urlInput).toBeVisible();
-  await expect(urlInput).toHaveValue('/rhythm_game/audio/08.Reply.flac');
+  const snapSelect = page.locator('#snap');
+  await expect(snapSelect).toBeVisible();
   await page.screenshot({ path: 'screenshots/frame_2.png' });
 
-  // Simulate user interaction: modify BPM and audio URL / test play/stop button & position display
-  const bpmInput = page.locator('#bpm');
-  await expect(bpmInput).toBeVisible();
-  await bpmInput.fill('130');
+  // Simulate user interaction 1: Change snap setting
+  await snapSelect.selectOption('0.5');
+  await page.waitForTimeout(300);
 
-  // Frame 3: BPM changed & URL inspected
+  // Frame 3: Snap setting updated
   await page.screenshot({ path: 'screenshots/frame_3.png' });
 
-  // Click play / stop button or interact with timeline/slider
+  // Simulate user interaction 2: Click play or simulate audio state / ring recording interaction
   const playButton = page.locator('button', { hasText: '再生' });
   if (await playButton.isVisible()) {
     await playButton.click();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(300);
   }
 
-  // Frame 4: Audio playback / time & beat display
-  const timeDisplay = page.locator('.editor-pos-time');
-  const beatDisplay = page.locator('.editor-pos-beat');
-  await expect(timeDisplay).toBeVisible();
-  await expect(beatDisplay).toBeVisible();
+  // Simulate Space keypress or check ring recording section & ring list container
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(300);
+
+  // Frame 4: Ring recording interaction & list state
   await page.screenshot({ path: 'screenshots/frame_4.png' });
 
   // Click back link to return to home screen
