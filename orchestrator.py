@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """汎用自律運用オーケストレーター (Linear風ミニマル・モダンCLI)
 
+- Coder / QA / Postmortem の高速枠を Laguna S 2.1 Free に刷新
+- Dynamic Reviewer の選択肢を洗練された2モデルに集約
 - 区間指定実行 (--from TID --to TID) & 依存関係の自動検証・解決
 - 審査エラー/タイムアウト時の勝手な自動PASSを完全廃止 (厳格Gate検証)
 - 絵文字完全排除 & ANSIカラーによる洗練されたモダンUI
@@ -58,8 +60,8 @@ MODEL_CATALOG = {
     "qwen38": ("Qwen3.8-27B (Cloudflare)", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
     "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B (Cloudflare)", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
     "deepseek_v4": ("DeepSeek V4 Flash Free (Zen)", "opencode/deepseek-v4-flash-free"),
+    "laguna_free": ("Laguna S 2.1 Free (Zen)", "opencode/laguna-s-2.1-free"),
     "gemini_flash_lite": ("Gemini 3.5 Flash-Lite (Google)", "google/gemini-3.5-flash-lite"),
-    "nemotron_lightning": ("Nemotron 3.5 Lightning Free (Zen)", "opencode/nemotron-3.5-lightning-free"),
 }
 
 CODER_OPTIONS = [
@@ -67,7 +69,7 @@ CODER_OPTIONS = [
     ("deepseek_v4", "DeepSeek V4 Flash (Rank 2: 豊富なコード知識・MoE)"),
     ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B (Rank 3: 高度論理思考・長考型)"),
     ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (高速枠: 待ち時間最小)"),
-    ("nemotron_lightning", "Nemotron 3.5 Lightning Free (高速枠)"),
+    ("laguna_free", "Laguna S 2.1 Free (高速枠: OpenCode Zen)"),
 ]
 
 QA_OPTIONS = [
@@ -75,18 +77,19 @@ QA_OPTIONS = [
     ("deepseek_v4", "DeepSeek V4 Flash (Rank 2: 論理的テストケース網羅)"),
     ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B (Rank 3: 高難度ロジック検証)"),
     ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (高速枠: 即時テスト生成)"),
+    ("laguna_free", "Laguna S 2.1 Free (高速枠: OpenCode Zen)"),
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (Rank 1: マルチモーダル5連フレーム高速審査)"),
-    ("nemotron_lightning", "Nemotron 3.5 Lightning (Rank 2: 100万トークン動画/画像認識)"),
-    ("qwen38", "Qwen3.8-27B (Rank 3: 画像認識+思考推論)"),
+    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (Rank 1: マルチモーダル5連フレーム高速審査・クラウド最適解)"),
+    ("qwen38", "Qwen3.8-27B (Rank 2: 画像認識+思考推論)"),
 ]
 
 POSTMORTEM_OPTIONS = [
     ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B (Rank 1: 推論特化・根本原因究明)"),
     ("qwen38", "Qwen3.8-27B (Rank 2: 最新TS仕様知識+熟考)"),
     ("deepseek_v4", "DeepSeek V4 Flash (Rank 3: 長文ログ解析)"),
+    ("laguna_free", "Laguna S 2.1 Free (高速枠: OpenCode Zen)"),
     ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (高速枠)"),
 ]
 
@@ -359,7 +362,6 @@ def topo_sort(tasks: list[Task]) -> list[Task]:
 
 
 def get_task_ancestors(tasks_by_id: dict[str, Task], target_ids: list[str]) -> set[str]:
-    """指定タスクが必要とする全ての先行依存タスクIDを取得"""
     ancestors: set[str] = set()
 
     def dfs(tid: str) -> None:
@@ -760,7 +762,6 @@ def main() -> None:
     tasks_by_id = {t.id: t for t in all_tasks}
     state = load_state()
 
-    # 区間（--from, --to, --only）のフィルタリング
     if args.only:
         target_tasks = [t for t in all_tasks if t.id == args.only]
     else:
@@ -786,7 +787,6 @@ def main() -> None:
 
         target_tasks = all_tasks[start_idx:end_idx]
 
-    # 依存関係の整合性チェック
     target_ids = [t.id for t in target_tasks]
     all_needed_ancestors = get_task_ancestors(tasks_by_id, target_ids)
     missing_deps = []
