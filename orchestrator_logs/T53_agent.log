@@ -1,4 +1,206 @@
 [0m
-> build · z-ai/glm-5.2
+> build · deepseek-v4-flash-free
 [0m
-[91m[1mError: [0mToo Many Requests: {"status":429,"title":"Too Many Requests"}
+[0m→ [0mRead src/screens/EditorScreen.tsx
+[0m→ [0mRead src/game/waveEngine.ts
+[0m→ [0mRead src/index.css
+[0m
+[0m← [0mEdit src/screens/EditorScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+@@ -2,9 +2,11 @@
+ import { Link } from 'react-router-dom'
+ import { AudioManager } from '../audio/AudioManager'
+ import { BpmTimeline } from '../audio/bpmTimeline'
+ import { loadAudio } from '../audio/loader'
+-import type { RingDef } from '../types'
++import type { RingDef, Segment } from '../types'
++import SegmentEditor from './editor/SegmentEditor'
++import WavePreview from './editor/WavePreview'
+ 
+ const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
+ 
+ function formatSeconds(ms: number): string {
+
+[0m
+[0m← [0mEdit src/screens/EditorScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+@@ -26,8 +26,9 @@
+ const [isPlaying, setIsPlaying] = useState(false)
+ const [error, setError] = useState<string | null>(null)
+ const [snap, setSnap] = useState(0.25)
+ const [rings, setRings] = useState<RingDef[]>([])
++const [segments, setSegments] = useState<Segment[]>([])
+ 
+ const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+ const startCtxTimeRef = useRef(0)
+ const startMsRef = useRef(0)
+
+[0m
+[0m← [0mEdit src/screens/EditorScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+@@ -246,8 +246,11 @@
+   </section>
+ </aside>
+ 
+ <main className="editor-main">
++  <WavePreview segments={segments} bpm={safeBpm} />
++  <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
++
+   <section className="editor-pane">
+     <h2>リング録音</h2>
+     <div className="editor-field">
+       <label className="editor-label" htmlFor="snap">
+
+[0m
+[0m← [0mEdit src/screens/EditorScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+@@ -289,12 +289,8 @@
+               ))}
+             </ul>
+           )}
+         </section>
+-
+-        <div className="editor-timeline">
+-          {/* TODO(T53/T73): セグメントエディタ・タイムライン */}
+-        </div>
+       </main>
+     </div>
+   </div>
+ )
+
+[0m
+Now create the two new components
+[0m← [0mWrite src/screens/editor/WavePreview.tsx
+Wrote file successfully.
+[0m
+[0m← [0mWrite src/screens/editor/SegmentEditor.tsx
+Wrote file successfully.
+[0m
+[0m← [0mEdit src/index.css
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
+@@ -462,5 +462,82 @@
+ .editor-error {
+   margin-top: 0.75rem;
+   font-size: 0.75rem;
+   color: var(--danger);
++}
++
++.wave-preview {
++  display: block;
++  width: 100%;
++  height: 140px;
++  background-color: var(--bg-surface);
++  border: 1px solid var(--border);
++  border-radius: var(--radius);
++}
++
++.segment-editor-head {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  margin-bottom: 0.75rem;
++}
++
++.segment-editor-head h2 {
++  margin-bottom: 0;
++}
++
++.segment-list {
++  list-style: none;
++  display: flex;
++  flex-direction: column;
++  gap: 0.375rem;
++}
++
++.segment-list-item {
++  display: grid;
++  grid-template-columns: 20px 64px 80px 1fr;
++  gap: 0.5rem;
++  align-items: center;
++  padding: 0.375rem 0.5rem;
++  background-color: var(--bg);
++  border: 1px solid var(--border);
++  border-radius: var(--radius);
++}
++
++.segment-index {
++  font-size: 0.75rem;
++  color: var(--text-muted);
++  font-variant-numeric: tabular-nums;
++  text-align: center;
++}
++
++.segment-direction,
++.segment-beats {
++  width: 100%;
++  padding: 0.25em 0.5em;
++  font-size: 0.875rem;
++}
++
++.segment-actions {
++  display: flex;
++  gap: 0.375rem;
++  justify-content: flex-end;
++}
++
++.segment-move {
++  padding: 0.125rem 0.5rem;
++  font-size: 0.75rem;
++  line-height: 1;
++  background-color: transparent;
++}
++
++.segment-move:disabled {
++  opacity: 0.35;
++  cursor: default;
++}
++
++.segment-delete {
++  padding: 0.125rem 0.5rem;
++  font-size: 0.75rem;
++  color: var(--danger);
++  background-color: transparent;
+ }
+\ No newline at end of file
+
+[0m
+Now add the CSS for the segment editor
+Now verify with typecheck
+[0m$ [0mnpx tsc --noEmit
+(no output)
+[0m
+[0m→ [0mRead src/screens/EditorScreen.tsx[90m [offset=246, limit=60][0m
+Typecheck passes. Let me run the production build to confirm no
+[0m
+[0m$ [0mnpm run build 2>&1 | tail -20
+> rhythm_game@0.0.0 build
+> tsc -b && vite build
+
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 69 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdocs/[22m[32mindex.html                 [39m[1m[2m  0.77 kB[22m[1m[22m[2m │ gzip:  0.44 kB[22m
+[2mdocs/[22m[2massets/[22m[35mindex-uL0I66Wv.css  [39m[1m[2m  7.46 kB[22m[1m[22m[2m │ gzip:  1.82 kB[22m
+[2mdocs/[22m[2massets/[22m[36mindex-D-6Qq6gA.js   [39m[1m[2m224.47 kB[22m[1m[22m[2m │ gzip: 71.73 kB[22m
+[32m✓ built in 657ms[39m
+[0m
+T53実装完了。右ペインにセグメントエディタ（`src/screens/editor/SegmentEditor.tsx`）と波形プレビュー（`src/screens/editor/WavePreview.tsx`）を追加。方向select(↑/↓)・拍数input・追加/削除/上下移動・リアルタイムCanvasプレビューを実装。`tsc --noEmit` とビルド両方成功。
+
+DONE
