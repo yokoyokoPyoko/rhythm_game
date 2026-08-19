@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audio/clock'
+import { isKeySoundEnabled, playKeyClick, setKeySoundEnabled } from '../audio/keySound'
 import { loadAudio } from '../audio/loader'
 import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
 import { loadChart } from '../chart/loader'
@@ -50,7 +51,9 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
   const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
+  const [keySoundOn, setKeySoundOn] = useState(isKeySoundEnabled)
   const statusRef = useRef<LoadStatus>('loading')
+  const keySoundOnRef = useRef(isKeySoundEnabled)
   const onExitRef = useRef(onExit)
 
   useEffect(() => {
@@ -311,6 +314,13 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         adjustOffset(10)
         return
       }
+      if (e.key === 'k' || e.key === 'K') {
+        const next = !keySoundOnRef.current
+        keySoundOnRef.current = next
+        setKeySoundOn(next)
+        setKeySoundEnabled(next)
+        return
+      }
       if (e.key === 'ArrowUp') {
         keysRef.current.up = true
         return
@@ -322,6 +332,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       if (e.code === 'Space') {
         e.preventDefault()
         if (statusRef.current !== 'ready') return
+        if (keySoundOnRef.current) playKeyClick()
         if (!startedRef.current) {
           void startGame()
         } else {
@@ -364,7 +375,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
             offset: {offsetMs >= 0 ? '+' : ''}
             {offsetMs}ms
           </div>
-          <div className="game-hint">Space: 判定 / ↑↓: 移動 / &lt;&gt;: オフセット±10ms / R: リセット / ESC: 戻る</div>
+          <div className="game-hint">Space: 判定 / ↑↓: 移動 / &lt;&gt;: オフセット±10ms / K: キー音{keySoundOn ? 'ON' : 'OFF'} / R: リセット / ESC: 戻る</div>
         </>
       )}
     </div>
