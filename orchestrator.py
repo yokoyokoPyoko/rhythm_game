@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """汎用自律運用オーケストレーター (Linear風ミニマル・モダンCLI)
 
+- 区間指定実行 (--from TID --to TID) & 依存関係の自動検証・解決
 - 審査エラー/タイムアウト時の勝手な自動PASSを完全廃止 (厳格Gate検証)
 - 絵文字完全排除 & ANSIカラーによる洗練されたモダンUI
 - 起動前ヘルスチェック（残高・APIキー・疎通）
@@ -357,6 +358,22 @@ def topo_sort(tasks: list[Task]) -> list[Task]:
     return order
 
 
+def get_task_ancestors(tasks_by_id: dict[str, Task], target_ids: list[str]) -> set[str]:
+    """指定タスクが必要とする全ての先行依存タスクIDを取得"""
+    ancestors: set[str] = set()
+
+    def dfs(tid: str) -> None:
+        if tid in ancestors or tid not in tasks_by_id:
+            return
+        ancestors.add(tid)
+        for dep in tasks_by_id[tid].depends_on:
+            dfs(dep)
+
+    for tid in target_ids:
+        dfs(tid)
+    return ancestors
+
+
 def load_state() -> dict[str, Any]:
     if STATE_FILE.exists():
         try:
@@ -706,7 +723,6 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         save_state(state)
         print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
 
-        # ステップ実行モード (--step) の場合はユーザーの Enter を待つ
         if args.step:
             input(f"{CYAN}Task [{task.id}] passed. Press Enter to proceed to next task...{RESET}")
 
@@ -724,7 +740,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Trace Wave Autonomous Orchestrator (Modern CLI)")
     parser.add_argument("--dry-run", action="store_true", help="Display execution plan only")
     parser.add_argument("--only", metavar="TID", help="Execute specific task ID")
-    parser.add_argument("--from", dest="start_from", metavar="TID", help="Execute from specific task ID onwards")
+    parser.add_argument("--from", dest="start_from", metavar="TID", help="区間の開始タスクID")
+    parser.add_argument("--to", dest="end_at", metavar="TID", help="区間の終了タスクID (このタスク完了後に自動停止)")
     parser.add_argument("--force", action="store_true", help="Force re-execution of passed tasks")
     parser.add_argument("--step", action="store_true", help="1タスク完了ごとにEnterキー確認を挟む（ステップ実行モード）")
     parser.add_argument("--reset-state", action="store_true", help="Reset state file")
@@ -738,6 +755,55 @@ def main() -> None:
     if args.reset_state and STATE_FILE.exists():
         STATE_FILE.unlink()
         log.info("Reset state file.")
+
+    all_tasks = topo_sort(load_tasks())
+    tasks_by_id = {t.id: t for t in all_tasks}
+    state = load_state()
+
+    # 区間（--from, --to, --only）のフィルタリング
+    if args.only:
+        target_tasks = [t for t in all_tasks if t.id == args.only]
+    else:
+        start_idx = 0
+        end_idx = len(all_tasks)
+        if args.start_from:
+            idx = next((i for i, t in enumerate(all_tasks) if t.id == args.start_from), None)
+            if idx is None:
+                log.error("Start task '%s' not found in DAG.", args.start_from)
+                sys.exit(1)
+            start_idx = idx
+
+        if args.end_at:
+            idx = next((i for i, t in enumerate(all_tasks) if t.id == args.end_at), None)
+            if idx is None:
+                log.error("End task '%s' not found in DAG.", args.end_at)
+                sys.exit(1)
+            end_idx = idx + 1
+
+        if start_idx >= end_idx:
+            log.error("Invalid range: --from '%s' comes after --to '%s' in DAG.", args.start_from, args.end_at)
+            sys.exit(1)
+
+        target_tasks = all_tasks[start_idx:end_idx]
+
+    # 依存関係の整合性チェック
+    target_ids = [t.id for t in target_tasks]
+    all_needed_ancestors = get_task_ancestors(tasks_by_id, target_ids)
+    missing_deps = []
+    for dep_id in all_needed_ancestors:
+        if dep_id not in target_ids:
+            dep_status = state["tasks"].get(dep_id, {}).get("status")
+            if dep_status != "passed":
+                missing_deps.append(f"{dep_id} (status: {dep_status})")
+
+    if missing_deps:
+        log.warning("Selected range has unpassed prerequisite dependencies: %s", ", ".join(missing_deps))
+        print(f"\n{YELLOW}{BOLD}[DEPENDENCY WARNING]{RESET} The following prerequisites are not marked as 'passed':")
+        for md in missing_deps:
+            print(f"  {YELLOW}•{RESET} {md}")
+        cont = input(f"\nProceed anyway? ({BOLD}y/N{RESET}): ").strip().lower()
+        if cont != "y":
+            sys.exit(1)
 
     if args.non_interactive or args.dry_run:
         models = FlowModels()
@@ -756,19 +822,14 @@ def main() -> None:
             log.warning("Health check aborted by user.")
             sys.exit(1)
 
-    tasks = topo_sort(load_tasks())
-    state = load_state()
+    log.info("Orchestrator range execution: %d tasks (from=%s, to=%s, budget=%dm)", 
+             len(target_tasks), 
+             args.start_from or target_tasks[0].id, 
+             args.end_at or target_tasks[-1].id, 
+             args.budget_min)
 
-    if args.only:
-        tasks = [t for t in tasks if t.id == args.only]
-    elif args.start_from:
-        idx = next((i for i, t in enumerate(tasks) if t.id == args.start_from), None)
-        if idx is not None:
-            tasks = tasks[idx:]
-
-    log.info("Orchestrator started (budget=%dm, tasks=%d)", args.budget_min, len(tasks))
     if args.dry_run:
-        for t in tasks:
+        for t in target_tasks:
             log.info("  Plan: %s <- %s", t.id, t.desc)
         return
 
@@ -776,7 +837,7 @@ def main() -> None:
     deadline = start_time + args.budget_min * 60
 
     try:
-        for t in tasks:
+        for t in target_tasks:
             if time.time() > deadline:
                 log.error("Total budget exceeded.")
                 break
@@ -790,7 +851,12 @@ def main() -> None:
                 log.info("[%s] Already passed -> Skip (--force to rerun)", t.id)
                 continue
 
-            exec_task(t, state, models, args)
+            res = exec_task(t, state, models, args)
+            if res != "passed" and not args.force:
+                log.warning("Task %s did not pass (%s). Stopping range.", t.id, res)
+                break
+
+        print(f"\n{GREEN}{BOLD}=== Range execution finished ([{target_tasks[0].id}] -> [{target_tasks[-1].id}]) ==={RESET}\n")
 
     finally:
         global dev_proc
