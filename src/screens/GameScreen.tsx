@@ -1,3 +1,329 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { AudioManager } from '../audio/AudioManager'
+import { BpmTimeline } from '../audio/bpmTimeline'
+import { resetClock, songNow } from '../audio/clock'
+import { loadAudio } from '../audio/loader'
+import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
+import { loadChart } from '../chart/loader'
+import { loadSongList } from '../chart/manifest'
+import { Cursor } from '../game/cursor'
+import { judgeHit } from '../game/hitJudge'
+import { Renderer } from '../game/renderer'
+import { RingSpawner } from '../game/ringSpawner'
+import { ScoreManager } from '../game/score'
+import { WaveEngine } from '../game/waveEngine'
+import type { Chart, RingState } from '../types'
+
+const CANVAS_WIDTH = 800
+const CANVAS_HEIGHT = 600
+const TW_TOLERANCE = 26
+const END_DELAY_MS = 2000
+const METRONOME_TICK_MS = 25
+
+type LoadStatus = 'loading' | 'error' | 'ready'
+
 export default function GameScreen() {
-  return <div className="screen">GameScreen</div>
+  const { songId } = useParams<{ songId: string }>()
+  const navigate = useNavigate()
+
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const chartRef = useRef<Chart | null>(null)
+  const timelineRef = useRef<BpmTimeline | null>(null)
+  const waveRef = useRef<WaveEngine | null>(null)
+  const cursorRef = useRef(new Cursor())
+  const spawnerRef = useRef(new RingSpawner())
+  const scoreRef = useRef(new ScoreManager())
+  const ringsRef = useRef<RingState[]>([])
+  const bufferRef = useRef<AudioBuffer | null>(null)
+  const musicSourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const metronomeTimerRef = useRef<number | null>(null)
+  const keysRef = useRef({ up: false, down: false })
+  const startedRef = useRef(false)
+  const endedRef = useRef(false)
+
+  const [status, setStatus] = useState<LoadStatus>('loading')
+  const [error, setError] = useState<string | null>(null)
+  const statusRef = useRef<LoadStatus>('loading')
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  const stopMusic = useCallback(() => {
+    if (musicSourceRef.current) {
+      try {
+        musicSourceRef.current.stop()
+      } catch {
+        // already stopped
+      }
+      musicSourceRef.current = null
+    }
+  }, [])
+
+  const stopMetronome = useCallback(() => {
+    if (metronomeTimerRef.current !== null) {
+      window.clearInterval(metronomeTimerRef.current)
+      metronomeTimerRef.current = null
+    }
+  }, [])
+
+  const playMusic = useCallback((ctx: AudioContext) => {
+    const buffer = bufferRef.current
+    if (!buffer) return
+    const source = ctx.createBufferSource()
+    source.buffer = buffer
+    source.connect(ctx.destination)
+    source.start()
+    musicSourceRef.current = source
+  }, [])
+
+  const startMetronome = useCallback(
+    (ctx: AudioContext) => {
+      stopMetronome()
+      const audioMgr = AudioManager.getInstance()
+      const latency = audioMgr.baseLatency + audioMgr.outputLatency
+      const lookaheadSec = LOOKAHEAD_MS / 1000
+      let beat = 0
+      let nextBeatTime = ctx.currentTime
+      metronomeTimerRef.current = window.setInterval(() => {
+        const timeline = timelineRef.current
+        if (!timeline) return
+        const audioCtx = audioMgr.ctx
+        while (nextBeatTime < audioCtx.currentTime + lookaheadSec) {
+          schedule(audioCtx, nextBeatTime, beat, latency)
+          nextBeatTime += timeline.beatMsAt(beat) / 1000
+          beat++
+        }
+      }, METRONOME_TICK_MS)
+    },
+    [stopMetronome],
+  )
+
+  const startGame = useCallback(async () => {
+    const audioMgr = AudioManager.getInstance()
+    await audioMgr.ensure()
+    const ctx = audioMgr.ctx
+    resetClock(ctx)
+    startedRef.current = true
+    playMusic(ctx)
+    startMetronome(ctx)
+  }, [playMusic, startMetronome])
+
+  const handleHit = useCallback(() => {
+    const audioMgr = AudioManager.getInstance()
+    try {
+      const songTimeMs = songNow(audioMgr.ctx)
+      const timeline = timelineRef.current
+      if (!timeline) return
+      const beatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
+      const judgement = judgeHit(songTimeMs, cursorRef.current.y, ringsRef.current, beatMs)
+      if (judgement) {
+        scoreRef.current.recordHit(judgement.result)
+      }
+    } catch {
+      // AudioContext not initialized yet
+    }
+  }, [])
+
+  const resetGame = useCallback(() => {
+    endedRef.current = false
+    stopMusic()
+    stopMetronome()
+    const audioMgr = AudioManager.getInstance()
+    try {
+      resetClock(audioMgr.ctx)
+    } catch {
+      // AudioContext not initialized yet
+    }
+    startedRef.current = false
+    keysRef.current.up = false
+    keysRef.current.down = false
+    cursorRef.current = new Cursor()
+    spawnerRef.current = new RingSpawner()
+    scoreRef.current = new ScoreManager()
+    ringsRef.current = []
+  }, [stopMusic, stopMetronome])
+
+  useEffect(() => {
+    let cancelled = false
+    const audioMgr = AudioManager.getInstance()
+
+    async function init() {
+      try {
+        const songs = await loadSongList()
+        const song = songs.find((s) => s.id === songId)
+        if (!song) {
+          throw new Error('譜面ファイルが見つかりません')
+        }
+        const chart = await loadChart(song.chartPath)
+        await audioMgr.ensure()
+        const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes)
+        chartRef.current = chart
+        timelineRef.current = timeline
+        waveRef.current = new WaveEngine(chart.segments, timeline)
+        bufferRef.current = await loadAudio(chart.audio, audioMgr.ctx)
+        if (!cancelled) {
+          setStatus('ready')
+        }
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : '譜面の読み込みに失敗しました')
+          setStatus('error')
+        }
+      }
+    }
+
+    void init()
+
+    return () => {
+      cancelled = true
+    }
+  }, [songId])
+
+  useEffect(() => {
+    if (status !== 'ready') return
+
+    const renderer = new Renderer()
+    let raf = 0
+    let lastTime = performance.now()
+
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - lastTime) / 1000)
+      lastTime = now
+
+      const canvas = canvasRef.current
+      const ctx2d = canvas?.getContext('2d')
+      const chart = chartRef.current
+      const timeline = timelineRef.current
+      const wave = waveRef.current
+      if (!canvas || !ctx2d || !chart || !timeline || !wave) {
+        raf = requestAnimationFrame(tick)
+        return
+      }
+
+      const audioMgr = AudioManager.getInstance()
+      let songTimeMs = 0
+      if (startedRef.current) {
+        try {
+          songTimeMs = songNow(audioMgr.ctx)
+        } catch {
+          songTimeMs = 0
+        }
+      }
+
+      ringsRef.current = spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
+
+      const currentBeatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
+      cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs)
+
+      for (const ring of ringsRef.current) {
+        if (ring.resolved) continue
+        const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
+        if (songTimeMs > ring.hitTime + windowMs) {
+          ring.resolved = true
+          scoreRef.current.recordHit('miss')
+        }
+      }
+
+      const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
+      scoreRef.current.recordTrace(dt, isOnWave)
+
+      renderer.render(ctx2d, {
+        waveEngine: wave,
+        cursor: cursorRef.current,
+        rings: ringsRef.current,
+        score: scoreRef.current,
+        songTimeMs,
+        bpmTimeline: timeline,
+      })
+
+      if (!endedRef.current && chart.rings.length > 0) {
+        const lastRing = chart.rings[chart.rings.length - 1]
+        const lastHitTime = timeline.beatToMs(lastRing.beat)
+        if (songTimeMs > lastHitTime + END_DELAY_MS) {
+          endedRef.current = true
+          stopMusic()
+          stopMetronome()
+          navigate('/result', { state: scoreRef.current.getStats() })
+          return
+        }
+      }
+
+      raf = requestAnimationFrame(tick)
+    }
+
+    raf = requestAnimationFrame(tick)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      stopMusic()
+      stopMetronome()
+    }
+  }, [status, navigate, stopMusic, stopMetronome])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        navigate('/')
+        return
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        resetGame()
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        keysRef.current.up = true
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        keysRef.current.down = true
+        return
+      }
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (statusRef.current !== 'ready') return
+        if (!startedRef.current) {
+          void startGame()
+        } else {
+          handleHit()
+        }
+      }
+    }
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowUp') keysRef.current.up = false
+      if (e.key === 'ArrowDown') keysRef.current.down = false
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [navigate, startGame, handleHit, resetGame])
+
+  return (
+    <div className="screen game-screen">
+      {status === 'loading' && <p className="game-status">譜面を読み込み中...</p>}
+      {status === 'error' && (
+        <div className="game-error">
+          <p>{error}</p>
+          <button onClick={() => navigate('/')}>曲選択に戻る</button>
+        </div>
+      )}
+      {status === 'ready' && (
+        <>
+          <canvas
+            ref={canvasRef}
+            width={CANVAS_WIDTH}
+            height={CANVAS_HEIGHT}
+            className="game-canvas"
+          />
+          <div className="game-hint">Space: 判定 / ↑↓: 移動 / R: リセット / ESC: 戻る</div>
+        </>
+      )}
+    </div>
+  )
 }
