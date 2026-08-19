@@ -56,41 +56,42 @@ DEV_PORT = 5173
 DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
 DEFAULT_BUDGET_MIN = 600
 
+# モデル定義カタログ (表示名, プロバイダ, モデルID)
 MODEL_CATALOG = {
-    "qwen38": ("Qwen3.8-27B (Cloudflare)", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
-    "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B (Cloudflare)", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
-    "deepseek_v4": ("DeepSeek V4 Flash Free (Zen)", "opencode/deepseek-v4-flash-free"),
-    "laguna_free": ("Laguna S 2.1 Free (Zen)", "opencode/laguna-s-2.1-free"),
-    "gemini_flash_lite": ("Gemini 3.5 Flash-Lite (Google)", "google/gemini-3.5-flash-lite"),
+    "qwen38": ("Qwen3.8-27B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
+    "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
+    "deepseek_v4": ("DeepSeek V4 Flash Free", "OpenCode Zen (Free)", "opencode/deepseek-v4-flash-free"),
+    "laguna_free": ("Laguna S 2.1 Free", "OpenCode Zen (Free)", "opencode/laguna-s-2.1-free"),
+    "gemini_flash_lite": ("Gemini 3.5 Flash-Lite", "Google AI Studio", "google/gemini-3.5-flash-lite"),
 }
 
 CODER_OPTIONS = [
-    ("qwen38", "Qwen3.8-27B (Rank 1: 高速・高精度 TypeScript コード生成)"),
-    ("deepseek_v4", "DeepSeek V4 Flash (Rank 2: 豊富なコード知識・MoE)"),
-    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B (Rank 3: 高度論理思考・長考型)"),
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (高速枠: 待ち時間最小)"),
-    ("laguna_free", "Laguna S 2.1 Free (高速枠: OpenCode Zen)"),
+    ("qwen38", "Qwen3.8-27B [Cloudflare] (Rank 1: 高速・高精度 TypeScript コード生成)"),
+    ("deepseek_v4", "DeepSeek V4 Flash [OpenCode Zen] (Rank 2: 豊富なコード知識・MoE)"),
+    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B [Cloudflare] (Rank 3: 高度論理思考・長考型)"),
+    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google] (高速枠: 待ち時間最小)"),
+    ("laguna_free", "Laguna S 2.1 Free [OpenCode Zen] (高速枠: 軽量コード生成)"),
 ]
 
 QA_OPTIONS = [
-    ("qwen38", "Qwen3.8-27B (Rank 1: ブラウザ自律操作・Playwright生成)"),
-    ("deepseek_v4", "DeepSeek V4 Flash (Rank 2: 論理的テストケース網羅)"),
-    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B (Rank 3: 高難度ロジック検証)"),
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (高速枠: 即時テスト生成)"),
-    ("laguna_free", "Laguna S 2.1 Free (高速枠: OpenCode Zen)"),
+    ("qwen38", "Qwen3.8-27B [Cloudflare] (Rank 1: ブラウザ自律操作・Playwright生成)"),
+    ("deepseek_v4", "DeepSeek V4 Flash [OpenCode Zen] (Rank 2: 論理的テストケース網羅)"),
+    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B [Cloudflare] (Rank 3: 高難度ロジック検証)"),
+    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google] (高速枠: 即時テスト生成)"),
+    ("laguna_free", "Laguna S 2.1 Free [OpenCode Zen] (高速枠)"),
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (Rank 1: マルチモーダル5連フレーム高速審査・クラウド最適解)"),
-    ("qwen38", "Qwen3.8-27B (Rank 2: 画像認識+思考推論)"),
+    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google] (Rank 1: マルチモーダル5連フレーム高速審査)"),
+    ("qwen38", "Qwen3.8-27B [Cloudflare] (Rank 2: 画像認識+思考推論)"),
 ]
 
 POSTMORTEM_OPTIONS = [
-    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B (Rank 1: 推論特化・根本原因究明)"),
-    ("qwen38", "Qwen3.8-27B (Rank 2: 最新TS仕様知識+熟考)"),
-    ("deepseek_v4", "DeepSeek V4 Flash (Rank 3: 長文ログ解析)"),
-    ("laguna_free", "Laguna S 2.1 Free (高速枠: OpenCode Zen)"),
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite (高速枠)"),
+    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B [Cloudflare] (Rank 1: 推論特化・根本原因究明)"),
+    ("qwen38", "Qwen3.8-27B [Cloudflare] (Rank 2: 最新TS仕様知識+熟考)"),
+    ("deepseek_v4", "DeepSeek V4 Flash [OpenCode Zen] (Rank 3: 長文ログ解析)"),
+    ("laguna_free", "Laguna S 2.1 Free [OpenCode Zen] (高速枠)"),
+    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google] (高速枠)"),
 ]
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
@@ -105,10 +106,10 @@ log = logging.getLogger("orchestrator")
 
 @dataclass
 class FlowModels:
-    coder: str = MODEL_CATALOG["qwen38"][1]
-    qa: str = MODEL_CATALOG["qwen38"][1]
-    reviewer: str = MODEL_CATALOG["gemini_flash_lite"][1]
-    postmortem: str = MODEL_CATALOG["deepseek_r1"][1]
+    coder: str = MODEL_CATALOG["qwen38"][2]
+    qa: str = MODEL_CATALOG["qwen38"][2]
+    reviewer: str = MODEL_CATALOG["gemini_flash_lite"][2]
+    postmortem: str = MODEL_CATALOG["deepseek_r1"][2]
 
 
 @dataclass
@@ -274,15 +275,22 @@ def perform_preflight_checks(models: FlowModels) -> bool:
     return True
 
 
+def get_model_display(model_id: str) -> str:
+    for _, (name, provider, mid) in MODEL_CATALOG.items():
+        if mid == model_id:
+            return f"{name} {GRAY}[{provider}]{RESET}"
+    return f"{model_id}"
+
+
 def interactive_model_selection() -> FlowModels:
     print("\n" + f"{INDIGO}{BOLD}TRACE WAVE // Autonomous Orchestrator{RESET}")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
     print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset{RESET} (Rank 1 Models)")
-    print(f"      {GRAY}├─ 1. Coder      :{RESET} {CYAN}Qwen3.8-27B{RESET}")
-    print(f"      {GRAY}├─ 2. QA Test    :{RESET} {CYAN}Qwen3.8-27B{RESET}")
-    print(f"      {GRAY}├─ 3. Reviewer   :{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
-    print(f"      {GRAY}└─ 4. Postmortem :{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
-    print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified)")
+    print(f"      {GRAY}├─ 1. Coder      :{RESET} {CYAN}Qwen3.8-27B{RESET} {GRAY}[Cloudflare Workers AI]{RESET}")
+    print(f"      {GRAY}├─ 2. QA Test    :{RESET} {CYAN}Qwen3.8-27B{RESET} {GRAY}[Cloudflare Workers AI]{RESET}")
+    print(f"      {GRAY}├─ 3. Reviewer   :{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET} {GRAY}[Google AI Studio]{RESET}")
+    print(f"      {GRAY}└─ 4. Postmortem :{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET} {GRAY}[Cloudflare Workers AI]{RESET}")
+    print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google AI Studio]{RESET}")
     print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
 
@@ -291,18 +299,18 @@ def interactive_model_selection() -> FlowModels:
     if choice == "" or choice == "1":
         print(f"{GREEN}>> Applied: Recommended Preset{RESET}")
         return FlowModels(
-            coder=MODEL_CATALOG["qwen38"][1],
-            qa=MODEL_CATALOG["qwen38"][1],
-            reviewer=MODEL_CATALOG["gemini_flash_lite"][1],
-            postmortem=MODEL_CATALOG["deepseek_r1"][1],
+            coder=MODEL_CATALOG["qwen38"][2],
+            qa=MODEL_CATALOG["qwen38"][2],
+            reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
+            postmortem=MODEL_CATALOG["deepseek_r1"][2],
         )
     elif choice == "2":
         print(f"{YELLOW}>> Applied: Ultra-Fast Preset (Gemini Unified){RESET}")
         return FlowModels(
-            coder=MODEL_CATALOG["gemini_flash_lite"][1],
-            qa=MODEL_CATALOG["gemini_flash_lite"][1],
-            reviewer=MODEL_CATALOG["gemini_flash_lite"][1],
-            postmortem=MODEL_CATALOG["gemini_flash_lite"][1],
+            coder=MODEL_CATALOG["gemini_flash_lite"][2],
+            qa=MODEL_CATALOG["gemini_flash_lite"][2],
+            reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
+            postmortem=MODEL_CATALOG["gemini_flash_lite"][2],
         )
 
     def select_one(title: str, options: list[tuple[str, str]], default_key: str) -> str:
@@ -312,14 +320,14 @@ def interactive_model_selection() -> FlowModels:
             print(f"  {BOLD}[{i}]{RESET} {desc}{mark}")
         ans = input(f"Enter choice [1-{len(options)}, default: Enter]: ").strip()
         if not ans:
-            return MODEL_CATALOG[default_key][1]
+            return MODEL_CATALOG[default_key][2]
         try:
             idx = int(ans) - 1
             if 0 <= idx < len(options):
-                return MODEL_CATALOG[options[idx][0]][1]
+                return MODEL_CATALOG[options[idx][0]][2]
         except Exception:
             pass
-        return MODEL_CATALOG[default_key][1]
+        return MODEL_CATALOG[default_key][2]
 
     coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "qwen38")
     qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "qwen38")
@@ -811,10 +819,10 @@ def main() -> None:
         models = interactive_model_selection()
 
     print(f"\n{GRAY}─── Active AI Configuration ────────────────────────────────────────{RESET}")
-    print(f"  {BOLD}1. Coder{RESET}      : {CYAN}{models.coder}{RESET}")
-    print(f"  {BOLD}2. QA Test{RESET}    : {CYAN}{models.qa}{RESET}")
-    print(f"  {BOLD}3. Reviewer{RESET}   : {CYAN}{models.reviewer}{RESET}")
-    print(f"  {BOLD}4. Postmortem{RESET} : {CYAN}{models.postmortem}{RESET}")
+    print(f"  {BOLD}1. Coder{RESET}      : {CYAN}{get_model_display(models.coder)}{RESET}")
+    print(f"  {BOLD}2. QA Test{RESET}    : {CYAN}{get_model_display(models.qa)}{RESET}")
+    print(f"  {BOLD}3. Reviewer{RESET}   : {CYAN}{get_model_display(models.reviewer)}{RESET}")
+    print(f"  {BOLD}4. Postmortem{RESET} : {CYAN}{get_model_display(models.postmortem)}{RESET}")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
 
     if not args.dry_run:
