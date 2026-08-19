@@ -1,4 +1,63 @@
 [0m
-> build · z-ai/glm-5.2
+> build · deepseek-v4-flash-free
 [0m
-[91m[1mError: [0mToo Many Requests: {"status":429,"title":"Too Many Requests"}
+[0m$ [0mls -la && ls public 2>/dev/null && ls src 2>/dev/null
+合計 340
+drwxrwxr-x  10 p-yoko p-yoko   4096  8月 19 09:49 .
+drwxrwxr-x   3 p-yoko p-yoko   4096  7月 11 15:42 ..
+drwxrwxr-x   8 p-yoko p-yoko   4096  8月 19 09:49 .git
+-rw-rw-r--   1 p-yoko p-yoko    394  8月 19 09:31 .gitignore
+-rw-rw-r--   1 p-yoko p-yoko  17430  8月 19 09:31 AGENTS.md
+-rw-rw-r--   1 p-yoko p-yoko   4699  8月 19 09:31 CLAUDE.md
+-rw-rw-r--   1 p-yoko p-yoko  27640  8月 19 09:31 DEVELOPMENT_LOG.md
+-rw-rw-r--   1 p-yoko p-yoko   1607  8月 19 09:30 README.md
+drwxrwxr-x   5 p-yoko p-yoko   4096  8月 19 09:46 docs
+-rw-rw-r--   1 p-yoko p-yoko    734  8月 19 09:30 eslint.config.js
+-rw-rw-r--   1 p-yoko p-yoko    650  8月 19 09:46 index.html
+drwxrwxr-x 131 p-yoko p-yoko   4096  8月 19 09:32 node_modules
+-rw-rw-r--   1 p-yoko p-yoko  62241  8月 19 09:31 orchestrator.log
+-rwxrwxr-x   1 p-yoko p-yoko  17084  8月 19 09:31 orchestrator.py
+drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 09:31 orchestrator_logs
+-rw-rw-r--   1 p-yoko p-yoko   1593  8月 19 09:49 orchestrator_state.json
+-rw-rw-r--   1 p-yoko p-yoko 110175  8月 19 09:32 package-lock.json
+-rw-rw-r--   1 p-yoko p-yoko    781  8月 19 09:32 package.json
+-rw-rw-r--   1 p-yoko p-yoko    168  8月 19 09:31 playwright.config.ts
+drwxrwxr-x   4 p-yoko p-yoko   4096  8月 19 09:31 public
+drwxrwxr-x   5 p-yoko p-yoko   4096  8月 19 09:49 src
+-rw-rw-r--   1 p-yoko p-yoko   8068  8月 19 09:31 tasks.json
+drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 09:49 test-results
+drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 09:31 tests
+-rw-rw-r--   1 p-yoko p-yoko    665  8月 19 09:30 tsconfig.app.json
+-rw-rw-r--   1 p-yoko p-yoko    119  8月 19 09:30 tsconfig.json
+-rw-rw-r--   1 p-yoko p-yoko    593  8月 19 09:30 tsconfig.node.json
+-rw-rw-r--   1 p-yoko p-yoko    233  8月 19 09:31 vite.config.ts
+audio
+charts
+songs.toml
+vite.svg
+App.tsx
+assets
+audio
+chart
+index.css
+main.tsx
+types.ts
+vite-env.d.ts
+[0m
+[0m→ [0mRead public/songs.toml
+[0m→ [0mRead src/chart
+[0m→ [0mRead src/types.ts
+[0m→ [0mRead src/chart/manifest.ts
+[0m→ [0mRead src/chart/loader.ts
+Both files already exist and match the spec. Let me verify the build is
+[0m
+[0m$ [0mnpx tsc --noEmit
+(no output)
+[0m
+タスクT41は既に実装済みで、仕様と一致しています。
+
+- `public/songs.toml`: 仕様どおりの曲マニフェスト形式（id/title/artist/chartPath/difficulty）
+- `src/chart/manifest.ts:34`: `loadSongList()` が `/rhythm_game/songs.toml` をfetch→smol-tomlでparseし `SongEntry[]` を返す。不足キーはデフォルト補完（artist="", difficulty=1）
+- `tsc --noEmit`: エラーなし
+
+DONE
