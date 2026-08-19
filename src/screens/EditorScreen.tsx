@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio } from '../audio/loader'
+import type { RingDef } from '../types'
+
+const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
 
 function formatSeconds(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -20,10 +23,19 @@ export default function EditorScreen() {
   const [positionMs, setPositionMs] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [snap, setSnap] = useState(0.25)
+  const [rings, setRings] = useState<RingDef[]>([])
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
   const startMsRef = useRef(0)
+  const positionRef = useRef(0)
+  const isPlayingRef = useRef(false)
+
+  const setPlaying = (v: boolean) => {
+    isPlayingRef.current = v
+    setIsPlaying(v)
+  }
 
   const safeBpm = bpm > 0 ? bpm : 120
   const timeline = useMemo(() => new BpmTimeline(safeBpm, []), [safeBpm])
@@ -41,9 +53,11 @@ export default function EditorScreen() {
           sourceRef.current = null
         }
         setPositionMs(buffer.duration * 1000)
-        setIsPlaying(false)
+        positionRef.current = buffer.duration * 1000
+        setPlaying(false)
       } else {
         setPositionMs(pos)
+        positionRef.current = pos
         raf = requestAnimationFrame(tick)
       }
     }
@@ -95,13 +109,13 @@ export default function EditorScreen() {
     src.onended = () => {
       if (sourceRef.current === src) {
         sourceRef.current = null
-        setIsPlaying(false)
+        setPlaying(false)
       }
     }
     sourceRef.current = src
     startCtxTimeRef.current = ctx.currentTime
     startMsRef.current = fromMs
-    setIsPlaying(true)
+    setPlaying(true)
     setError(null)
   }
 
@@ -110,7 +124,9 @@ export default function EditorScreen() {
     if (!src) return
     const ctx = AudioManager.getInstance().ctx
     const pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
-    setPositionMs(buffer ? Math.min(pos, buffer.duration * 1000) : pos)
+    const clamped = buffer ? Math.min(pos, buffer.duration * 1000) : pos
+    setPositionMs(clamped)
+    positionRef.current = clamped
     try {
       src.stop()
     } catch {
@@ -118,7 +134,7 @@ export default function EditorScreen() {
     }
     src.disconnect()
     sourceRef.current = null
-    setIsPlaying(false)
+    setPlaying(false)
   }
 
   const toggle = () => {
@@ -129,9 +145,30 @@ export default function EditorScreen() {
     }
   }
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      e.preventDefault()
+      if (!isPlayingRef.current) return
+      const rawBeat = timeline.msToBeat(positionRef.current)
+      const snapped = Math.round(rawBeat / snap) * snap
+      setRings((prev) => {
+        if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) return prev
+        return [...prev, { beat: snapped }]
+      })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [snap, timeline])
+
+  const removeRing = (index: number) => {
+    setRings((prev) => prev.filter((_, i) => i !== index))
+  }
+
   const seekTo = (ms: number) => {
     const clamped = Math.max(0, Math.min(ms, durationMs || ms))
     setPositionMs(clamped)
+    positionRef.current = clamped
     if (isPlaying) {
       void playFrom(clamped)
     }
@@ -207,8 +244,49 @@ export default function EditorScreen() {
         </aside>
 
         <main className="editor-main">
+          <section className="editor-pane">
+            <h2>リング録音</h2>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="snap">
+                スナップ
+              </label>
+              <select
+                id="snap"
+                className="editor-input"
+                value={snap}
+                onChange={(e) => setSnap(Number(e.target.value))}
+              >
+                {SNAP_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    1/{Math.round(1 / s)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="editor-hint">再生中に Space で現在のbeatをスタンプ</p>
+            {rings.length === 0 ? (
+              <p className="editor-empty">リングなし</p>
+            ) : (
+              <ul className="ring-list">
+                {rings.map((ring, i) => (
+                  <li key={`${i}-${ring.beat}`} className="ring-list-item">
+                    <span className="ring-list-beat">beat: {ring.beat.toFixed(2)}</span>
+                    <button
+                      type="button"
+                      className="ring-list-delete"
+                      onClick={() => removeRing(i)}
+                      aria-label={`beat ${ring.beat.toFixed(2)} を削除`}
+                    >
+                      削除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <div className="editor-timeline">
-            {/* TODO(T52/T53): リング録音・セグメントエディタ・タイムライン */}
+            {/* TODO(T53/T73): セグメントエディタ・タイムライン */}
           </div>
         </main>
       </div>
