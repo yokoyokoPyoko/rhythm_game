@@ -1,3 +1,5 @@
+import { getManualOffsetSec } from './clock';
+
 export const LOOKAHEAD_MS = 200;
 
 export function schedule(
@@ -10,7 +12,7 @@ export function schedule(
   const gain = audioCtx.createGain();
 
   const frequency = beat % 4 === 0 ? 880 : 440;
-  const startTime = nextBeatTime - latency;
+  const startTime = nextBeatTime + getManualOffsetSec() - latency;
   const duration = 0.03;
 
   osc.type = 'sine';

@@ -1,4 +1,59 @@
 [0m
-> build · z-ai/glm-5.2
+> build · deepseek-v4-flash-free
 [0m
-[91m[1mError: [0mToo Many Requests: {"status":429,"title":"Too Many Requests"}
+[0m$ [0mls -la src/audio/ 2>/dev/null; ls -la src/ 2>/dev/null
+合計 16
+drwxrwxr-x 2 p-yoko p-yoko 4096  8月 19 09:47 .
+drwxrwxr-x 4 p-yoko p-yoko 4096  8月 19 09:46 ..
+-rw-rw-r-- 1 p-yoko p-yoko  820  8月 19 09:46 AudioManager.ts
+-rw-rw-r-- 1 p-yoko p-yoko  704  8月 19 09:47 metronome.ts
+合計 36
+drwxrwxr-x  4 p-yoko p-yoko 4096  8月 19 09:46 .
+drwxrwxr-x 10 p-yoko p-yoko 4096  8月 19 09:47 ..
+-rw-rw-r--  1 p-yoko p-yoko  884  8月 19 09:46 App.tsx
+drwxrwxr-x  2 p-yoko p-yoko 4096  8月 19 09:30 assets
+drwxrwxr-x  2 p-yoko p-yoko 4096  8月 19 09:47 audio
+-rw-rw-r--  1 p-yoko p-yoko 1272  8月 19 09:46 index.css
+-rw-rw-r--  1 p-yoko p-yoko  230  8月 19 09:30 main.tsx
+-rw-rw-r--  1 p-yoko p-yoko  780  8月 19 09:45 types.ts
+-rw-rw-r--  1 p-yoko p-yoko   38  8月 19 09:30 vite-env.d.ts
+[0m
+[0m→ [0mRead src/audio/AudioManager.ts
+[0m→ [0mRead src/audio/metronome.ts
+[0m
+[0m← [0mWrite src/audio/clock.ts
+Wrote file successfully.
+[0m
+[0m✱ [0mGrep "metronome|schedule\("[90m in src · 1 match[0m
+[0m
+[0m← [0mEdit src/audio/metronome.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+@@ -1,4 +1,6 @@
++import { getManualOffsetSec } from './clock';
++
+ export const LOOKAHEAD_MS = 200;
+ 
+ export function schedule(
+   audioCtx: AudioContext,
+@@ -9,9 +11,9 @@
+   const osc = audioCtx.createOscillator();
+   const gain = audioCtx.createGain();
+ 
+   const frequency = beat % 4 === 0 ? 880 : 440;
+-  const startTime = nextBeatTime - latency;
++  const startTime = nextBeatTime + getManualOffsetSec() - latency;
+   const duration = 0.03;
+ 
+   osc.type = 'sine';
+   osc.frequency.value = frequency;
+
+[0m
+[0m$ [0mnpx tsc --noEmit
+(no output)
+[0m
+T12 実装完了。`src/audio/clock.ts` 作成、`metronome.ts` にオフセット加算を適用、`tsc --noEmit` エラーなし。
+
+DONE
