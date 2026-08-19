@@ -138,6 +138,50 @@ button:focus-visible {
   background-color: var(--accent);
 }
 
+.song-card-skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+.song-card-skeleton:hover {
+  transform: none;
+  border-color: var(--border);
+}
+
+.skeleton-block {
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.08);
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-title {
+  width: 70%;
+  height: 1.125rem;
+  margin-bottom: 0.25rem;
+}
+
+.skeleton-artist {
+  width: 45%;
+  height: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block {
+    animation: none;
+  }
+}
+
 .select-hint {
   margin-top: 2rem;
   text-align: center;

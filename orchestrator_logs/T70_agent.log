@@ -1,4 +1,245 @@
 [0m
-> build · z-ai/glm-5.2
+> build · deepseek-v4-flash-free
 [0m
-[91m[1mError: [0mToo Many Requests: {"status":429,"title":"Too Many Requests"}
+[0m$ [0mls -la && ls src src/screens 2>/dev/null
+合計 348
+drwxrwxr-x  11 p-yoko p-yoko   4096  8月 19 10:47 .
+drwxrwxr-x   3 p-yoko p-yoko   4096  7月 11 15:42 ..
+drwxrwxr-x   8 p-yoko p-yoko   4096  8月 19 10:47 .git
+-rw-rw-r--   1 p-yoko p-yoko    394  8月 19 09:31 .gitignore
+drwxrwxr-x   3 p-yoko p-yoko   4096  8月 19 10:41 .opencode
+-rw-rw-r--   1 p-yoko p-yoko  17430  8月 19 09:31 AGENTS.md
+-rw-rw-r--   1 p-yoko p-yoko   4699  8月 19 09:31 CLAUDE.md
+-rw-rw-r--   1 p-yoko p-yoko  27640  8月 19 09:31 DEVELOPMENT_LOG.md
+-rw-rw-r--   1 p-yoko p-yoko   1607  8月 19 09:30 README.md
+drwxrwxr-x   5 p-yoko p-yoko   4096  8月 19 10:45 docs
+-rw-rw-r--   1 p-yoko p-yoko    734  8月 19 09:30 eslint.config.js
+-rw-rw-r--   1 p-yoko p-yoko    650  8月 19 09:46 index.html
+drwxrwxr-x 131 p-yoko p-yoko   4096  8月 19 09:32 node_modules
+-rw-rw-r--   1 p-yoko p-yoko  62241  8月 19 09:31 orchestrator.log
+-rwxrwxr-x   1 p-yoko p-yoko  17084  8月 19 09:31 orchestrator.py
+drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 10:41 orchestrator_logs
+-rw-rw-r--   1 p-yoko p-yoko   4684  8月 19 10:47 orchestrator_state.json
+-rw-rw-r--   1 p-yoko p-yoko 110175  8月 19 09:32 package-lock.json
+-rw-rw-r--   1 p-yoko p-yoko    781  8月 19 09:32 package.json
+-rw-rw-r--   1 p-yoko p-yoko    168  8月 19 09:31 playwright.config.ts
+drwxrwxr-x   4 p-yoko p-yoko   4096  8月 19 09:31 public
+drwxrwxr-x   7 p-yoko p-yoko   4096  8月 19 10:01 src
+-rw-rw-r--   1 p-yoko p-yoko   8068  8月 19 09:31 tasks.json
+drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 10:47 test-results
+drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 10:16 tests
+-rw-rw-r--   1 p-yoko p-yoko    665  8月 19 09:30 tsconfig.app.json
+-rw-rw-r--   1 p-yoko p-yoko    119  8月 19 09:30 tsconfig.json
+-rw-rw-r--   1 p-yoko p-yoko    593  8月 19 09:30 tsconfig.node.json
+-rw-rw-r--   1 p-yoko p-yoko    233  8月 19 09:31 vite.config.ts
+src:
+App.tsx
+assets
+audio
+chart
+game
+index.css
+main.tsx
+screens
+types.ts
+vite-env.d.ts
+
+src/screens:
+CalibrationScreen.tsx
+EditorScreen.tsx
+GameScreen.tsx
+ResultScreen.tsx
+SelectScreen.tsx
+editor
+[0m
+[0m→ [0mRead src/screens/SelectScreen.tsx
+[0m→ [0mRead src/index.css
+[0m→ [0mRead src/chart/manifest.ts
+Current SelectScreen already has border, difficulty dots, and hover. The missing piece is the skeleton loading state. Let me add it.
+[0m
+[0m← [0mEdit src/screens/SelectScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
+@@ -3,19 +3,25 @@
+ import { loadSongList } from '../chart/manifest'
+ import type { SongEntry } from '../types'
+ 
+ const MAX_DIFFICULTY = 5
++const SKELETON_COUNT = 4
+ 
+ export default function SelectScreen() {
+   const navigate = useNavigate()
+   const [songs, setSongs] = useState<SongEntry[]>([])
++  const [loading, setLoading] = useState(true)
+   const [error, setError] = useState<string | null>(null)
+ 
+   useEffect(() => {
+     loadSongList()
+-      .then(setSongs)
++      .then((list) => {
++        setSongs(list)
++        setLoading(false)
++      })
+       .catch((e: unknown) => {
+         setError(e instanceof Error ? e.message : '曲リストの読み込みに失敗しました')
++        setLoading(false)
+       })
+   }, [])
+ 
+   useEffect(() => {
+
+[0m
+[0m← [0mEdit src/screens/SelectScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
+@@ -42,8 +42,22 @@
+ </header>
+ 
+ {error ? (
+   <p className="select-error">{error}</p>
++) : loading ? (
++  <div className="song-grid" aria-busy="true" aria-label="読み込み中">
++    {Array.from({ length: SKELETON_COUNT }, (_, i) => (
++      <div key={i} className="song-card song-card-skeleton">
++        <div className="skeleton-block skeleton-title" />
++        <div className="skeleton-block skeleton-artist" />
++        <div className="song-card-difficulty">
++          {Array.from({ length: MAX_DIFFICULTY }, (_, i) => (
++            <span key={i} className="difficulty-dot" />
++          ))}
++        </div>
++      </div>
++    ))}
++  </div>
+ ) : (
+   <div className="song-grid">
+     {songs.map((song) => (
+       <button
+
+[0m
+[0m← [0mEdit src/index.css
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
+@@ -137,8 +137,52 @@
+ .difficulty-dot.filled {
+   background-color: var(--accent);
+ }
+ 
++.song-card-skeleton {
++  cursor: default;
++  pointer-events: none;
++}
++
++.song-card-skeleton:hover {
++  transform: none;
++  border-color: var(--border);
++}
++
++.skeleton-block {
++  border-radius: 4px;
++  background-color: rgba(255, 255, 255, 0.08);
++  animation: skeleton-pulse 1.2s ease-in-out infinite;
++}
++
++.skeleton-title {
++  width: 70%;
++  height: 1.125rem;
++  margin-bottom: 0.25rem;
++}
++
++.skeleton-artist {
++  width: 45%;
++  height: 0.875rem;
++  margin-bottom: 1rem;
++}
++
++@keyframes skeleton-pulse {
++  0%,
++  100% {
++    opacity: 1;
++  }
++  50% {
++    opacity: 0.45;
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .skeleton-block {
++    animation: none;
++  }
++}
++
+ .select-hint {
+   margin-top: 2rem;
+   text-align: center;
+   color: var(--text-muted);
+
+[0m
+Now add the skeleton styles to CSS:
+[0m$ [0mnpx tsc --noEmit
+(no output)
+[0m
+[0m$ [0mnpm run lint 2>&1 | tail -5
+/home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+  287:6  warning  React Hook useEffect has a missing dependency: 'songId'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+✖ 1 problem (0 errors, 1 warning)
+[0m
+Lint has 0 errors (the warning is pre-existing, unrelated to T70). Typecheck passes. Let me verify the build:
+[0m$ [0mnpm run build 2>&1 | tail -8
+> rhythm_game@0.0.0 build
+> tsc -b && vite build
+
+src/screens/GameScreen.tsx(319,9): error TS2322: Type 'boolean' is not assignable to type '() => boolean'.
+src/screens/GameScreen.tsx(335,13): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+[0m
+There are pre-existing build errors in GameScreen.tsx. Rule 4 requires fixing before proceeding.
+[0m→ [0mRead src/screens/GameScreen.tsx[90m [offset=300, limit=50][0m
+[0m✱ [0mGrep "keySoundOnRef"[90m in src/screens/GameScreen.tsx · 4 matches[0m
+[0m→ [0mRead src/screens/GameScreen.tsx[90m [limit=80, offset=1][0m
+[0m→ [0mRead src/audio/keySound.ts
+[0m
+[0m← [0mEdit src/screens/GameScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+@@ -52,9 +52,9 @@
+ const [error, setError] = useState<string | null>(null)
+ const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
+ const [keySoundOn, setKeySoundOn] = useState(isKeySoundEnabled)
+ const statusRef = useRef<LoadStatus>('loading')
+-const keySoundOnRef = useRef(isKeySoundEnabled)
++const keySoundOnRef = useRef(isKeySoundEnabled())
+ const onExitRef = useRef(onExit)
+ 
+ useEffect(() => {
+   statusRef.current = status
+
+[0m
+Found it: `useRef(isKeySoundEnabled)` stores the function itself since `useRef` doesn't call initializers, unlike `useState
+[0m$ [0mnpm run build 2>&1 | tail -8 && npx tsc --noEmit && echo OK
+transforming...
+[32m✓[39m 72 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdocs/[22m[32mindex.html                 [39m[1m[2m  0.77 kB[22m[1m[22m[2m │ gzip:  0.44 kB[22m
+[2mdocs/[22m[2massets/[22m[35mindex-BhuU0JJg.css  [39m[1m[2m  9.69 kB[22m[1m[22m[2m │ gzip:  2.24 kB[22m
+[2mdocs/[22m[2massets/[22m[36mindex-24osL7oy.js   [39m[1m[2m231.65 kB[22m[1m[22m[2m │ gzip: 74.00 kB[22m
+[32m✓ built in 692ms[39m
+OK
+[0m
+Build passes. T70 complete.
+
+- カードに `border: 1px solid var(--border)` — 既存 (SelectScreen.tsx:102)
+- 難易度ドット5個 — 既存 (SelectScreen.tsx:124)
+- ローディング時スケルトン表示 — 追加 (`loading` state + skeleton cards + pulse animation in index.css)
+- 既存のビルドエラー `useRef(isKeySoundEnabled)` → `useRef(isKeySoundEnabled())` を修正
+
+DONE
