@@ -245,7 +245,7 @@ export default function GameScreen() {
           endedRef.current = true
           stopMusic()
           stopMetronome()
-          navigate('/result', { state: scoreRef.current.getStats() })
+          navigate('/result', { state: { stats: scoreRef.current.getStats(), songId } })
           return
         }
       }
