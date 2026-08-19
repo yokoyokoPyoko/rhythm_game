@@ -947,3 +947,10 @@
 2026-08-19 17:20:27,924 [INFO] 🤖 [DeepSeek-Coder(T54)] 実行開始 (model=opencode/deepseek-v4-flash-free, 試行 2/5, タイムアウト=300秒)
 2026-08-19 17:20:57,094 [INFO] 🔍 [Gate A] TypeScript 静的型チェック実行中...
 2026-08-19 17:20:57,932 [INFO] ✅ [T54] Gate A (tsc) PASS
+2026-08-19 17:20:57,945 [INFO] 🧪 [Gate B] Kimi による動的テストコード生成開始...
+2026-08-19 17:20:57,946 [INFO] ⏳ [RateLimit] Kimiモデルのため 21秒 待機中...
+2026-08-19 17:21:18,946 [INFO] 🤖 [Kimi-QA-Gen] 実行開始 (model=moonshotai/kimi-k2.7-code, 試行 1/5, タイムアウト=120秒)
+2026-08-19 17:22:30,771 [WARNING] ⚠️ Kimi からテストコードを抽出できなかったため、フォールバックテストを実行します
+2026-08-19 17:22:30,771 [INFO] 📝 tests/dynamic.spec.ts を生成しました (Playwright実機テスト実行開始)
+2026-08-19 17:22:36,100 [INFO] 📸 5連フレーム撮影成功: frame_1.png, frame_2.png, frame_3.png, frame_4.png, frame_5.png
+2026-08-19 17:22:36,101 [INFO] ✅ [T54] Gate B (Dynamic Test) PASS
