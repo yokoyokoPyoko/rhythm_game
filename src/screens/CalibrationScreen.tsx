@@ -18,7 +18,7 @@ export default function CalibrationScreen() {
   const samplesRef = useRef<number[]>([])
   const startedRef = useRef(false)
   const [taps, setTaps] = useState(0)
-  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
+  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
   const [done, setDone] = useState(false)
 
   const stopMetronome = useCallback(() => {
