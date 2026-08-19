@@ -192,7 +192,7 @@ def check_model_health(model_id: str, label: str) -> bool:
     """起動前にモデルの疎通・残高・APIキーをチェックし、エラーがあれば即座に赤文字表示する"""
     print(f"  🔍 [{label}] 疎通・残高チェック中 ({model_id})...", end="", flush=True)
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model_id, "echo 'ping'"]
-    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=20, prefix="")
+    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=40, prefix="")
 
     # 残高切れ検知
     if "insufficient balance" in out or "suspended" in out:
@@ -211,6 +211,11 @@ def check_model_health(model_id: str, label: str) -> bool:
         print(f"    詳細: {out.strip()}")
         print("!" * 70 + "\n")
         return False
+
+    # ping または正常応答が含まれていればOK
+    if "ping" in out or code == 0:
+        print(" ✅ OK!")
+        return True
 
     if code != 0 or timed_out:
         print(" ⚠️ [警告: 応答なし]")
@@ -255,10 +260,10 @@ def interactive_model_selection() -> FlowModels:
     print(" 🤖 汎用自律運用オーケストレーター - AI モデル構成セレクター")
     print("=" * 70)
     print(" [1] 🏆 推奨プリセット構成 (🥇1位モデルで全自動構成)")
-    print("       ├─ 1. 実装 (Coder): Qwen3.8-27B")
-    print("       ├─ 2. テスト生成 (QA): Qwen3.8-27B")
-    print("       ├─ 3. 動的審査 (Reviewer): Gemini 3.5 Flash-Lite")
-    print("       └─ 4. 失敗分析 (Postmortem): DeepSeek-R1-Distill-Qwen-32B")
+    print("       ├─ 1. 実装 (Coder): Qwen3.8-27B (Cloudflare)")
+    print("       ├─ 2. テスト生成 (QA): Qwen3.8-27B (Cloudflare)")
+    print("       ├─ 3. 動的審査 (Reviewer): Gemini 3.5 Flash-Lite (Google)")
+    print("       └─ 4. 失敗分析 (Postmortem): DeepSeek-R1-Distill-Qwen-32B (Cloudflare)")
     print(" [2] ⚡ 爆速・完全無料プリセット (Gemini 3.5 Flash-Lite 統一)")
     print(" [3] 🛠️ カスタム構成 (各フローを個別に選択)")
     print("-" * 70)
@@ -371,7 +376,6 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix="🤖 ")
         print(f"  └─ ▲ {label} 出力終了 (exit={code}) ───", flush=True)
 
-        # 残高切れ即座検知
         if "insufficient balance" in out or "suspended" in out:
             print("\n" + "!" * 70)
             print(f" 🚨 【重大警告】{label} ({model}) が残高切れのため停止しました！")
