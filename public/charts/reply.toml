@@ -1,0 +1,22 @@
+title = "Reply"
+artist = ""
+bpm = 120
+audio = "/rhythm_game/audio/08.Reply.flac"
+
+[[bpm_changes]]
+beat = 64
+bpm = 150
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
