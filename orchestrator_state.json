@@ -206,9 +206,15 @@
       "finished": 1787104301.088451
     },
     "T72": {
+      "attempts": 1,
+      "status": "passed",
+      "started": 1787104301.08917,
+      "finished": 1787104816.386919
+    },
+    "T73": {
       "attempts": 0,
       "status": "running",
-      "started": 1787104301.08917
+      "started": 1787104816.3872795
     }
   },
   "consecutive_failures": 0
