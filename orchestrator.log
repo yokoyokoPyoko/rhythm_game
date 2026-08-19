@@ -1310,3 +1310,10 @@
 2026-08-19 19:14:18,512 [ERROR] ❌ リトライ上限に達しました
 2026-08-19 19:14:18,512 [INFO] 🔍 [Gate A] TypeScript 静的型チェック実行中...
 2026-08-19 19:14:19,406 [INFO] ✅ [T61] Gate A (tsc) PASS
+2026-08-19 19:14:19,423 [INFO] 🧪 [Gate B] Kimi による動的テストコード生成開始...
+2026-08-19 19:14:19,423 [INFO] ⏳ [RateLimit] Kimiモデルのため 21秒 待機中...
+2026-08-19 19:14:40,423 [INFO] 🤖 [Kimi-QA-Gen] 実行開始 (model=moonshotai/kimi-k2.7-code, 試行 1/5, タイムアウト=120秒)
+2026-08-19 19:15:53,575 [WARNING] ⚠️ Kimi からテストコードを抽出できなかったため、フォールバックテストを実行します
+2026-08-19 19:15:53,575 [INFO] 📝 tests/dynamic.spec.ts を生成しました (Playwright実機テスト実行開始)
+2026-08-19 19:16:00,369 [INFO] 📸 5連フレーム撮影成功: frame_1.png, frame_2.png, frame_3.png, frame_4.png, frame_5.png
+2026-08-19 19:16:00,369 [INFO] ✅ [T61] Gate B (Dynamic Test) PASS
