@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio } from '../audio/loader'
-import type { BpmChange, RingDef, Segment } from '../types'
+import { chartToToml } from '../chart/serialize'
+import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
 import WavePreview from './editor/WavePreview'
@@ -179,6 +180,26 @@ export default function EditorScreen() {
     }
   }
 
+  const exportChart = () => {
+    // TODO: title / artist の編集UI（現在は固定値）
+    const chart: Chart = {
+      title: 'Reply',
+      artist: '',
+      bpm: safeBpm,
+      audio: url,
+      bpm_changes: bpmChanges,
+      segments,
+      rings,
+    }
+    const toml = chartToToml(chart)
+    const blob = new Blob([toml], { type: 'text/toml' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = 'reply.toml'
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
+
   return (
     <div className="editor-screen">
       <header className="editor-header">
@@ -237,6 +258,16 @@ export default function EditorScreen() {
               bpmChanges={bpmChanges}
               onBpmChangesChange={setBpmChanges}
             />
+          </section>
+
+          <section className="editor-pane">
+            <h2>エクスポート</h2>
+            <div className="editor-controls">
+              <button type="button" onClick={exportChart}>
+                エクスポート
+              </button>
+            </div>
+            <p className="editor-hint">現在の状態をTOMLとして reply.toml に書き出し</p>
           </section>
         </aside>
 
