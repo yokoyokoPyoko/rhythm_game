@@ -220,8 +220,10 @@ def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = 
 
 def check_model_health(model_id: str, label: str) -> bool:
     print(f"  {CYAN}Checking{RESET} {BOLD}{label}{RESET} ({GRAY}{model_id}{RESET})... ", end="", flush=True)
+    # 推論モデル（R1系）は初回レスポンスが遅いためタイムアウトを延長
+    timeout = 90 if "r1" in model_id.lower() or "reasoning" in model_id.lower() else 40
     cmd = ["opencode", "run", "--auto", "--format", "default", "-m", model_id, "Say hello"]
-    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=40, prefix="")
+    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix="")
 
     if "insufficient balance" in out or "suspended" in out or "payment required" in out.lower() or "depleted your monthly included credits" in out.lower():
         print(f"{RED}[FAILED: Credits Depleted / Payment Required]{RESET}")
