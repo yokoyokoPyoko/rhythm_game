@@ -1,4 +1,6 @@
 const OFFSET_KEY = 'rhythmManualOffsetMs';
+const OFFSET_MIN_MS = -2000;
+const OFFSET_MAX_MS = 2000;
 
 let audioStartTime: number | null = null;
 
@@ -6,11 +8,13 @@ export function songNow(audioCtx: AudioContext): number {
   if (audioStartTime === null) {
     return 0;
   }
-  return (audioCtx.currentTime - audioStartTime) * 1000;
+  const elapsed = (audioCtx.currentTime - audioStartTime) * 1000;
+  return Number.isFinite(elapsed) ? elapsed : 0;
 }
 
 export function resetClock(audioCtx: AudioContext): void {
-  audioStartTime = audioCtx.currentTime;
+  const now = audioCtx.currentTime;
+  audioStartTime = Number.isFinite(now) ? now : 0;
 }
 
 export function getManualOffsetMs(): number {
@@ -19,13 +23,24 @@ export function getManualOffsetMs(): number {
     return 0;
   }
   const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return clampOffset(parsed);
 }
 
 export function setManualOffset(ms: number): void {
-  localStorage.setItem(OFFSET_KEY, String(ms));
+  const parsed = Number(ms);
+  const clamped = Number.isFinite(parsed) ? clampOffset(parsed) : 0;
+  localStorage.setItem(OFFSET_KEY, String(clamped));
 }
 
 export function getManualOffsetSec(): number {
   return getManualOffsetMs() / 1000;
+}
+
+function clampOffset(ms: number): number {
+  if (ms < OFFSET_MIN_MS) return OFFSET_MIN_MS;
+  if (ms > OFFSET_MAX_MS) return OFFSET_MAX_MS;
+  return ms;
 }
