@@ -624,57 +624,49 @@ test('dynamic video test', async ({ page }) => {
     return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(extracted_frames)} frames extracted)")
 
 
+def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int = 90) -> tuple[int, str]:
+    cmd = ["llm", "-m", "gemini-3.5-flash-lite", "-a", str(video_path), prompt]
+    log.info("Dispatching Video Review via Simon Willison's llm CLI (model=gemini-3.5-flash-lite, video=%s)...", video_path.name)
+    print(f"  {GRAY}┌─ Start: llm CLI Video Review ──────────────────────────────{RESET}", flush=True)
+    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
+    print(f"  {GRAY}└─ End: llm CLI Video Review (exit={code}) ────────────────────────{RESET}", flush=True)
+    return code, out
+
+
 def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} is non-UI -> Skip")
 
-    all_frames = sorted(list(SCREENSHOT_DIR.glob("frame_*.png")), key=lambda p: p.stat().st_mtime)
-    # 代表的な 5 フレームを選択 (最初, 1/4, 2/4, 3/4, 最後)
-    selected_frames: list[Path] = []
-    if all_frames:
-        n = len(all_frames)
-        indices = [0, n // 4, n // 2, (3 * n) // 4, n - 1]
-        seen_idx = set()
-        for idx in indices:
-            if idx < n and idx not in seen_idx:
-                seen_idx.add(idx)
-                selected_frames.append(all_frames[idx])
+    videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
+    if not videos:
+        log.error("No gameplay video recording (.webm) found for Gate C.")
+        return GateResult("Gate C (Dynamic Review)", False, "No gameplay video recorded")
 
-    frame_rel_paths = [str(f.relative_to(ROOT)) for f in selected_frames]
+    latest_video = videos[-1]
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""You are the Dynamic Visual Reviewer inspecting actual browser gameplay frame images for task {task.id} ({task.desc}).
-
-Attached Images:
-{', '.join(frame_rel_paths) if frame_rel_paths else 'No frames captured (Automatic 0pts)'}
+    prompt = f"""You are the Dynamic Video Reviewer inspecting the browser gameplay video recording for task {task.id} ({task.desc}).
 
 Specification:
 {spec}
 
-STRICT VISUAL INSPECTION RULES:
-1. You MUST directly inspect the attached image files ({', '.join(frame_rel_paths)}). Do NOT just read source code files.
-2. If the screen is completely blank/white/black, or if the Canvas wave line / rings / text are missing, award 0-40 points (FAIL).
-3. If minimal dark UI, smooth waveform line, rings, and HUD score/combo are properly rendered on screen, award 80-100 points (PASS).
+STRICT VIDEO INSPECTION RULES:
+1. Inspect the attached gameplay video directly. Observe real-time animations, canvas rendering, timing, transitions, and minimal dark UI.
+2. If the screen is blank/white/broken, canvas waveform or rings are missing, or transitions fail, award 0-50 points (FAIL).
+3. If minimal dark UI, smooth waveform line, rings, HUD score/combo, and expected interactions are rendered properly in the video, award 80-100 points (PASS).
 
 Evaluation Criteria (20pts each, pass >= 80pts):
-1. Canvas waveform line rendered properly (accent line)
-2. Ring elements positioned & visible
+1. Canvas waveform line & cursor animations smooth without glitch
+2. Ring elements visible, correctly moving and timing synced
 3. Minimal dark Linear/Vercel styling consistency
-4. Score / Combo / Status HUD rendered without overlap
-5. Task UI completeness & no blank error screens
+4. Score / Combo / Status HUD rendered cleanly
+5. Task specification completeness & correct scene transitions
 
 Output JSON only:
-{{"score": 85, "verdict": "PASS", "comment": "detailed reason based on attached image frames"}} or {{"score": 40, "verdict": "FAIL", "comment": "reason based on attached image frames"}}
+{{"score": 85, "verdict": "PASS", "comment": "detailed review reasoning based on the gameplay video"}} or {{"score": 45, "verdict": "FAIL", "comment": "specific failure reason seen in the video"}}
 """
-    log.info("Reviewer (Gemini Multimodal AI) evaluating attached frames (%s)...", ", ".join(frame_rel_paths))
-    code, out = run_opencode_with_retry(
-        reviewer_model,
-        prompt,
-        timeout=90,
-        label="Dynamic-Review",
-        variant="medium",
-        files=frame_rel_paths if frame_rel_paths else None,
-    )
+    log.info("Reviewer (Gemini Video AI via llm CLI) analyzing video: %s...", latest_video.name)
+    code, out = run_llm_cli_video_review(latest_video, prompt, timeout=90)
     
     if code != 0:
         log.error("Reviewer model failed/timed out. Rejecting Gate C.")
