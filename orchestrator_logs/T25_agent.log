@@ -1,64 +1,29 @@
 [0m
 > build · hy3-free
 [0m
-[0m→ [0mRead src/types.ts
 [0m→ [0mRead src/game/waveEngine.ts
 [0m→ [0mRead src/game/cursor.ts
 [0m→ [0mRead src/game/ringSpawner.ts
 [0m→ [0mRead src/game/score.ts
+[0m→ [0mRead src/types.ts
+I'll check the existing game files to understand the interfaces I need to work with.
 [0m→ [0mRead src/audio/bpmTimeline.ts
-[0m→ [0mRead src/index.css
-[0m
-[0m$ [0mgrep -rn "canvas\|width\|height\|Canvas\|game-canvas" /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx 2>/dev/null | head -30
-37:  const canvasRef = useRef<HTMLCanvasElement>(null)
-229:      const canvas = canvasRef.current
-230:      const ctx2d = canvas?.getContext('2d')
-234:      if (!canvas || !ctx2d || !chart || !timeline || !wave) {
-385:          <canvas
-386:            ref={canvasRef}
-387:            width={CANVAS_WIDTH}
-388:            height={CANVAS_HEIGHT}
-389:            className="game-canvas"
-[0m
-[0m$ [0mgrep -rn "CANVAS_WIDTH\|CANVAS_HEIGHT" /home/p-yoko/Program/TypeScript/rhythm_game/src/ 2>/dev/null
-/home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx:19:const CANVAS_WIDTH = 800
-/home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx:20:const CANVAS_HEIGHT = 600
-/home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx:387:            width={CANVAS_WIDTH}
-/home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx:388:            height={CANVAS_HEIGHT}
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:7:const CANVAS_WIDTH = 800;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:8:const CANVAS_HEIGHT = 600;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:80:    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:88:    ctx.lineTo(TW_JUDGE_X, CANVAS_HEIGHT);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:97:    for (let x = 0; x <= CANVAS_WIDTH; x += 4) {
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:99:      const y = safe(waveEngine.waveYAtMs(timeMs), CANVAS_HEIGHT / 2);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:108:    const judgeY = safe(waveEngine.waveYAtMs(songTimeMs), CANVAS_HEIGHT / 2);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:118:      if (x < -80 || x > CANVAS_WIDTH + 80) {
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:129:      ctx.arc(x, safe(ring.targetY, CANVAS_HEIGHT / 2), radius, 0, Math.PI * 2);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:136:    const y = safe(cursor.y, CANVAS_HEIGHT / 2);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:197:      ctx.fillText(label, TW_JUDGE_X, safe(e.y, CANVAS_HEIGHT / 2) - 40 - age * 0.03);
-[0m
+[0m✱ [0mGrep "TW_JUDGE_X|TW_CENTER_Y|TW_AMP|TW_SCROLL"[90m 22 matches[0m
 [0m→ [0mRead src/game/renderer.ts
+A renderer.ts already exists. Let me read it.
+The renderer already exists and matches the spec. Let me verify it compiles cleanly.
 [0m
-[0m$ [0mgrep -n "renderer\|Renderer\|judgementEvents\|render(" /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
-13:import { Renderer, type JudgementEvent } from '../game/renderer'
-45:  const judgementEventsRef = useRef<JudgementEvent[]>([])
-139:        judgementEventsRef.current.push({
-167:    judgementEventsRef.current = []
-214:    const renderer = new Renderer()
-260:          judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: ring.hitTime + windowMs })
-264:      judgementEventsRef.current = judgementEventsRef.current.filter(
-271:      renderer.render(ctx2d, {
-278:        judgementEvents: judgementEventsRef.current,
-[0m
-The renderer already exists and implements the spec. Let me verify it compiles and check how GameScreen uses it.
-[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -30
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -30
 (no output)
 [0m
-`tsc --noEmit` passes with zero errors. The `Renderer` class already exists in `src/game/renderer.ts` and fully implements the T25 spec:
-- Draw order: background → judge line → wave → rings → cursor → HUD (plus judgement events, used by GameScreen)
-- Wave: accent color, 2.5px line width
-- Cursor: tier colors (accent→sub→positive→warning) by combo
-- Rings: radius scales 64→14px on approach
-- Background: `#0a0a0a` only, minimal decoration
+The `src/game/renderer.ts` already fully implements T25 and compiles with zero errors:
+- `Renderer` class with `render(ctx, params)` accepting all required engines/states
+- Draw order: background → judge line → wave → rings → cursor → HUD (judgements as HUD overlay)
+- Wave drawn in accent color at 2.5px line width
+- Cursor color by combo tier (accent→sub→positive→warning)
+- Rings scale from 64px down to 14px
+- Background `#0a0a0a` only
+
+`tsc --noEmit` passes clean.
 
 DONE

@@ -87,9 +87,9 @@
     },
     "T23": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1787206256.1297152,
-      "finished": 1787203248.4094925
+      "finished": 1787206289.157955
     },
     "T24": {
       "attempts": 1,
@@ -99,8 +99,8 @@
     },
     "T25": {
       "attempts": 1,
-      "status": "pending",
-      "started": 1787203707.7834835,
+      "status": "running",
+      "started": 1787206289.1586857,
       "finished": 1787101294.3571143
     },
     "T30": {
