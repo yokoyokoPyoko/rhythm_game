@@ -58,24 +58,26 @@ DEFAULT_BUDGET_MIN = 600
 
 # モデル定義カタログ (表示名, プロバイダ, モデルID)
 MODEL_CATALOG = {
-    "qwen38": ("Qwen3.8-27B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
+    "qwen38_cf": ("Qwen3.8-27B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
+    "qwen38_hf": ("Qwen3.8-27B", "Hugging Face", "huggingface/Qwen/Qwen3.8-2.4T-A95B"),
     "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
-    "deepseek_v4": ("DeepSeek V4 Flash Free", "OpenCode Zen (Free)", "opencode/deepseek-v4-flash-free"),
+    "deepseek_v4_zen": ("DeepSeek V4 Flash", "OpenCode Zen (Free)", "opencode/deepseek-v4-flash-free"),
+    "deepseek_v4_hf": ("DeepSeek V4 Flash", "Hugging Face", "huggingface/deepseek-ai/DeepSeek-V4-Flash"),
     "laguna_free": ("Laguna S 2.1 Free", "OpenCode Zen (Free)", "opencode/laguna-s-2.1-free"),
     "gemini_flash_lite": ("Gemini 3.5 Flash-Lite", "Google AI Studio", "google/gemini-3.5-flash-lite"),
 }
 
 CODER_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: 高速・高精度 TypeScript コード生成"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 豊富なコード知識・MoE"),
+    ("qwen38", "Qwen3.8-27B", "Rank 1: 高速・高精度 TypeScript コード生成 [プロバイダ選択]"),
+    ("deepseek_v4", "DeepSeek V4 Flash", "Rank 2: 豊富なコード知識・MoE [プロバイダ選択]"),
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高度論理思考・長考型"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
     ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "自律枠: 完全無料・自律コード生成"),
 ]
 
 QA_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・Playwright生成"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 論理的テストケース網羅"),
+    ("qwen38", "Qwen3.8-27B", "Rank 1: ブラウザ自律操作・Playwright生成 [プロバイダ選択]"),
+    ("deepseek_v4", "DeepSeek V4 Flash", "Rank 2: 論理的テストケース網羅 [プロバイダ選択]"),
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時テスト生成"),
     ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "自律枠: 完全無料・自律テスト生成"),
@@ -83,13 +85,13 @@ QA_OPTIONS = [
 
 REVIEWER_OPTIONS = [
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "クラウド最適解: マルチモーダル5連フレーム高速審査"),
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "思考・画像認識: 画像認識 + 思考推論"),
+    ("qwen38", "Qwen3.8-27B", "思考・画像認識: 画像認識 + 思考推論 [プロバイダ選択]"),
 ]
 
 POSTMORTEM_OPTIONS = [
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 1: 推論特化・根本原因究明"),
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 2: 最新TS仕様知識+熟考"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 3: 長文ログ解析"),
+    ("qwen38", "Qwen3.8-27B", "Rank 2: 最新TS仕様知識+熟考 [プロバイダ選択]"),
+    ("deepseek_v4", "DeepSeek V4 Flash", "Rank 3: 長文ログ解析 [プロバイダ選択]"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時エラー要約"),
     ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "自律枠: 完全無料・自律原因分析"),
 ]
@@ -106,8 +108,8 @@ log = logging.getLogger("orchestrator")
 
 @dataclass
 class FlowModels:
-    coder: str = MODEL_CATALOG["qwen38"][2]
-    qa: str = MODEL_CATALOG["qwen38"][2]
+    coder: str = MODEL_CATALOG["qwen38_cf"][2]
+    qa: str = MODEL_CATALOG["qwen38_cf"][2]
     reviewer: str = MODEL_CATALOG["gemini_flash_lite"][2]
     postmortem: str = MODEL_CATALOG["deepseek_r1"][2]
 
@@ -299,8 +301,8 @@ def interactive_model_selection() -> FlowModels:
     if choice == "" or choice == "1":
         print(f"{GREEN}>> Applied: Recommended Preset{RESET}")
         return FlowModels(
-            coder=MODEL_CATALOG["qwen38"][2],
-            qa=MODEL_CATALOG["qwen38"][2],
+            coder=MODEL_CATALOG["qwen38_cf"][2],
+            qa=MODEL_CATALOG["qwen38_cf"][2],
             reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
             postmortem=MODEL_CATALOG["deepseek_r1"][2],
         )
@@ -319,15 +321,30 @@ def interactive_model_selection() -> FlowModels:
             mark = f" {GREEN}(Default){RESET}" if key == default_key else ""
             print(f"  {BOLD}[{i}]{RESET} {CYAN}{name:<32}{RESET} {GRAY}│{RESET} {desc}{mark}")
         ans = input(f"Enter choice [1-{len(options)}, default: Enter]: ").strip()
-        if not ans:
-            return MODEL_CATALOG[default_key][2]
-        try:
-            idx = int(ans) - 1
-            if 0 <= idx < len(options):
-                return MODEL_CATALOG[options[idx][0]][2]
-        except Exception:
-            pass
-        return MODEL_CATALOG[default_key][2]
+        selected_key = default_key
+        if ans:
+            try:
+                idx = int(ans) - 1
+                if 0 <= idx < len(options):
+                    selected_key = options[idx][0]
+            except Exception:
+                pass
+
+        if selected_key == "qwen38":
+            print(f"  {INDIGO}Select provider for Qwen3.8-27B:{RESET}")
+            print(f"    {BOLD}[1]{RESET} {CYAN}Cloudflare Workers AI{RESET} {GREEN}(Default){RESET}")
+            print(f"    {BOLD}[2]{RESET} {CYAN}Hugging Face{RESET}")
+            p_ans = input("  Enter provider [1-2, default: 1]: ").strip()
+            return MODEL_CATALOG["qwen38_hf"][2] if p_ans == "2" else MODEL_CATALOG["qwen38_cf"][2]
+
+        if selected_key == "deepseek_v4":
+            print(f"  {INDIGO}Select provider for DeepSeek V4 Flash:{RESET}")
+            print(f"    {BOLD}[1]{RESET} {CYAN}OpenCode Zen (Free){RESET} {GREEN}(Default){RESET}")
+            print(f"    {BOLD}[2]{RESET} {CYAN}Hugging Face{RESET}")
+            p_ans = input("  Enter provider [1-2, default: 1]: ").strip()
+            return MODEL_CATALOG["deepseek_v4_hf"][2] if p_ans == "2" else MODEL_CATALOG["deepseek_v4_zen"][2]
+
+        return MODEL_CATALOG[selected_key][2]
 
     coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "qwen38")
     qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "qwen38")
