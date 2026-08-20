@@ -74,11 +74,11 @@ CODER_OPTIONS = [
 ]
 
 QA_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・Playwright生成"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 論理的テストケース網羅"),
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証"),
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時テスト生成"),
-    ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律テスト生成"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・動画録画テスト生成"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 論理的テストケース網羅・動画テスト生成"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証・長考テスト生成"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時動画テスト生成"),
+    ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律動画テスト生成"),
 ]
 
 REVIEWER_OPTIONS = [
@@ -561,13 +561,17 @@ def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
 
     prompt = f"""Generate a Playwright (TypeScript) test script for task {task.id} ({task.desc}).
 
+Context:
+This test execution will automatically record a video (.webm) of the browser in action.
+The recorded video will be passed to Gemini Video AI (Dynamic Reviewer) to inspect gameplay animations, sound/metronome timing, minimal dark UI, and keyboard input responsiveness.
+
 Specification:
 {spec}
 
 Requirements:
-1. Navigate to 'http://localhost:5173/' and simulate realistic user interaction (clicks, keypresses, sound checks).
-2. Wait appropriately (at least 2-4 seconds) to record dynamic audio-visual behavior into video.
-3. Assert no unhandled console errors or broken states.
+1. Navigate to 'http://localhost:5173/' and simulate realistic user interactions (e.g. click song cards, press Space for rhythm timing, press ArrowUp/ArrowDown for cursor movement).
+2. Use adequate wait times (waitForTimeout(2000-4000)) between actions so the video clearly captures rhythm sound playback and 60fps Canvas animations.
+3. Assert no unhandled console errors or broken visual states.
 
 Output only ```typescript ... ``` code block.
 """
