@@ -107,7 +107,11 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         if (!timeline) return
         const audioCtx = audioMgr.ctx
         while (nextBeatTime < audioCtx.currentTime + lookaheadSec) {
-          schedule(audioCtx, nextBeatTime, beat, latency)
+          try {
+            schedule(audioCtx, nextBeatTime, beat, latency)
+          } catch {
+            // keep the beat grid advancing even if one click fails to schedule
+          }
           nextBeatTime += timeline.beatMsAt(beat) / 1000
           beat++
         }
@@ -246,16 +250,25 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
 
       ringsRef.current = spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
 
-      const currentBeatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
-      cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs)
+      const currentBeat = timeline.msToBeat(songTimeMs)
+      const currentBeatMs = timeline.beatMsAt(currentBeat)
+      cursorRef.current.update(
+        dt,
+        keysRef.current.up,
+        keysRef.current.down,
+        currentBeatMs,
+        wave.segmentBeatsAt(currentBeat),
+      )
 
-      for (const ring of ringsRef.current) {
-        if (ring.resolved) continue
-        const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
-        if (songTimeMs > ring.hitTime + windowMs) {
-          ring.resolved = true
-          scoreRef.current.recordHit('miss')
-          judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: ring.hitTime + windowMs })
+      if (startedRef.current) {
+        for (const ring of ringsRef.current) {
+          if (ring.resolved) continue
+          const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
+          if (songTimeMs > ring.hitTime + windowMs) {
+            ring.resolved = true
+            scoreRef.current.recordHit('miss')
+            judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: ring.hitTime + windowMs })
+          }
         }
       }
 
@@ -263,8 +276,10 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         (e) => songTimeMs - e.at < JUDGEMENT_LIFETIME_MS,
       )
 
-      const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
-      scoreRef.current.recordTrace(dt, isOnWave)
+      if (startedRef.current) {
+        const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
+        scoreRef.current.recordTrace(dt, isOnWave)
+      }
 
       renderer.render(ctx2d, {
         waveEngine: wave,
@@ -370,7 +385,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   }, [navigate, startGame, handleHit, resetGame, adjustOffset])
 
   return (
-    <div className="screen game-screen">
+    <div className="screen game-screen screen-fade">
       {status === 'loading' && <p className="game-status">譜面を読み込み中...</p>}
       {status === 'error' && (
         <div className="game-error">

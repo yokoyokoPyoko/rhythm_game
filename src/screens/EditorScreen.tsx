@@ -210,7 +210,7 @@ export default function EditorScreen() {
   }, [])
 
   return (
-    <div className="editor-screen">
+    <div className="editor-screen screen-fade">
       <header className="editor-header">
         <h1>オーサリングツール</h1>
         <Link to="/">/ に戻る</Link>

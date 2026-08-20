@@ -11,8 +11,9 @@ export class Cursor {
     this.y = WAVE_TOP;
   }
 
-  update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number): void {
-    const speed = (2 * TW_AMP) / (beatMs / 1000);
+  update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, segmentBeats = 1): void {
+    const beats = segmentBeats > 0 ? segmentBeats : 1;
+    const speed = (2 * TW_AMP) / (beats * (beatMs / 1000));
     let delta = 0;
     if (upPressed) delta -= speed;
     if (downPressed) delta += speed;

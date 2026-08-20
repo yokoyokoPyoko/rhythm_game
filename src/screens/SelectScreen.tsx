@@ -35,7 +35,7 @@ export default function SelectScreen() {
   }, [navigate])
 
   return (
-    <div className="screen select-screen">
+    <div className="screen select-screen screen-fade">
       <header className="select-header">
         <h1>トレース・ウェーブ</h1>
         <span className="select-sub">Trace Wave</span>

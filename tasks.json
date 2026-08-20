@@ -97,7 +97,7 @@
   },
   {
     "id": "T21",
-    "desc": "src/game/cursor.ts: ↑↓キー入力でカーソルY座標を更新。速度=(2*TW_AMP)/(beatMs/1000)px/sec。",
+    "desc": "src/game/cursor.ts: ↑↓キー入力でカーソルY座標を更新。速度=(2*TW_AMP)/(segmentBeats*(beatMs/1000))px/sec。segmentBeats=現在のセグメント拍数。",
     "depends_on": [
       "T20"
     ],

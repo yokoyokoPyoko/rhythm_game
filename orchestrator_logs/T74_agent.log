@@ -1,5 +1,220 @@
 [0m
-> build · deepseek-v4-flash-free
+> build · hy3-free
 [0m
+[0m→ [0mRead src/App.tsx
+[0m→ [0mRead src/index.css
+[0m
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && grep -rn "className" src/screens/ | grep -i "screen\|game-screen\|editor-screen\|calibration-screen\|result-screen" | head -40
+src/screens/editor/BpmEditor.tsx:72:      <div className="editor-field">
+src/screens/editor/BpmEditor.tsx:73:        <label className="editor-label" htmlFor="bpm">
+src/screens/editor/BpmEditor.tsx:78:          className="editor-input"
+src/screens/editor/BpmEditor.tsx:87:      <div className="editor-field">
+src/screens/editor/BpmEditor.tsx:88:        <label className="editor-label">タップテンポ</label>
+src/screens/editor/BpmEditor.tsx:89:        <div className="editor-controls">
+src/screens/editor/BpmEditor.tsx:97:        <p className="editor-hint">リズムに合わせて{TAP_COUNT}回タップ → 平均BPMを基本BPMに反映</p>
+src/screens/editor/BpmEditor.tsx:100:      <h3 className="editor-subhead">BPM変更</h3>
+src/screens/editor/BpmEditor.tsx:102:        <p className="editor-empty">BPM変更なし</p>
+src/screens/editor/BpmEditor.tsx:104:        <ul className="bpm-change-list">
+src/screens/editor/BpmEditor.tsx:106:            <li key={i} className="bpm-change-item">
+src/screens/editor/BpmEditor.tsx:108:                className="editor-input bpm-change-beat"
+src/screens/editor/BpmEditor.tsx:117:                className="editor-input bpm-change-bpm"
+src/screens/editor/BpmEditor.tsx:127:                className="bpm-change-delete"
+src/screens/editor/BpmEditor.tsx:137:      <button type="button" className="bpm-change-add" onClick={addChange}>
+src/screens/editor/WavePreview.tsx:95:  return <canvas ref={canvasRef} className="wave-preview" />
+src/screens/editor/SegmentEditor.tsx:36:    <section className="editor-pane">
+src/screens/editor/SegmentEditor.tsx:37:      <div className="segment-editor-head">
+src/screens/editor/SegmentEditor.tsx:44:        <p className="editor-empty">セグメントなし</p>
+src/screens/editor/SegmentEditor.tsx:46:        <ul className="segment-list">
+src/screens/editor/SegmentEditor.tsx:48:            <li key={i} className="segment-list-item">
+src/screens/editor/SegmentEditor.tsx:49:              <span className="segment-index">{i + 1}</span>
+src/screens/editor/SegmentEditor.tsx:51:                className="editor-input segment-direction"
+src/screens/editor/SegmentEditor.tsx:60:                className="editor-input segment-beats"
+src/screens/editor/SegmentEditor.tsx:68:              <div className="segment-actions">
+src/screens/editor/SegmentEditor.tsx:71:                  className="segment-move"
+src/screens/editor/SegmentEditor.tsx:80:                  className="segment-move"
+src/screens/editor/SegmentEditor.tsx:89:                  className="segment-delete"
+src/screens/ResultScreen.tsx:67:    <div className="screen result-screen">
+src/screens/ResultScreen.tsx:68:      <h1 className="result-title">リザルト</h1>
+src/screens/ResultScreen.tsx:70:      <div className="result-rank" data-rank={rank}>
+src/screens/ResultScreen.tsx:74:      <div className="result-score">{displayScore.toLocaleString()}</div>
+src/screens/ResultScreen.tsx:76:      <div className="result-stats">
+src/screens/ResultScreen.tsx:77:        <div className="result-stat perfect">
+src/screens/ResultScreen.tsx:78:          <span className="result-stat-label">PERFECT</span>
+src/screens/ResultScreen.tsx:79:          <span className="result-stat-value">{stats.perfect}</span>
+src/screens/ResultScreen.tsx:81:        <div className="result-stat good">
+src/screens/ResultScreen.tsx:82:          <span className="result-stat-label">GOOD</span>
+src/screens/ResultScreen.tsx:83:          <span className="result-stat-value">{stats.good}</span>
+src/screens/ResultScreen.tsx:85:        <div className="result-stat miss">
+[0m
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && grep -rn "return (\|<div className" src/screens/*.tsx | grep -v "editor/" | head -40
+src/screens/CalibrationScreen.tsx:95:    return () => {
+src/screens/CalibrationScreen.tsx:103:  return (
+src/screens/CalibrationScreen.tsx:104:    <div className="screen calibration-screen">
+src/screens/CalibrationScreen.tsx:109:          <div className="calibration-progress">
+src/screens/CalibrationScreen.tsx:113:          <div className="calibration-offset">
+src/screens/CalibrationScreen.tsx:124:          <div className="calibration-offset">
+src/screens/EditorScreen.tsx:73:    return () => cancelAnimationFrame(raf)
+src/screens/EditorScreen.tsx:77:    return () => {
+src/screens/EditorScreen.tsx:169:    return () => window.removeEventListener('keydown', onKeyDown)
+src/screens/EditorScreen.tsx:212:  return (
+src/screens/EditorScreen.tsx:213:    <div className="editor-screen">
+src/screens/EditorScreen.tsx:219:      <div className="editor-body">
+src/screens/EditorScreen.tsx:223:            <div className="editor-field">
+src/screens/EditorScreen.tsx:240:            <div className="editor-controls">
+src/screens/EditorScreen.tsx:255:            <div className="editor-pos">
+src/screens/EditorScreen.tsx:259:            {error && <div className="editor-error">{error}</div>}
+src/screens/EditorScreen.tsx:274:            <div className="editor-controls">
+src/screens/EditorScreen.tsx:292:            <div className="editor-field">
+src/screens/EditorScreen.tsx:334:        <div className="playtest-overlay">
+src/screens/GameScreen.tsx:209:    return () => {
+src/screens/GameScreen.tsx:312:    return () => {
+src/screens/GameScreen.tsx:381:    return () => {
+src/screens/GameScreen.tsx:387:  return (
+src/screens/GameScreen.tsx:388:    <div className="screen game-screen">
+src/screens/GameScreen.tsx:391:        <div className="game-error">
+src/screens/GameScreen.tsx:404:          <div className="game-offset">
+src/screens/GameScreen.tsx:408:          <div className="game-hint">Space: 判定 / ↑↓: 移動 / &lt;&gt;: オフセット±10ms / K: キー音{keySoundOn ? 'ON' : 'OFF'} / R: リセット / ESC: 戻る</div>
+src/screens/ResultScreen.tsx:55:    return () => cancelAnimationFrame(rafRef.current)
+src/screens/ResultScreen.tsx:66:  return (
+src/screens/ResultScreen.tsx:67:    <div className="screen result-screen">
+src/screens/ResultScreen.tsx:70:      <div className="result-rank" data-rank={rank}>
+src/screens/ResultScreen.tsx:74:      <div className="result-score">{displayScore.toLocaleString()}</div>
+src/screens/ResultScreen.tsx:76:      <div className="result-stats">
+src/screens/ResultScreen.tsx:77:        <div className="result-stat perfect">
+src/screens/ResultScreen.tsx:81:        <div className="result-stat good">
+src/screens/ResultScreen.tsx:85:        <div className="result-stat miss">
+src/screens/ResultScreen.tsx:91:      <div className="result-actions">
+src/screens/SelectScreen.tsx:34:    return () => window.removeEventListener('keydown', onKey)
+src/screens/SelectScreen.tsx:37:  return (
+src/screens/SelectScreen.tsx:38:    <div className="screen select-screen">
+[0m
+[0m← [0mEdit src/index.css
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/index.css
+@@ -181,8 +181,27 @@
+     animation: none;
+   }
+ }
+ 
++.screen-fade {
++  animation: screen-fade-in 200ms ease;
++}
++
++@keyframes screen-fade-in {
++  from {
++    opacity: 0;
++  }
++  to {
++    opacity: 1;
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .screen-fade {
++    animation: none;
++  }
++}
++
+ .select-hint {
+   margin-top: 2rem;
+   text-align: center;
+   color: var(--text-muted);
 
-[タイムアウト 480秒で強制終了]
+[0m
+[0m← [0mEdit src/screens/SelectScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/SelectScreen.tsx
+@@ -34,9 +34,9 @@
+   return () => window.removeEventListener('keydown', onKey)
+ }, [navigate])
+ 
+ return (
+-  <div className="screen select-screen">
++  <div className="screen select-screen screen-fade">
+     <header className="select-header">
+       <h1>トレース・ウェーブ</h1>
+       <span className="select-sub">Trace Wave</span>
+     </header>
+
+[0m
+[0m← [0mEdit src/screens/GameScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+@@ -384,9 +384,9 @@
+   }
+ }, [navigate, startGame, handleHit, resetGame, adjustOffset])
+ 
+ return (
+-  <div className="screen game-screen">
++  <div className="screen game-screen screen-fade">
+     {status === 'loading' && <p className="game-status">譜面を読み込み中...</p>}
+     {status === 'error' && (
+       <div className="game-error">
+         <p>{error}</p>
+
+[0m
+[0m← [0mEdit src/screens/ResultScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/ResultScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/ResultScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/ResultScreen.tsx
+@@ -63,9 +63,9 @@
+   }
+ }
+ 
+ return (
+-  <div className="screen result-screen">
++  <div className="screen result-screen screen-fade">
+     <h1 className="result-title">リザルト</h1>
+ 
+     <div className="result-rank" data-rank={rank}>
+       {rank}
+
+[0m
+[0m← [0mEdit src/screens/CalibrationScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/CalibrationScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/CalibrationScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/CalibrationScreen.tsx
+@@ -100,9 +100,9 @@
+ 
+ const offsetText = (v: number) => `${v >= 0 ? '+' : ''}${v}ms`
+ 
+ return (
+-  <div className="screen calibration-screen">
++  <div className="screen calibration-screen screen-fade">
+     <h1 className="calibration-title">オートキャリブレーション</h1>
+ 
+     {!done ? (
+       <>
+
+[0m
+[0m← [0mEdit src/screens/EditorScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/EditorScreen.tsx
+@@ -209,9 +209,9 @@
+   setPlaytest(null)
+ }, [])
+ 
+ return (
+-  <div className="editor-screen">
++  <div className="editor-screen screen-fade">
+     <header className="editor-header">
+       <h1>オーサリングツール</h1>
+       <Link to="/">/ に戻る</Link>
+     </header>
+
+[0m
+Now add the `screen-fade` class to each screen's root element:
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit
+(no output)
+[0m
+DONE

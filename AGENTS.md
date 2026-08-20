@@ -44,7 +44,7 @@
 ### 波形（Wave）システム
 - チャートで定義された折れ線（セグメント列）。純粋な三角波ではない。
 - 各セグメント: `{ direction: "up" | "down", beats: number }`
-- カーソルは↑↓キーで移動。速度 = `(2 * TW_AMP) / (beatMs / 1000)` px/sec
+- カーソルは↑↓キーで移動。速度 = `(2 * TW_AMP) / (segmentBeats * (beatMs / 1000))` px/sec（segmentBeats=現在のセグメント拍数。波形の斜度と一致させる）
 - 初期位置: 上端 `TW_CENTER_Y - TW_AMP`（波形のピーク位置）
 
 ### リングシステム
@@ -332,8 +332,8 @@ src/App.css を削除。
 `src/game/cursor.ts`:
 - `Cursor` クラス
 - 初期Y: TW_CENTER_Y - TW_AMP
-- `update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number)`
-- 速度: (2 * TW_AMP) / (beatMs / 1000) px/sec
+- `update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, segmentBeats: number)`
+- 速度: (2 * TW_AMP) / (segmentBeats * (beatMs / 1000)) px/sec（波形の現在セグメントの斜度と一致させる。segmentBeats=現在のセグメント拍数）
 - clamp: [TW_CENTER_Y - TW_AMP, TW_CENTER_Y + TW_AMP]
 
 ---

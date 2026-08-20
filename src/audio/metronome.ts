@@ -42,7 +42,11 @@ export class Metronome {
   private tick(): void {
     const horizon = this.audioCtx.currentTime + LOOKAHEAD_MS / 1000;
     while (this.nextBeatTime < horizon) {
-      schedule(this.audioCtx, this.nextBeatTime, this.nextBeatNumber, 0);
+      try {
+        schedule(this.audioCtx, this.nextBeatTime, this.nextBeatNumber, 0);
+      } catch {
+        // keep the beat grid advancing even if one click fails to schedule
+      }
       this.nextBeatNumber += 1;
       this.beatMs = this.getBeatMs(this.nextBeatNumber);
       this.nextBeatTime += this.beatMs / 1000;
@@ -58,7 +62,7 @@ export function schedule(
 ): void {
   const isStrong = beat % 4 === 0;
   const freq = isStrong ? STRONG_FREQ : WEAK_FREQ;
-  const when = nextBeatTime + offsetSeconds() + Math.max(0, latency);
+  const when = Math.max(audioCtx.currentTime, nextBeatTime + offsetSeconds() + Math.max(0, latency));
 
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();

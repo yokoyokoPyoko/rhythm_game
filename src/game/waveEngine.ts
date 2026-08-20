@@ -80,6 +80,26 @@ export class WaveEngine {
     return last.y;
   }
 
+  segmentBeatsAt(beat: number): number {
+    if (!Number.isFinite(beat)) {
+      return 1;
+    }
+    const b = Math.max(0, beat);
+    const last = this.points[this.points.length - 1];
+    const lastSeg = this.points[this.points.length - 2];
+    if (b >= last.beat) {
+      return Math.max(1, last.beat - lastSeg.beat);
+    }
+    for (let i = 0; i < this.points.length - 1; i++) {
+      const p0 = this.points[i];
+      const p1 = this.points[i + 1];
+      if (b >= p0.beat && b <= p1.beat) {
+        return Math.max(1, p1.beat - p0.beat);
+      }
+    }
+    return 1;
+  }
+
   waveYAtMs(ms: number): number {
     if (!Number.isFinite(ms)) {
       return WAVE_TOP;

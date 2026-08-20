@@ -117,9 +117,9 @@
     },
     "T32": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1787207944.138387,
-      "finished": 1787132843.5530736
+      "finished": 1787208050.076843
     },
     "T33": {
       "attempts": 1,
@@ -219,8 +219,8 @@
     },
     "T74": {
       "attempts": 1,
-      "status": "pending",
-      "started": 1787143946.9648275,
+      "status": "running",
+      "started": 1787212331.3676867,
       "finished": 1787106646.376294
     },
     "T81": {

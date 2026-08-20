@@ -41,7 +41,11 @@ export default function CalibrationScreen() {
         if (beat < CAL_SAMPLES) {
           gridRef.current[beat] = nextBeatTime
         }
-        schedule(ctx, nextBeatTime, beat, latency)
+        try {
+          schedule(ctx, nextBeatTime, beat, latency)
+        } catch {
+          // keep the beat grid advancing even if one click fails to schedule
+        }
         nextBeatTime += beatSec
         beat++
       }
@@ -97,7 +101,7 @@ export default function CalibrationScreen() {
   const offsetText = (v: number) => `${v >= 0 ? '+' : ''}${v}ms`
 
   return (
-    <div className="screen calibration-screen">
+    <div className="screen calibration-screen screen-fade">
       <h1 className="calibration-title">オートキャリブレーション</h1>
 
       {!done ? (

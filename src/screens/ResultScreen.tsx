@@ -64,7 +64,7 @@ export default function ResultScreen() {
   }
 
   return (
-    <div className="screen result-screen">
+    <div className="screen result-screen screen-fade">
       <h1 className="result-title">リザルト</h1>
 
       <div className="result-rank" data-rank={rank}>
