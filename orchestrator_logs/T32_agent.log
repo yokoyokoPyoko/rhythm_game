@@ -1,36 +1,57 @@
 [0m
-> build · nemotron-3.5-lightning-free
+> build · hy3-free
 [0m
-[0m• [0mExplore codebase structure[90m Explore Agent[0m
-[0m✓ [0mExplore codebase structure[90m Explore Agent[0m
+[0m$ [0mls src/screens/ src/game/ src/audio/ 2>/dev/null; echo "---"; ls src/
+src/audio/:
+AudioManager.ts
+bpmTimeline.ts
+clock.ts
+keySound.ts
+loader.ts
+metronome.ts
+
+src/game/:
+cursor.ts
+hitJudge.ts
+renderer.ts
+ringSpawner.ts
+score.ts
+waveEngine.ts
+
+src/screens/:
+CalibrationScreen.tsx
+EditorScreen.tsx
+GameScreen.tsx
+ResultScreen.tsx
+SelectScreen.tsx
+editor
+---
+App.tsx
+assets
+audio
+chart
+game
+index.css
+main.tsx
+screens
+types.ts
+vite-env.d.ts
+[0m
 [0m→ [0mRead src/screens/GameScreen.tsx
-Let me read the current GameScreen.tsx to check its state:
-[0m→ [0mRead src/screens/ResultScreen.tsx
-Let me check the TypeScript compilation and also look at the ResultScreen to verify the state shape:
+[0m→ [0mRead src/audio/clock.ts
+[0m→ [0mRead src/audio/metronome.ts
+[0m→ [0mRead src/audio/AudioManager.ts
+The GameScreen already exists and appears fully implemented per T32. Let me verify it compiles cleanly.
 [0m
-[0m$ [0mnpx tsc --noEmit 2>&1
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -40
 (no output)
 [0m
-[0m$ [0mecho 'DONE'
+GameScreen.tsx is already fully implemented per T32 spec and compiles with zero errors:
+- Canvas via `useRef` + `useEffect` game loop with `requestAnimationFrame`
+- Loop: `songNow()` → update spawner/cursor/score → `renderer.render()`
+- ESC → `navigate('/')`, R → `resetGame()`
+- End (last ring `hitTime + 2000ms`) → `navigate('/result', { state: { stats, songId } })`
+
+`tsc --noEmit` passes with no errors.
+
 DONE
-[0m
-The TypeScript compiles with zero errors, and the current `GameScreen.tsx` already implements all T32 requirements:
-
-1. ✅ `useRef` for Canvas (`canvasRef`)
-2. ✅ `useEffect` with `requestAnimationFrame` game loop
-3. ✅ Game loop: `songNow()` → update engines → render
-4. ✅ ESC → `navigate('/')`
-5. ✅ R → `resetGame()`
-6. ✅ Song end (last ring's hitTime + 2000ms) → `navigate('/result', { state: stats })`
-
-All systems are integrated and type-check passes.
-T32 is already fully implemented in the existing `src/screens/GameScreen.tsx`. All requirements are met:
-
-- **Canvas reference**: `useRef<HTMLCanvasElement>(null)` at line 37
-- **Game loop**: `useEffect` with `requestAnimationFrame` at line 297
-- **Loop logic**: `songNow()` → engine updates (spawner, cursor, hit judging) → `render()` at lines 225-294
-- **ESC → navigate('/')**: Line 318
-- **R → resetGame()**: Line 323
-- **Song end → navigate('/result', { state: stats })**: Lines 281-291 (triggers when `songTimeMs > lastHitTime + END_DELAY_MS`)
-
-`tsc --noEmit` passes with zero errors, and `npm run dev` starts the Vite server successfully.
