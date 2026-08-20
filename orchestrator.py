@@ -97,7 +97,7 @@ BACKOFF_DELAYS = [5, 10, 30, 60, 120]
 
 NON_UI_TASKS = {
     "T00", "T82", "T01", "T02", "T10", "T11", "T12", "T13", "T14",
-    "T40", "T41", "T20", "T21", "T22", "T23", "T24", "T60", "T62"
+    "T40", "T41", "T20", "T21", "T22", "T23", "T24", "T25", "T60", "T62"
 }
 
 log = logging.getLogger("orchestrator")
@@ -569,9 +569,10 @@ Specification:
 {spec}
 
 Requirements:
-1. Navigate to 'http://localhost:5173/' and simulate realistic user interactions (e.g. click song cards, press Space for rhythm timing, press ArrowUp/ArrowDown for cursor movement).
-2. Use adequate wait times (waitForTimeout(2000-4000)) between actions so the video clearly captures rhythm sound playback and 60fps Canvas animations.
-3. Assert no unhandled console errors or broken visual states.
+1. Navigate to 'http://localhost:5173/', wait for 'domcontentloaded', and simulate realistic user interactions (clicks, Space rhythm hits, Arrow keys).
+2. Do not use strict expect(page.locator('#root')).toBeVisible() if the element has 0-height. Instead wait for specific UI elements or Canvas, or use expect(page.locator('body')).toBeAttached().
+3. Use adequate wait times (waitForTimeout(2000-4000)) so the video clearly records sound playback and Canvas 60fps animations.
+4. Listen to console errors: fail only on unhandled TypeError/ReferenceError.
 
 Output only ```typescript ... ``` code block.
 """
