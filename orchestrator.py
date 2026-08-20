@@ -220,7 +220,7 @@ def run_cmd_pgid_stream(cmd: list[str], timeout: int | None = None, cwd: Path = 
 
 def check_model_health(model_id: str, label: str) -> bool:
     print(f"  {CYAN}Checking{RESET} {BOLD}{label}{RESET} ({GRAY}{model_id}{RESET})... ", end="", flush=True)
-    cmd = ["opencode", "run", "--auto", "--format", "default", "-m", model_id, "ping"]
+    cmd = ["opencode", "run", "--auto", "--format", "default", "-m", model_id, "Say hello"]
     code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=40, prefix="")
 
     if "insufficient balance" in out or "suspended" in out or "payment required" in out.lower() or "depleted your monthly included credits" in out.lower():
@@ -247,12 +247,20 @@ def check_model_health(model_id: str, label: str) -> bool:
         print(f"{RED}{'!' * 70}{RESET}\n")
         return False
 
-    if "ping" in out or code == 0 or "build" in out:
+    if "UnknownError" in out or "Unexpected server error" in out:
+        print(f"{RED}[FAILED: Server-side Error]{RESET}")
+        print(f"\n{RED}{'!' * 70}{RESET}")
+        print(f"  {RED}{BOLD}ERROR:{RESET} {label} ({model_id}) returned UnknownError (provider server-side issue).")
+        print(f"  {GRAY}Details: {out.strip()}{RESET}")
+        print(f"{RED}{'!' * 70}{RESET}\n")
+        return False
+
+    if "ping" in out or code == 0 or "build" in out or "hello" in out.lower():
         print(f"{GREEN}[OK]{RESET}")
         return True
 
     if code != 0 or timed_out:
-        print(f"{YELLOW}[WARNING: No Response]{RESET}")
+        print(f"{RED}[FAILED: No Response (exit={code})]{RESET}")
         return False
 
     print(f"{GREEN}[OK]{RESET}")
