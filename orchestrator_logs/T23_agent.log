@@ -3,10 +3,20 @@
 [0m
 [0m→ [0mRead src/types.ts
 [0m
-[0m← [0mWrite src/game/hitJudge.ts
-Wrote file successfully.
+[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ 2>/dev/null
+cursor.ts
+hitJudge.ts
+renderer.ts
+ringSpawner.ts
+score.ts
+waveEngine.ts
 [0m
-[0m$ [0mnpx tsc --noEmit 2>&1 | head -20
+[0m→ [0mRead src/game/hitJudge.ts
+The file already implements the spec correctly. Let me verify it compiles.
+[0m
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -20
 (no output)
 [0m
+No errors. The `hitJudge.ts` already matches the specification: finds nearest unresolved ring by timing, returns `null` if outside the `beatMs*0.4` window, `miss` if Y distance ≥60px, `perfect` if err<50ms & Y<30px, else `good`.
+
 DONE
