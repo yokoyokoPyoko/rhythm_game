@@ -66,32 +66,32 @@ MODEL_CATALOG = {
 }
 
 CODER_OPTIONS = [
-    ("qwen38", "Qwen3.8-27B [Cloudflare]", "自律・精度 (Rank 1: 高速&高精度 TypeScript 実装)"),
-    ("deepseek_v4", "DeepSeek V4 Flash [OpenCode Zen]", "自律・精度 (Rank 2: 豊富なコード知識・MoE)"),
-    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B [Cloudflare]", "自律・精度 (Rank 3: 高度論理思考・長考型)"),
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google]", "爆速・軽量 (待ち時間最小・超安定)"),
-    ("laguna_free", "Laguna S 2.1 Free [OpenCode Zen]", "爆速・軽量 (完全無料・軽量コード生成)"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "自律・精度 (Rank 1: 高速&高精度 TypeScript 実装)"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "自律・精度 (Rank 2: 豊富なコード知識・MoE)"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "自律・精度 (Rank 3: 高度論理思考・長考型)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速・軽量 (待ち時間最小・超安定)"),
+    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "爆速・軽量 (完全無料・軽量コード生成)"),
 ]
 
 QA_OPTIONS = [
-    ("qwen38", "Qwen3.8-27B [Cloudflare]", "自律・精度 (Rank 1: ブラウザ自律操作・Playwright生成)"),
-    ("deepseek_v4", "DeepSeek V4 Flash [OpenCode Zen]", "自律・精度 (Rank 2: 論理的テストケース網羅)"),
-    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B [Cloudflare]", "自律・精度 (Rank 3: 高難度ロジック検証)"),
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google]", "爆速・軽量 (即時テストスクリプト生成)"),
-    ("laguna_free", "Laguna S 2.1 Free [OpenCode Zen]", "爆速・軽量 (完全無料)"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "自律・精度 (Rank 1: ブラウザ自律操作・Playwright生成)"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "自律・精度 (Rank 2: 論理的テストケース網羅)"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "自律・精度 (Rank 3: 高難度ロジック検証)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速・軽量 (即時テストスクリプト生成)"),
+    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "爆速・軽量 (完全無料)"),
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google]", "クラウド最適解 (マルチモーダル5連フレーム高速審査)"),
-    ("qwen38", "Qwen3.8-27B [Cloudflare]", "思考・画像認識 (画像認識 + 思考推論)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "クラウド最適解 (マルチモーダル5連フレーム高速審査)"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "思考・画像認識 (画像認識 + 思考推論)"),
 ]
 
 POSTMORTEM_OPTIONS = [
-    ("deepseek_r1", "DeepSeek-R1-Distill-Qwen-32B [Cloudflare]", "自律・推論 (Rank 1: 推論特化・根本原因究明)"),
-    ("qwen38", "Qwen3.8-27B [Cloudflare]", "自律・推論 (Rank 2: 最新TS仕様知識+熟考)"),
-    ("deepseek_v4", "DeepSeek V4 Flash [OpenCode Zen]", "自律・推論 (Rank 3: 長文ログ解析)"),
-    ("gemini_flash_lite", "Gemini 3.5 Flash-Lite [Google]", "爆速・軽量 (即時エラー要約)"),
-    ("laguna_free", "Laguna S 2.1 Free [OpenCode Zen]", "爆速・軽量 (完全無料)"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "自律・推論 (Rank 1: 推論特化・根本原因究明)"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "自律・推論 (Rank 2: 最新TS仕様知識+熟考)"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "自律・推論 (Rank 3: 長文ログ解析)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速・軽量 (即時エラー要約)"),
+    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "爆速・軽量 (完全無料)"),
 ]
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
@@ -278,7 +278,7 @@ def perform_preflight_checks(models: FlowModels) -> bool:
 def get_model_display(model_id: str) -> str:
     for _, (name, provider, mid) in MODEL_CATALOG.items():
         if mid == model_id:
-            return f"{name} {GRAY}[{provider}]{RESET}"
+            return f"{GRAY}[{provider}]{RESET} {name}"
     return f"{model_id}"
 
 
@@ -286,11 +286,11 @@ def interactive_model_selection() -> FlowModels:
     print("\n" + f"{INDIGO}{BOLD}TRACE WAVE // Autonomous Orchestrator{RESET}")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
     print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset{RESET} (Rank 1 Models)")
-    print(f"      {GRAY}├─ 1. Coder      :{RESET} {CYAN}Qwen3.8-27B{RESET} {GRAY}[Cloudflare Workers AI]{RESET}")
-    print(f"      {GRAY}├─ 2. QA Test    :{RESET} {CYAN}Qwen3.8-27B{RESET} {GRAY}[Cloudflare Workers AI]{RESET}")
-    print(f"      {GRAY}├─ 3. Reviewer   :{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET} {GRAY}[Google AI Studio]{RESET}")
-    print(f"      {GRAY}└─ 4. Postmortem :{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET} {GRAY}[Cloudflare Workers AI]{RESET}")
-    print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google AI Studio]{RESET}")
+    print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
+    print(f"      {GRAY}├─ 2. QA Test    :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
+    print(f"      {GRAY}├─ 3. Reviewer   :{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
+    print(f"      {GRAY}└─ 4. Postmortem :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
+    print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google]{RESET}")
     print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
 
