@@ -2,35 +2,11 @@
 > build · hy3-free
 [0m
 [0m→ [0mRead src/types.ts
-[0m✱ [0mGlob "src/game/*.ts"[90m 6 matches[0m
-[0m→ [0mRead src/game/hitJudge.ts
 [0m
-[0m← [0mEdit src/game/hitJudge.ts
-Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/game/hitJudge.ts
-===================================================================
---- /home/p-yoko/Program/TypeScript/rhythm_game/src/game/hitJudge.ts
-+++ /home/p-yoko/Program/TypeScript/rhythm_game/src/game/hitJudge.ts
-@@ -26,9 +26,13 @@
- 
- const timingError = Math.abs(nearest.hitTime - pressTimeMs);
- const yDistance = Math.abs(cursorY - nearest.targetY);
- 
--if (timingError < currentBeatMs * 0.4 && yDistance < Y_HIT_TOLERANCE) {
-+const timingWindow = Number.isFinite(currentBeatMs) && currentBeatMs > 0
-+  ? currentBeatMs * 0.4
-+  : 0;
-+
-+if (timingError < timingWindow && yDistance < Y_HIT_TOLERANCE) {
-   nearest.resolved = true;
-   nearest.hit = true;
-   if (timingError < PERFECT_MS && yDistance < Y_PERFECT_TOLERANCE) {
-     return { result: 'perfect', errorMs: timingError };
-
+[0m← [0mWrite src/game/hitJudge.ts
+Wrote file successfully.
 [0m
-The file already exists and matches the spec. Let me add robustness against invalid `currentBeatMs` per the constraints and verify compilation.
 [0m$ [0mnpx tsc --noEmit 2>&1 | head -20
 (no output)
 [0m
-No errors. The `judgeHit` function selects the nearest unresolved ring, checks timing error (< `beatMs*0.4`) and Y distance (< 60px), returning PERFECT (error < 50ms AND Y < 30px) or GOOD, with a guarded timing window for invalid input.
-
 DONE
