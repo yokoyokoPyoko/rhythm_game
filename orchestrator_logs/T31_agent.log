@@ -1,37 +1,7 @@
 [0m
-> build · deepseek-v4-flash-free
+> build · hy3-free
 [0m
-[0m$ [0mls -la && ls src/ src/screens 2>/dev/null; echo "---"; cat src/chart/manifest.ts 2>/dev/null
-合計 340
-drwxrwxr-x  10 p-yoko p-yoko   4096  8月 19 10:02 .
-drwxrwxr-x   3 p-yoko p-yoko   4096  7月 11 15:42 ..
-drwxrwxr-x   8 p-yoko p-yoko   4096  8月 19 10:02 .git
--rw-rw-r--   1 p-yoko p-yoko    394  8月 19 09:31 .gitignore
--rw-rw-r--   1 p-yoko p-yoko  17430  8月 19 09:31 AGENTS.md
--rw-rw-r--   1 p-yoko p-yoko   4699  8月 19 09:31 CLAUDE.md
--rw-rw-r--   1 p-yoko p-yoko  27640  8月 19 09:31 DEVELOPMENT_LOG.md
--rw-rw-r--   1 p-yoko p-yoko   1607  8月 19 09:30 README.md
-drwxrwxr-x   5 p-yoko p-yoko   4096  8月 19 10:02 docs
--rw-rw-r--   1 p-yoko p-yoko    734  8月 19 09:30 eslint.config.js
--rw-rw-r--   1 p-yoko p-yoko    650  8月 19 09:46 index.html
-drwxrwxr-x 131 p-yoko p-yoko   4096  8月 19 09:32 node_modules
--rw-rw-r--   1 p-yoko p-yoko  62241  8月 19 09:31 orchestrator.log
--rwxrwxr-x   1 p-yoko p-yoko  17084  8月 19 09:31 orchestrator.py
-drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 09:31 orchestrator_logs
--rw-rw-r--   1 p-yoko p-yoko   2717  8月 19 10:02 orchestrator_state.json
--rw-rw-r--   1 p-yoko p-yoko 110175  8月 19 09:32 package-lock.json
--rw-rw-r--   1 p-yoko p-yoko    781  8月 19 09:32 package.json
--rw-rw-r--   1 p-yoko p-yoko    168  8月 19 09:31 playwright.config.ts
-drwxrwxr-x   4 p-yoko p-yoko   4096  8月 19 09:31 public
-drwxrwxr-x   7 p-yoko p-yoko   4096  8月 19 10:01 src
--rw-rw-r--   1 p-yoko p-yoko   8068  8月 19 09:31 tasks.json
-drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 10:02 test-results
-drwxrwxr-x   2 p-yoko p-yoko   4096  8月 19 09:31 tests
--rw-rw-r--   1 p-yoko p-yoko    665  8月 19 09:30 tsconfig.app.json
--rw-rw-r--   1 p-yoko p-yoko    119  8月 19 09:30 tsconfig.json
--rw-rw-r--   1 p-yoko p-yoko    593  8月 19 09:30 tsconfig.node.json
--rw-rw-r--   1 p-yoko p-yoko    233  8月 19 09:31 vite.config.ts
-src/:
+[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src && echo "---" && ls /home/p-yoko/Program/TypeScript/rhythm_game/src/screens 2>/dev/null && echo "---chart---" && ls /home/p-yoko/Program/TypeScript/rhythm_game/src/chart 2>/dev/null
 App.tsx
 assets
 audio
@@ -42,82 +12,34 @@ main.tsx
 screens
 types.ts
 vite-env.d.ts
-
-src/screens:
+---
 CalibrationScreen.tsx
 EditorScreen.tsx
 GameScreen.tsx
 ResultScreen.tsx
 SelectScreen.tsx
----
-import { parse } from 'smol-toml';
-import type { SongEntry } from '../types';
-
-const SONGS_URL = '/rhythm_game/songs.toml';
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
-}
-
-function parseSongs(v: unknown): SongEntry[] {
-  if (!Array.isArray(v)) return [];
-  return v
-    .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-    .filter(
-      (item) =>
-        typeof item.id === 'string' &&
-        item.id.length > 0 &&
-        typeof item.title === 'string' &&
-        item.title.length > 0 &&
-        typeof item.chartPath === 'string' &&
-        item.chartPath.length > 0 &&
-        (item.artist === undefined || typeof item.artist === 'string') &&
-        (item.difficulty === undefined || isFiniteNumber(item.difficulty)),
-    )
-    .map((item) => ({
-      id: item.id as string,
-      title: item.title as string,
-      artist: (item.artist as string | undefined) ?? '',
-      chartPath: item.chartPath as string,
-      difficulty: (item.difficulty as number | undefined) ?? 1,
-    }));
-}
-
-export async function loadSongList(): Promise<SongEntry[]> {
-  const res = await fetch(SONGS_URL);
-  if (!res.ok) {
-    throw new Error(`曲リストの読み込みに失敗しました (${res.status}): ${SONGS_URL}`);
-  }
-  const text = await res.text();
-
-  let raw: Record<string, unknown>;
-  try {
-    raw = parse(text) as Record<string, unknown>;
-  } catch {
-    throw new Error(`曲リストのTOMLパースに失敗しました: ${SONGS_URL}`);
-  }
-
-  return parseSongs(raw.songs);
-}
+editor
+---chart---
+loader.ts
+manifest.ts
+serialize.ts
 [0m
-[0m✱ [0mGlob "src/**/*.tsx"[90m 7 matches[0m
 [0m→ [0mRead src/screens/SelectScreen.tsx
-[0m→ [0mRead src/App.tsx
-SelectScreen.tsx already exists with most of T31 implemented. Let me check the CSS classes exist.
-[0m✱ [0mGrep "song-grid|song-card|select-screen|difficulty-dot|select-hint"[90m 9 matches[0m
-[0m→ [0mRead src/index.css[90m [offset=85, limit=70][0m
-T31 already implemented. Verifying build.
+[0m→ [0mRead src/chart/manifest.ts
 [0m
-[0m$ [0mnpx tsc --noEmit
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -30
 (no output)
 [0m
-T31は実装済みでした。SelectScreen.tsxにて要件を全て満たしています:
-- `loadSongList()`で曲一覧取得 (`SelectScreen.tsx:14`)
-- カードグリッド・タイトル/アーティスト/難易度バー (`:42-59`)
-- ホバー `translateY(-2px)` + `transition 150ms` (`index.css:108`)
-- クリックで `/play/:songId` (`:46`)
-- Lキーで `/calibration` (`:23-24`)
+[0m✱ [0mGrep "select-screen|song-card|difficulty-dot|select-header|select-hint|select-error"[90m in src/index.css · 25 matches[0m
+The SelectScreen already appears implemented. Let me verify it compiles and matches the spec's requirements (CSS classes exist, no errors).
+[0m→ [0mRead src/index.css[90m [offset=98, limit=45][0m
+The SelectScreen is already fully implemented and complies with the T31 spec:
 
-`tsc --noEmit` エラーなし。
+- `loadSongList()` for fetching the song list ✓
+- Card grid with title, artist, and difficulty dots ✓
+- Hover: `translateY(-2px)` with `150ms` transition ✓
+- Click: `navigate('/play/' + song.id)` ✓
+- L key: `navigate('/calibration')` ✓
+- `tsc --noEmit` passes with zero errors ✓
 
 DONE
