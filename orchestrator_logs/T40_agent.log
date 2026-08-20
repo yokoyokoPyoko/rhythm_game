@@ -2,29 +2,73 @@
 > build · hy3-free
 [0m
 [0m→ [0mRead src/types.ts
-[0m✱ [0mGlob "src/chart/*"[90m 3 matches[0m
 [0m
-[0m$ [0mgrep -r "smol-toml" /home/p-yoko/Program/TypeScript/rhythm_game/package.json 2>/dev/null; echo "---"; ls /home/p-yoko/Program/TypeScript/rhythm_game/node_modules/smol-toml 2>/dev/null && echo "installed"
-"smol-toml": "^1.8.0"
+[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/chart 2>/dev/null; echo "---"; ls /home/p-yoko/Program/TypeScript/rhythm_game/node_modules/smol-toml 2>/dev/null && echo "smol-toml present"
+loader.ts
+manifest.ts
+serialize.ts
 ---
 LICENSE
 README.md
 dist
 package.json
-installed
+smol-toml present
+[0m
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && grep -E '"main"|"module"|"types"|"exports"' node_modules/smol-toml/package.json; echo "---types---"; cat node_modules/smol-toml/dist/index.d.ts 2>/dev/null | head -40
+"type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "types": "./dist/index.d.ts",
+---types---
+/*!
+ * Copyright (c) Squirrel Chat et al., All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software without
+ *    specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+import { parse } from './parse.js';
+import { stringify } from './stringify.js';
+import { TomlDate } from './date.js';
+import { TomlError } from './error.js';
+export type { TomlValue, TomlTable, TomlValueWithoutBigInt, TomlTableWithoutBigInt } from './util.js';
+declare const _default: {
+    parse: typeof parse;
+    stringify: typeof stringify;
+    TomlDate: typeof TomlDate;
+    TomlError: typeof TomlError;
+};
+export default _default;
+export { parse, stringify, TomlDate, TomlError };
 [0m
 [0m→ [0mRead src/chart/loader.ts
-[0m→ [0mRead src/chart/manifest.ts
-The loader already exists and implements the spec well. Let me verify it compiles cleanly.
+The loader already exists and matches the spec. Let me verify it compiles.
 [0m
-[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -30; echo "EXIT: ${PIPESTATUS[0]}"
-EXIT: 0
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -20; echo "exit: $?"
+exit: 0
 [0m
-`src/chart/loader.ts` already fully implements the spec and passes `tsc --noEmit` with zero errors:
-
-- fetch → text → `parse` (smol-toml)
-- 不足キー `bpm_changes`/`segments`/`rings` は `[]` に補完
-- `title`/`artist`/`bpm`(>0)/`audio` の不正は `Error` を throw
-- 動的リスト内の数値は `isFiniteNumber` ＋範囲チェック（beats>0, bpm>0, beat≥0）で弾性的に検証・フィルタ
+Zero TS errors. The `src/chart/loader.ts` already implements the spec correctly: `loadChart` fetches → parses with `smol-toml` → validates required keys (title/artist/bpm/audio) throwing errors on bad data, and defaults `bpm_changes/segments/rings` to `[]`.
 
 DONE
