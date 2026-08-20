@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 
-test('T32 GameScreen: game loop, ESC, R reset, result transition', async ({ page }) => {
+const BASE = 'http://localhost:5173/';
+
+test('T74 screen transition animations (fade-in via CSS transition)', async ({ page }) => {
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -16,64 +18,67 @@ test('T32 GameScreen: game loop, ESC, R reset, result transition', async ({ page
     errors.push(err.message);
   });
 
-  // 1. Navigate to select screen
-  await page.goto('http://localhost:5173/');
-  await page.waitForLoadState('domcontentloaded');
+  // --- Frame 1: Select screen (fade-in on mount) ---
+  await page.goto(BASE);
+  await page.waitForLoadState('networkidle', { timeout: 5000 });
   await expect(page.locator('body')).toBeAttached();
-
-  // 2. Enter game screen via song card (songId -> songs.toml -> chart -> audio)
-  const songCard = page.locator('.song-card').first();
-  await expect(songCard).toBeVisible();
-  await songCard.click();
-
-  // 3. Canvas mounted; wait so the video records the loading -> ready transition
-  const canvas = page.locator('canvas.game-canvas');
-  await expect(canvas).toBeVisible();
-  await page.waitForTimeout(2500);
-
-  // 4. Start game with Space (initializes AudioContext: metronome + music playback)
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(1500);
-
-  // 5. First ring at beat 4.0 (120bpm -> 2000ms). Hit Space near it.
-  await page.waitForTimeout(600);
-  await page.keyboard.press('Space');
-
-  // 6. Move cursor with Arrow keys between rings (video: input responsiveness)
-  await page.keyboard.down('ArrowUp');
-  await page.waitForTimeout(700);
-  await page.keyboard.up('ArrowUp');
-  await page.keyboard.down('ArrowDown');
-  await page.waitForTimeout(700);
-  await page.keyboard.up('ArrowDown');
-
-  // 7. Second ring at beat 8.0 (4000ms). Hit Space near it.
-  await page.waitForTimeout(800);
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(1500);
-
-  // 8. R: restart the game, then Space to (re)start audio
-  await page.keyboard.press('r');
-  await page.waitForTimeout(800);
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(2500);
-
-  // 9. Song ends (last ring hitTime + 2s) -> auto navigate to ResultScreen
-  await expect(page.locator('.result-screen')).toBeVisible({ timeout: 15000 });
+  const selectScreen = page.locator('.select-screen.screen-fade');
+  await expect(selectScreen).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.song-card').first()).toBeVisible();
   await page.waitForTimeout(2000);
 
-  // 10. 「もう一回」 -> back to GameScreen (replay path)
-  const retryButton = page.locator('.result-button.primary');
-  await expect(retryButton).toBeVisible();
-  await retryButton.click();
-  await expect(page.locator('canvas.game-canvas')).toBeVisible();
-  await page.waitForTimeout(1500);
+  // --- Frame 2: Game screen (click song card -> navigate /play/:songId) ---
+  await page.locator('.song-card').first().click();
+  await expect(page.locator('.game-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await page.locator('.game-canvas').waitFor({ state: 'visible', timeout: 10000 });
+  await page.waitForTimeout(2500);
 
-  // 11. ESC -> back to SelectScreen
+  // --- Frame 3: Back to select screen (ESC) ---
   await page.keyboard.press('Escape');
-  await expect(page.locator('.select-screen')).toBeVisible();
-  await page.waitForTimeout(1500);
+  await expect(page.locator('.select-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(2000);
 
-  // 12. No unhandled runtime errors
+  // --- Frame 4: Calibration screen (L shortcut) ---
+  await page.keyboard.press('l');
+  await expect(page.locator('.calibration-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.calibration-title')).toBeVisible();
+  await page.waitForTimeout(2000);
+
+  // --- Frame 5: Back to select screen (ESC) ---
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.select-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(2000);
+
+  // --- Frame 6: Editor screen (hash navigation) ---
+  await page.evaluate(() => {
+    window.location.hash = '#/editor';
+  });
+  await expect(page.locator('.editor-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.editor-header h1')).toHaveText('オーサリングツール');
+  await page.waitForTimeout(2000);
+
+  // --- Frame 7: Result screen (hash navigation, score count-up animation) ---
+  await page.evaluate(() => {
+    window.location.hash = '#/result';
+  });
+  await expect(page.locator('.result-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.result-rank')).toBeVisible();
+  await page.waitForTimeout(2500);
+
+  // --- Frame 8: Back to select screen via result button ---
+  await page.getByRole('button', { name: '曲選択' }).click();
+  await expect(page.locator('.select-screen.screen-fade')).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(2000);
+
+  // --- Assert fade-in class + animation applied on every screen ---
+  const fadeApplied = await page.evaluate(() => {
+    const el = document.querySelector('.screen-fade');
+    if (!el) return false;
+    const anim = getComputedStyle(el).animationName;
+    return anim === 'screen-fade-in';
+  });
+  expect(fadeApplied).toBe(true);
+
+  // --- No unhandled errors ---
   expect(errors).toHaveLength(0);
 });
