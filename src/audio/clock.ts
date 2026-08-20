@@ -1,7 +1,7 @@
 const OFFSET_KEY = 'rhythmManualOffsetMs';
 
 let audioStartTime = 0;
-let manualOffsetMs = loadOffset();
+export let manualOffsetMs = loadOffset();
 
 function loadOffset(): number {
   try {

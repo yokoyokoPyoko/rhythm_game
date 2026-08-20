@@ -1,12 +1,169 @@
 [0m
 > build · hy3-free
 [0m
-[0m→ [0mRead src/audio/AudioManager.ts
+[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/ 2>/dev/null; echo "---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts 2>/dev/null; echo "---clock---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts 2>/dev/null
+AudioManager.ts
+bpmTimeline.ts
+clock.ts
+keySound.ts
+loader.ts
+metronome.ts
+---
+import { offsetSeconds } from './clock';
+
+export const LOOKAHEAD_MS = 200;
+const SCHEDULE_INTERVAL_MS = 25;
+const CLICK_DURATION = 0.04;
+const STRONG_FREQ = 880;
+const WEAK_FREQ = 440;
+
+export class Metronome {
+  private timerId: number | null = null;
+  private nextBeatTime = 0;
+  private nextBeatNumber = 0;
+  private beatMs: number;
+  private audioCtx: AudioContext;
+  private getBeatMs: (beat: number) => number;
+
+  constructor(
+    audioCtx: AudioContext,
+    startAudioTime: number,
+    initialBeatMs: number,
+    getBeatMs: (beat: number) => number,
+  ) {
+    this.audioCtx = audioCtx;
+    this.beatMs = initialBeatMs;
+    this.getBeatMs = getBeatMs;
+    this.nextBeatTime = startAudioTime;
+    this.nextBeatNumber = 0;
+  }
+
+  start(): void {
+    if (this.timerId !== null) return;
+    this.timerId = window.setInterval(() => this.tick(), SCHEDULE_INTERVAL_MS);
+  }
+
+  stop(): void {
+    if (this.timerId !== null) {
+      window.clearInterval(this.timerId);
+      this.timerId = null;
+    }
+  }
+
+  private tick(): void {
+    const horizon = this.audioCtx.currentTime + LOOKAHEAD_MS / 1000;
+    while (this.nextBeatTime < horizon) {
+      schedule(this.audioCtx, this.nextBeatTime, this.nextBeatNumber, 0);
+      this.nextBeatNumber += 1;
+      this.beatMs = this.getBeatMs(this.nextBeatNumber);
+      this.nextBeatTime += this.beatMs / 1000;
+    }
+  }
+}
+
+export function schedule(
+  audioCtx: AudioContext,
+  nextBeatTime: number,
+  beat: number,
+  latency: number,
+): void {
+  const isStrong = beat % 4 === 0;
+  const freq = isStrong ? STRONG_FREQ : WEAK_FREQ;
+  const when = nextBeatTime + offsetSeconds() + Math.max(0, latency);
+
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.value = freq;
+
+  const peak = isStrong ? 0.18 : 0.1;
+  gain.gain.setValueAtTime(peak, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + CLICK_DURATION);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(when);
+  osc.stop(when + CLICK_DURATION + 0.01);
+}
+---clock---
+const OFFSET_KEY = 'rhythmManualOffsetMs';
+
+let audioStartTime = 0;
+let manualOffsetMs = loadOffset();
+
+function loadOffset(): number {
+  try {
+    const raw = localStorage.getItem(OFFSET_KEY);
+    if (raw === null) return 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 0;
+    return n;
+  } catch {
+    return 0;
+  }
+}
+
+export function songNow(): number {
+  const ctx = clockCtxRef;
+  if (!ctx) return 0;
+  return (ctx.currentTime - audioStartTime) * 1000;
+}
+
+let clockCtxRef: AudioContext | null = null;
+
+export function resetClock(audioCtx: AudioContext): void {
+  clockCtxRef = audioCtx;
+  audioStartTime = audioCtx.currentTime;
+}
+
+export function setManualOffset(ms: number): void {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return;
+  manualOffsetMs = n;
+  try {
+    localStorage.setItem(OFFSET_KEY, String(n));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+export function getManualOffset(): number {
+  return manualOffsetMs;
+}
+
+export function getManualOffsetMs(): number {
+  return manualOffsetMs;
+}
+
+export function offsetSeconds(): number {
+  return manualOffsetMs / 1000;
+}
 [0m
-[0m← [0mWrite src/audio/clock.ts
-Wrote file successfully.
-[0m
-[0m$ [0mnpx tsc --noEmit 2>&1 | head -20
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -30
 (no output)
 [0m
+[0m← [0mEdit src/audio/clock.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts
+@@ -1,8 +1,8 @@
+ const OFFSET_KEY = 'rhythmManualOffsetMs';
+ 
+ let audioStartTime = 0;
+-let manualOffsetMs = loadOffset();
++export let manualOffsetMs = loadOffset();
+ 
+ function loadOffset(): number {
+   try {
+     const raw = localStorage.getItem(OFFSET_KEY);
+
+[0m
+Files already exist and compile. I'll export `manualOffsetMs` to match the spec's listed exports.
+[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -20 && echo "EXIT:$?"
+EXIT:0
+[0m
+Zero errors. `clock.ts` implements `songNow()`, `resetClock(audioCtx)`, `setManualOffset(ms)`, and exports `manualOffsetMs` (loaded from localStorage). The metronome's `schedule()` already consumes `offsetSeconds()` (manualOffsetMs/1000) for lookahead scheduling.
+
 DONE
