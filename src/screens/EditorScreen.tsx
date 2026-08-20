@@ -284,7 +284,7 @@ export default function EditorScreen() {
         </aside>
 
         <main className="editor-main">
-          <WavePreview segments={segments} bpm={safeBpm} rings={rings} />
+          <WavePreview segments={segments} bpm={safeBpm} bpmChanges={bpmChanges} rings={rings} />
           <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
 
           <section className="editor-pane">

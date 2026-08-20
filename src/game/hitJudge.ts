@@ -12,34 +12,41 @@ export function judgeHit(
 ): HitJudgement | null {
   const windowMs = currentBeatMs * 0.4;
 
-  let nearest: RingState | null = null;
-  let nearestErr = Infinity;
+  const candidates: { ring: RingState; err: number; yDist: number }[] = [];
   for (const ring of rings) {
     if (ring.resolved) continue;
     const err = Math.abs(pressTimeMs - ring.hitTime);
-    if (err < nearestErr) {
-      nearestErr = err;
-      nearest = ring;
+    if (err < windowMs) {
+      const yDist = Math.abs(cursorY - ring.targetY);
+      candidates.push({ ring, err, yDist });
     }
   }
 
-  if (!nearest) return null;
-  if (nearestErr >= windowMs) return null;
+  if (candidates.length === 0) return null;
 
-  const yDist = Math.abs(cursorY - nearest.targetY);
+  const hitCandidates = candidates.filter((c) => c.yDist < HIT_Y);
+
+  let selected: { ring: RingState; err: number; yDist: number };
   let result: 'perfect' | 'good' | 'miss';
-  if (yDist >= HIT_Y) {
-    result = 'miss';
-  } else if (nearestErr < PERFECT_MS && yDist < PERFECT_Y) {
-    result = 'perfect';
+
+  if (hitCandidates.length > 0) {
+    hitCandidates.sort((a, b) => a.err - b.err);
+    selected = hitCandidates[0];
+    if (selected.err < PERFECT_MS && selected.yDist < PERFECT_Y) {
+      result = 'perfect';
+    } else {
+      result = 'good';
+    }
   } else {
-    result = 'good';
+    candidates.sort((a, b) => a.err - b.err);
+    selected = candidates[0];
+    result = 'miss';
   }
 
-  nearest.resolved = true;
+  selected.ring.resolved = true;
   if (result !== 'miss') {
-    nearest.hit = true;
+    selected.ring.hit = true;
   }
 
-  return { result, errorMs: pressTimeMs - nearest.hitTime };
+  return { result, errorMs: pressTimeMs - selected.ring.hitTime };
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { WaveEngine } from '../../game/waveEngine'
-import type { RingDef, Segment } from '../../types'
+import type { BpmChange, RingDef, Segment } from '../../types'
 
 const GAME_CENTER_Y = 300
 const GAME_AMP = 80
@@ -11,10 +11,12 @@ const SUB_COLOR = '#22d3ee'
 export default function WavePreview({
   segments,
   bpm,
+  bpmChanges = [],
   rings = [],
 }: {
   segments: Segment[]
   bpm: number
+  bpmChanges?: BpmChange[]
   rings?: RingDef[]
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -34,7 +36,7 @@ export default function WavePreview({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cssW, cssH)
 
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, [])
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
     const engine = new WaveEngine(segments, timeline)
 
     const centerY = cssH / 2

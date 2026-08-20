@@ -31,7 +31,6 @@ export default function CalibrationScreen() {
   const startMetronome = useCallback(() => {
     stopMetronome()
     const ctx = audioMgr.ctx
-    const latency = audioMgr.baseLatency + audioMgr.outputLatency
     const lookaheadSec = LOOKAHEAD_MS / 1000
     const beatSec = 60000 / CAL_BPM / 1000
     let beat = 0
@@ -42,7 +41,7 @@ export default function CalibrationScreen() {
           gridRef.current[beat] = nextBeatTime
         }
         try {
-          schedule(ctx, nextBeatTime, beat, latency)
+          schedule(ctx, nextBeatTime, beat)
         } catch {
           // keep the beat grid advancing even if one click fails to schedule
         }
@@ -56,6 +55,8 @@ export default function CalibrationScreen() {
     if (done || samplesRef.current.length >= CAL_SAMPLES) return
     if (!startedRef.current) {
       startedRef.current = true
+      setManualOffset(0)
+      setOffsetMs(0)
       await audioMgr.ensure()
       startMetronome()
     }

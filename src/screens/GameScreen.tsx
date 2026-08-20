@@ -98,7 +98,6 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     (ctx: AudioContext) => {
       stopMetronome()
       const audioMgr = AudioManager.getInstance()
-      const latency = audioMgr.baseLatency + audioMgr.outputLatency
       const lookaheadSec = LOOKAHEAD_MS / 1000
       let beat = 0
       let nextBeatTime = ctx.currentTime
@@ -108,7 +107,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         const audioCtx = audioMgr.ctx
         while (nextBeatTime < audioCtx.currentTime + lookaheadSec) {
           try {
-            schedule(audioCtx, nextBeatTime, beat, latency)
+            schedule(audioCtx, nextBeatTime, beat)
           } catch {
             // keep the beat grid advancing even if one click fails to schedule
           }
@@ -121,8 +120,10 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   )
 
   const startGame = useCallback(async () => {
+    if (startedRef.current) return
     const audioMgr = AudioManager.getInstance()
     await audioMgr.ensure()
+    if (startedRef.current) return
     const ctx = audioMgr.ctx
     resetClock(ctx)
     startedRef.current = true
@@ -291,7 +292,11 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         judgementEvents: judgementEventsRef.current,
       })
 
-      if (!endedRef.current && lastHitTime !== null && songTimeMs > lastHitTime + END_DELAY_MS) {
+      const buffer = bufferRef.current
+      const fallbackEnd = lastHitTime !== null ? lastHitTime + END_DELAY_MS : 60000
+      const endThreshold = buffer ? buffer.duration * 1000 : fallbackEnd
+
+      if (!endedRef.current && songTimeMs > endThreshold) {
         endedRef.current = true
         stopMusic()
         stopMetronome()
