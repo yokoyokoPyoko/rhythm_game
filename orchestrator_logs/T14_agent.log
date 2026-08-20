@@ -1,12 +1,38 @@
 [0m
 > build · hy3-free
 [0m
-[0m→ [0mRead src/types.ts
+[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/ 2>/dev/null; echo "---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/types.ts 2>/dev/null | head -50
+AudioManager.ts
+bpmTimeline.ts
+clock.ts
+keySound.ts
+loader.ts
+metronome.ts
+---
+export interface Segment { direction: 'up' | 'down'; beats: number; }
+export interface BpmChange { beat: number; bpm: number; }
+export interface RingDef { beat: number; }
+export interface Chart {
+  title: string; artist: string; bpm: number; audio: string;
+  bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
+}
+export interface SongEntry {
+  id: string; title: string; artist: string; chartPath: string; difficulty: number;
+}
+export interface RingState {
+  id: number; spawnTime: number; hitTime: number; targetY: number;
+  resolved: boolean; hit: boolean;
+}
+export type HitResult = 'perfect' | 'good' | 'miss';
+export type GameMode = 'select' | 'playing' | 'result' | 'editor' | 'calibration';
+export interface HitJudgement { result: HitResult; errorMs: number; }
 [0m
-[0m← [0mWrite src/audio/bpmTimeline.ts
-Wrote file successfully.
+[0m→ [0mRead src/audio/bpmTimeline.ts
+The file is already fully implemented and matches the spec. Let me verify there are no TS errors.
 [0m
-[0m$ [0mnpx tsc --noEmit 2>&1 | head -20
-(no output)
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -20; echo "EXIT: ${PIPESTATUS[0]}"
+EXIT: 0
 [0m
+`src/audio/bpmTimeline.ts` already fully implements the `BpmTimeline` class with `beatToMs`, `msToBeat`, `bpmAt`, and `beatMsAt`, handling `bpm_changes` correctly. `tsc --noEmit` passes with zero errors.
+
 DONE
