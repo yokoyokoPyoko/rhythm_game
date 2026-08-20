@@ -82,8 +82,7 @@ QA_OPTIONS = [
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "クラウド最適解: マルチモーダル5連フレーム高速審査"),
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "思考・画像認識: 画像認識 + 思考推論"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "動画審査: .webm 動画を直接解析 (Gemini 固定)"),
 ]
 
 POSTMORTEM_OPTIONS = [
@@ -546,6 +545,9 @@ def ensure_dev_server() -> bool:
     return False
 
 
+VIDEO_DIR = ROOT / "recordings"
+
+
 def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} is non-UI -> Skip")
@@ -554,6 +556,7 @@ def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
         return GateResult("Gate B (Dynamic Test)", False, "Dev server failed to start")
 
     SCREENSHOT_DIR.mkdir(exist_ok=True)
+    VIDEO_DIR.mkdir(exist_ok=True)
     spec = extract_compact_spec(task.id)
 
     prompt = f"""Generate a Playwright (TypeScript) test script for task {task.id} ({task.desc}).
@@ -562,8 +565,8 @@ Specification:
 {spec}
 
 Requirements:
-1. Navigate to 'http://localhost:5173/' and simulate user interaction.
-2. Save 5 sequential screenshots: 'screenshots/frame_1.png' through 'screenshots/frame_5.png'.
+1. Navigate to 'http://localhost:5173/' and simulate realistic user interaction (clicks, keypresses, sound checks).
+2. Wait appropriately (at least 2-4 seconds) to record dynamic audio-visual behavior into video.
 3. Assert no unhandled console errors or broken states.
 
 Output only ```typescript ... ``` code block.
@@ -576,13 +579,11 @@ Output only ```typescript ... ``` code block.
     code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
     if not code_match:
         test_code = """import { test, expect } from '@playwright/test';
-test('fallback smoke test', async ({ page }) => {
+test('dynamic video test', async ({ page }) => {
   await page.goto('http://localhost:5173/');
-  await page.waitForTimeout(1000);
-  for (let i = 1; i <= 5; i++) {
-    await page.screenshot({ path: `screenshots/frame_${i}.png` });
-    await page.waitForTimeout(500);
-  }
+  await page.waitForTimeout(2000);
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(2000);
 });
 """
     else:
@@ -590,7 +591,7 @@ test('fallback smoke test', async ({ page }) => {
 
     DYNAMIC_SPEC_FILE.parent.mkdir(exist_ok=True)
     DYNAMIC_SPEC_FILE.write_text(test_code, encoding="utf-8")
-    log.info("Generated tests/dynamic.spec.ts -> Running Playwright execution...")
+    log.info("Generated tests/dynamic.spec.ts -> Running Playwright execution with Video Recording...")
 
     code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=90, prefix="playwright: ")
     if code != 0:
@@ -598,34 +599,36 @@ test('fallback smoke test', async ({ page }) => {
         detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
         return GateResult("Gate B (Dynamic Test)", False, detail)
 
-    saved_frames = [f"frame_{i}.png" for i in range(1, 6) if (SCREENSHOT_DIR / f"frame_{i}.png").exists()]
-    log.info("Captured %d/5 verification frames.", len(saved_frames))
-    return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(saved_frames)} frames captured)")
+    # 録画された .webm 動画ファイルを探索
+    videos = list(VIDEO_DIR.glob("**/*.webm"))
+    log.info("Playwright execution completed (%d video recording(s) captured).", len(videos))
+    return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(videos)} video(s) recorded)")
 
 
 def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} is non-UI -> Skip")
 
-    frames_exist = [f"frame_{i}.png (exists: {(SCREENSHOT_DIR / f'frame_{i}.png').exists()})" for i in range(1, 6)]
+    videos = list(VIDEO_DIR.glob("**/*.webm"))
+    latest_video = str(videos[-1].relative_to(ROOT)) if videos else "none"
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""Review the browser execution frames ({', '.join(frames_exist)}) for task {task.id} ({task.desc}).
+    prompt = f"""You are the Dynamic Reviewer evaluating browser gameplay video recording ({latest_video}) for task {task.id} ({task.desc}).
 
 Specification:
 {spec}
 
-Criteria (20pts each, pass >= 80pts):
-1. Dynamic behavior / smooth animation
-2. Minimal dark layout consistency
-3. Input responsiveness
-4. Prevention of invalid state / premature scoring
-5. Requirement completeness
+Evaluation Criteria (20pts each, pass >= 80pts):
+1. Dynamic UI/Audio behavior & smooth Canvas animations (no jitter, no frozen screen)
+2. Audio synchronization & Metronome timing accuracy
+3. Minimal dark Linear/Vercel design system consistency (no rainbow RGB/excessive glow)
+4. Input responsiveness & prevention of invalid premature scoring
+5. Task specification completeness
 
 Output JSON only:
 {{"score": 85, "verdict": "PASS", "comment": "reason"}} or {{"score": 65, "verdict": "FAIL", "comment": "reason"}}
 """
-    log.info("Reviewer evaluating captured frames & dynamic UX...")
+    log.info("Reviewer (Gemini Video AI) evaluating gameplay recording (%s)...", latest_video)
     code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=90, label="Dynamic-Review", variant="medium")
     
     if code != 0:
