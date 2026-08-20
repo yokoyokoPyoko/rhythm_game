@@ -27,7 +27,11 @@ export function judgeHit(
   const timingError = Math.abs(nearest.hitTime - pressTimeMs);
   const yDistance = Math.abs(cursorY - nearest.targetY);
 
-  if (timingError < currentBeatMs * 0.4 && yDistance < Y_HIT_TOLERANCE) {
+  const timingWindow = Number.isFinite(currentBeatMs) && currentBeatMs > 0
+    ? currentBeatMs * 0.4
+    : 0;
+
+  if (timingError < timingWindow && yDistance < Y_HIT_TOLERANCE) {
     nearest.resolved = true;
     nearest.hit = true;
     if (timingError < PERFECT_MS && yDistance < Y_PERFECT_TOLERANCE) {
