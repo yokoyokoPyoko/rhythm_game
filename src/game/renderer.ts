@@ -38,6 +38,7 @@ export interface RenderParams {
   songTimeMs: number;
   bpmTimeline: BpmTimeline;
   judgementEvents?: JudgementEvent[];
+  scrollSpeed?: number;
 }
 
 function safe(value: number, fallback: number): number {
@@ -65,11 +66,12 @@ function resultColor(result: HitResult): string {
 export class Renderer {
   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
     const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline } = params;
+    const scrollSpeed = Number.isFinite(params.scrollSpeed) && (params.scrollSpeed as number) > 0 ? (params.scrollSpeed as number) : TW_SCROLL;
 
     this.drawBackground(ctx);
     this.drawJudgeLine(ctx);
-    this.drawWave(ctx, waveEngine, songTimeMs);
-    this.drawRings(ctx, rings, songTimeMs);
+    this.drawWave(ctx, waveEngine, songTimeMs, scrollSpeed);
+    this.drawRings(ctx, rings, songTimeMs, scrollSpeed);
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
     this.drawJudgements(ctx, params.judgementEvents ?? [], songTimeMs);
@@ -89,13 +91,13 @@ export class Renderer {
     ctx.stroke();
   }
 
-  private drawWave(ctx: CanvasRenderingContext2D, waveEngine: WaveEngine, songTimeMs: number): void {
+  private drawWave(ctx: CanvasRenderingContext2D, waveEngine: WaveEngine, songTimeMs: number, scrollSpeed: number): void {
     ctx.strokeStyle = COLORS.accent;
     ctx.lineWidth = 2.5;
     ctx.lineJoin = 'round';
     ctx.beginPath();
     for (let x = 0; x <= CANVAS_WIDTH; x += 4) {
-      const timeMs = songTimeMs + ((x - TW_JUDGE_X) / TW_SCROLL) * 1000;
+      const timeMs = songTimeMs + ((x - TW_JUDGE_X) / scrollSpeed) * 1000;
       const y = safe(waveEngine.waveYAtMs(timeMs), CANVAS_HEIGHT / 2);
       if (x === 0) {
         ctx.moveTo(x, y);
@@ -112,9 +114,9 @@ export class Renderer {
     ctx.fill();
   }
 
-  private drawRings(ctx: CanvasRenderingContext2D, rings: RingState[], songTimeMs: number): void {
+  private drawRings(ctx: CanvasRenderingContext2D, rings: RingState[], songTimeMs: number, scrollSpeed: number): void {
     for (const ring of rings) {
-      const x = TW_JUDGE_X + ((ring.hitTime - songTimeMs) / 1000) * TW_SCROLL;
+      const x = TW_JUDGE_X + ((ring.hitTime - songTimeMs) / 1000) * scrollSpeed;
       if (x < -80 || x > CANVAS_WIDTH + 80) {
         continue;
       }

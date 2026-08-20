@@ -13,11 +13,13 @@ export default function WavePreview({
   bpm,
   bpmChanges = [],
   rings = [],
+  amplitude = 130,
 }: {
   segments: Segment[]
   bpm: number
   bpmChanges?: BpmChange[]
   rings?: RingDef[]
+  amplitude?: number
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -36,12 +38,13 @@ export default function WavePreview({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cssW, cssH)
 
+    const ampVal = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 130
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-    const engine = new WaveEngine(segments, timeline)
+    const engine = new WaveEngine(segments, timeline, ampVal)
 
     const centerY = cssH / 2
     const amp = Math.min(40, centerY - 8)
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / GAME_AMP) * amp
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * amp
 
     ctx.strokeStyle = 'rgba(255,255,255,0.07)'
     ctx.lineWidth = 1

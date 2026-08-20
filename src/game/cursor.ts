@@ -1,22 +1,22 @@
 const TW_CENTER_Y = 600 / 2;
-const TW_AMP = 130;
-
-const WAVE_TOP = TW_CENTER_Y - TW_AMP;
-const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;
 
 export class Cursor {
   y: number;
+  private readonly amplitude: number;
 
-  constructor() {
-    this.y = WAVE_TOP;
+  constructor(amplitude = 130) {
+    this.amplitude = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 130;
+    this.y = TW_CENTER_Y - this.amplitude;
   }
 
   update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, segmentBeats = 1): void {
+    const waveTop = TW_CENTER_Y - this.amplitude;
+    const waveBottom = TW_CENTER_Y + this.amplitude;
     const beats = segmentBeats > 0 ? segmentBeats : 1;
-    const speed = (2 * TW_AMP) / (beats * (beatMs / 1000));
+    const speed = (2 * this.amplitude) / (beats * (beatMs / 1000));
     let delta = 0;
     if (upPressed) delta -= speed;
     if (downPressed) delta += speed;
-    this.y = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, this.y + delta * dt));
+    this.y = Math.max(waveTop, Math.min(waveBottom, this.y + delta * dt));
   }
 }

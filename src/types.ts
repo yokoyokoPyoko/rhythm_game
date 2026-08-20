@@ -3,6 +3,9 @@ export interface BpmChange { beat: number; bpm: number; }
 export interface RingDef { beat: number; }
 export interface Chart {
   title: string; artist: string; bpm: number; audio: string;
+  audio_offset: number;
+  scroll_speed: number;
+  amplitude: number;
   bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
 }
 export interface SongEntry {

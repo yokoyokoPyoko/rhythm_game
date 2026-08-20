@@ -23,6 +23,9 @@ function formatSeconds(ms: number): string {
 export default function EditorScreen() {
   const [url, setUrl] = useState('/rhythm_game/audio/08.Reply.flac')
   const [bpm, setBpm] = useState(120)
+  const [amplitude, setAmplitude] = useState(130)
+  const [scrollSpeed, setScrollSpeed] = useState(110)
+  const [audioOffset, setAudioOffset] = useState(0)
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null)
   const [durationMs, setDurationMs] = useState(0)
   const [positionMs, setPositionMs] = useState(0)
@@ -189,11 +192,14 @@ export default function EditorScreen() {
       artist: '',
       bpm: safeBpm,
       audio: url,
+      audio_offset: audioOffset,
+      scroll_speed: scrollSpeed,
+      amplitude,
       bpm_changes: bpmChanges,
       segments,
       rings,
     }
-  }, [safeBpm, url, bpmChanges, segments, rings])
+  }, [safeBpm, url, audioOffset, scrollSpeed, amplitude, bpmChanges, segments, rings])
 
   const exportChart = () => {
     const toml = chartToToml(buildChart())
@@ -266,6 +272,12 @@ export default function EditorScreen() {
               onBpmChange={setBpm}
               bpmChanges={bpmChanges}
               onBpmChangesChange={setBpmChanges}
+              amplitude={amplitude}
+              onAmplitudeChange={setAmplitude}
+              scrollSpeed={scrollSpeed}
+              onScrollSpeedChange={setScrollSpeed}
+              audioOffset={audioOffset}
+              onAudioOffsetChange={setAudioOffset}
             />
           </section>
 
@@ -284,7 +296,13 @@ export default function EditorScreen() {
         </aside>
 
         <main className="editor-main">
-          <WavePreview segments={segments} bpm={safeBpm} bpmChanges={bpmChanges} rings={rings} />
+          <WavePreview
+            segments={segments}
+            bpm={safeBpm}
+            bpmChanges={bpmChanges}
+            rings={rings}
+            amplitude={amplitude}
+          />
           <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
 
           <section className="editor-pane">

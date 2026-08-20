@@ -84,13 +84,18 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     }
   }, [])
 
-  const playMusic = useCallback((ctx: AudioContext) => {
+  const playMusic = useCallback((ctx: AudioContext, audioOffsetMs = 0) => {
     const buffer = bufferRef.current
     if (!buffer) return
     const source = ctx.createBufferSource()
     source.buffer = buffer
     source.connect(ctx.destination)
-    source.start()
+    const offsetSec = audioOffsetMs / 1000
+    if (offsetSec >= 0) {
+      source.start(ctx.currentTime + offsetSec)
+    } else {
+      source.start(ctx.currentTime, -offsetSec)
+    }
     musicSourceRef.current = source
   }, [])
 
@@ -127,7 +132,8 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     const ctx = audioMgr.ctx
     resetClock(ctx)
     startedRef.current = true
-    playMusic(ctx)
+    const chart = chartRef.current
+    playMusic(ctx, chart?.audio_offset ?? 0)
     startMetronome(ctx)
   }, [playMusic, startMetronome])
 
@@ -192,7 +198,8 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes)
         chartRef.current = chart
         timelineRef.current = timeline
-        waveRef.current = new WaveEngine(chart.segments, timeline)
+        waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude)
+        cursorRef.current = new Cursor(chart.amplitude)
         bufferRef.current = await loadAudio(chart.audio, audioMgr.ctx)
         if (!cancelled) {
           setStatus('ready')
@@ -290,6 +297,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         songTimeMs,
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
+        scrollSpeed: chart.scroll_speed,
       })
 
       const buffer = bufferRef.current

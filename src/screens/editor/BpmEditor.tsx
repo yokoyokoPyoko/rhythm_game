@@ -20,9 +20,26 @@ interface BpmEditorProps {
   onBpmChange: (bpm: number) => void
   bpmChanges: BpmChange[]
   onBpmChangesChange: (next: BpmChange[]) => void
+  amplitude: number
+  onAmplitudeChange: (val: number) => void
+  scrollSpeed: number
+  onScrollSpeedChange: (val: number) => void
+  audioOffset: number
+  onAudioOffsetChange: (val: number) => void
 }
 
-export default function BpmEditor({ bpm, onBpmChange, bpmChanges, onBpmChangesChange }: BpmEditorProps) {
+export default function BpmEditor({
+  bpm,
+  onBpmChange,
+  bpmChanges,
+  onBpmChangesChange,
+  amplitude,
+  onAmplitudeChange,
+  scrollSpeed,
+  onScrollSpeedChange,
+  audioOffset,
+  onAudioOffsetChange,
+}: BpmEditorProps) {
   const tapTimesRef = useRef<number[]>([])
   const [tapCount, setTapCount] = useState(0)
 
@@ -81,6 +98,50 @@ export default function BpmEditor({ bpm, onBpmChange, bpmChanges, onBpmChangesCh
           max={BPM_MAX}
           value={safeBpm(bpm)}
           onChange={(e) => onBpmChange(safeBpm(Number(e.target.value)))}
+        />
+      </div>
+
+      <div className="editor-field">
+        <label className="editor-label" htmlFor="amplitude">
+          振幅 (Amplitude px)
+        </label>
+        <input
+          id="amplitude"
+          className="editor-input"
+          type="number"
+          min={10}
+          max={300}
+          value={Number.isFinite(amplitude) ? amplitude : 130}
+          onChange={(e) => onAmplitudeChange(Number(e.target.value))}
+        />
+      </div>
+
+      <div className="editor-field">
+        <label className="editor-label" htmlFor="scroll-speed">
+          スクロール速度 (Scroll Speed px/s)
+        </label>
+        <input
+          id="scroll-speed"
+          className="editor-input"
+          type="number"
+          min={10}
+          max={1000}
+          value={Number.isFinite(scrollSpeed) ? scrollSpeed : 110}
+          onChange={(e) => onScrollSpeedChange(Number(e.target.value))}
+        />
+      </div>
+
+      <div className="editor-field">
+        <label className="editor-label" htmlFor="audio-offset">
+          オーディオオフセット (Audio Offset ms)
+        </label>
+        <input
+          id="audio-offset"
+          className="editor-input"
+          type="number"
+          step={10}
+          value={Number.isFinite(audioOffset) ? audioOffset : 0}
+          onChange={(e) => onAudioOffsetChange(Number(e.target.value))}
         />
       </div>
 

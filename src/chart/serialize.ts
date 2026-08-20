@@ -15,6 +15,9 @@ export function chartToToml(chart: Chart): string {
   lines.push(`artist = ${tomlString(chart.artist)}`)
   lines.push(`bpm = ${fmt(chart.bpm)}`)
   lines.push(`audio = ${tomlString(chart.audio)}`)
+  lines.push(`audio_offset = ${fmt(chart.audio_offset)}`)
+  lines.push(`scroll_speed = ${fmt(chart.scroll_speed)}`)
+  lines.push(`amplitude = ${fmt(chart.amplitude)}`)
 
   for (const change of chart.bpm_changes) {
     lines.push('', '[[bpm_changes]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`)
