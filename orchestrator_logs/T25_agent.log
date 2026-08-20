@@ -1,29 +1,52 @@
 [0m
 > build · hy3-free
 [0m
+[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/ 2>/dev/null; echo "---TYPES---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/types.ts 2>/dev/null
+/home/p-yoko/Program/TypeScript/rhythm_game/src/audio/:
+AudioManager.ts
+bpmTimeline.ts
+clock.ts
+keySound.ts
+loader.ts
+metronome.ts
+
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/:
+cursor.ts
+hitJudge.ts
+renderer.ts
+ringSpawner.ts
+score.ts
+waveEngine.ts
+---TYPES---
+export interface Segment { direction: 'up' | 'down'; beats: number; }
+export interface BpmChange { beat: number; bpm: number; }
+export interface RingDef { beat: number; }
+export interface Chart {
+  title: string; artist: string; bpm: number; audio: string;
+  bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
+}
+export interface SongEntry {
+  id: string; title: string; artist: string; chartPath: string; difficulty: number;
+}
+export interface RingState {
+  id: number; spawnTime: number; hitTime: number; targetY: number;
+  resolved: boolean; hit: boolean;
+}
+export type HitResult = 'perfect' | 'good' | 'miss';
+export type GameMode = 'select' | 'playing' | 'result' | 'editor' | 'calibration';
+export interface HitJudgement { result: HitResult; errorMs: number; }
+[0m
+[0m→ [0mRead src/game/renderer.ts
 [0m→ [0mRead src/game/waveEngine.ts
 [0m→ [0mRead src/game/cursor.ts
 [0m→ [0mRead src/game/ringSpawner.ts
 [0m→ [0mRead src/game/score.ts
-[0m→ [0mRead src/types.ts
-I'll check the existing game files to understand the interfaces I need to work with.
 [0m→ [0mRead src/audio/bpmTimeline.ts
-[0m✱ [0mGrep "TW_JUDGE_X|TW_CENTER_Y|TW_AMP|TW_SCROLL"[90m 22 matches[0m
-[0m→ [0mRead src/game/renderer.ts
-A renderer.ts already exists. Let me read it.
-The renderer already exists and matches the spec. Let me verify it compiles cleanly.
+The renderer already exists and appears complete. Let me verify it compiles.
 [0m
 [0m$ [0mnpx tsc --noEmit 2>&1 | head -30
 (no output)
 [0m
-The `src/game/renderer.ts` already fully implements T25 and compiles with zero errors:
-- `Renderer` class with `render(ctx, params)` accepting all required engines/states
-- Draw order: background → judge line → wave → rings → cursor → HUD (judgements as HUD overlay)
-- Wave drawn in accent color at 2.5px line width
-- Cursor color by combo tier (accent→sub→positive→warning)
-- Rings scale from 64px down to 14px
-- Background `#0a0a0a` only
-
-`tsc --noEmit` passes clean.
-
 DONE
+
+The `src/game/renderer.ts` is already fully implemented and conforms to the T25 spec: `Renderer` class with `render()` taking all required params, correct draw order (bg → judge line → wave → rings → cursor → HUD, plus judgement text), accent-colored 2.5px wave, combo-tier cursor colors, rings scaling 64→14px, and `#0a0a0a` background. `tsc --noEmit` passes with zero errors.

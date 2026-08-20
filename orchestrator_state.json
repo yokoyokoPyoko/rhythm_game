@@ -93,14 +93,14 @@
     },
     "T24": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1787207444.3430338,
-      "finished": 1787203273.2736862
+      "finished": 1787207468.952641
     },
     "T25": {
       "attempts": 1,
-      "status": "passed",
-      "started": 1787206289.1586857,
+      "status": "running",
+      "started": 1787207468.9529736,
       "finished": 1787206321.4845717
     },
     "T30": {
