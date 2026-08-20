@@ -423,12 +423,16 @@ def rate_limit_sleep(model: str) -> None:
         time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode") -> tuple[int, str]:
-    cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model, prompt]
+def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode", variant: str | None = None) -> tuple[int, str]:
+    cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model]
+    if variant:
+        cmd.extend(["--variant", variant])
+    cmd.append(prompt)
 
     for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
         rate_limit_sleep(model)
-        log.info("Dispatching %s%s%s (model=%s%s%s, attempt=%d/%d, timeout=%ds)", BOLD, label, RESET, GRAY, model, RESET, attempt, len(BACKOFF_DELAYS), timeout)
+        variant_info = f", variant={variant}" if variant else ""
+        log.info("Dispatching %s%s%s (model=%s%s%s%s, attempt=%d/%d, timeout=%ds)", BOLD, label, RESET, GRAY, model, variant_info, RESET, attempt, len(BACKOFF_DELAYS), timeout)
         print(f"  {GRAY}┌─ Start: {label} ──────────────────────────────────────{RESET}", flush=True)
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
         print(f"  {GRAY}└─ End: {label} (exit={code}) ─────────────────────────────────{RESET}", flush=True)
@@ -563,7 +567,7 @@ Requirements:
 Output only ```typescript ... ``` code block.
 """
     log.info("QA generating dynamic test script...")
-    code, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen")
+    code, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen", variant="max")
     if code != 0:
         return GateResult("Gate B (Dynamic Test)", False, "QA model failed to generate test script")
 
@@ -620,7 +624,7 @@ Output JSON only:
 {{"score": 85, "verdict": "PASS", "comment": "reason"}} or {{"score": 65, "verdict": "FAIL", "comment": "reason"}}
 """
     log.info("Reviewer evaluating captured frames & dynamic UX...")
-    code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=90, label="Dynamic-Review")
+    code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=90, label="Dynamic-Review", variant="medium")
     
     if code != 0:
         log.error("Reviewer model failed/timed out. Rejecting Gate C.")
@@ -659,7 +663,7 @@ Output JSON only:
 }}
 """
     log.info("Postmortem analyzing failure and formulating rules...")
-    _, out = run_opencode_with_retry(postmortem_model, prompt, timeout=180, label="Postmortem")
+    _, out = run_opencode_with_retry(postmortem_model, prompt, timeout=180, label="Postmortem", variant="max")
     
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
     with open(POSTMORTEM_FILE, "a", encoding="utf-8") as f:
@@ -706,7 +710,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
         # 1. Coder
         prompt = build_compact_coder_prompt(task)
-        code, out = run_opencode_with_retry(models.coder, prompt, timeout=300, label=f"Coder({task.id})")
+        code, out = run_opencode_with_retry(models.coder, prompt, timeout=300, label=f"Coder({task.id})", variant="medium")
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
         if code != 0:
             log.error("[%s] Coder model execution failed.", task.id)
