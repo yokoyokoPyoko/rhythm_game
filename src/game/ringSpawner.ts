@@ -12,9 +12,10 @@ function sanitizeBeat(value: number): number {
 }
 
 export class RingSpawner {
-  private readonly ringDefs: RingDef[];
+  private ringDefs: RingDef[] = [];
   private readonly spawned: RingState[] = [];
   private nextIndex = 0;
+  private lastRingsRef: RingDef[] | null = null;
 
   constructor(rings: RingDef[] = []) {
     this.ringDefs = (rings ?? [])
@@ -25,10 +26,21 @@ export class RingSpawner {
 
   update(
     songTimeMs: number,
+    rings: RingDef[],
     bpmTimeline: BpmTimeline,
     waveEngine: WaveEngine,
   ): RingState[] {
     const now = Number.isFinite(songTimeMs) ? songTimeMs : 0;
+
+    if (rings !== this.lastRingsRef) {
+      this.ringDefs = (rings ?? [])
+        .filter((r): r is RingDef => !!r && Number.isFinite(r.beat))
+        .map((r) => ({ beat: sanitizeBeat(r.beat) }))
+        .sort((a, b) => a.beat - b.beat);
+      this.lastRingsRef = rings;
+      this.spawned.length = 0;
+      this.nextIndex = 0;
+    }
 
     while (this.nextIndex < this.ringDefs.length) {
       const def = this.ringDefs[this.nextIndex];

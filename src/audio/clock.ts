@@ -43,6 +43,10 @@ export function getManualOffset(): number {
   return manualOffsetMs;
 }
 
+export function getManualOffsetMs(): number {
+  return manualOffsetMs;
+}
+
 export function offsetSeconds(): number {
   return manualOffsetMs / 1000;
 }
