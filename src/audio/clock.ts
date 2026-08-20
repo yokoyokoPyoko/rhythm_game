@@ -1,46 +1,48 @@
 const OFFSET_KEY = 'rhythmManualOffsetMs';
-const OFFSET_MIN_MS = -2000;
-const OFFSET_MAX_MS = 2000;
 
-let audioStartTime: number | null = null;
+let audioStartTime = 0;
+let manualOffsetMs = loadOffset();
 
-export function songNow(audioCtx: AudioContext): number {
-  if (audioStartTime === null) {
+function loadOffset(): number {
+  try {
+    const raw = localStorage.getItem(OFFSET_KEY);
+    if (raw === null) return 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 0;
+    return n;
+  } catch {
     return 0;
   }
-  const elapsed = (audioCtx.currentTime - audioStartTime) * 1000;
-  return Number.isFinite(elapsed) ? elapsed : 0;
 }
+
+export function songNow(): number {
+  const ctx = clockCtxRef;
+  if (!ctx) return 0;
+  return (ctx.currentTime - audioStartTime) * 1000;
+}
+
+let clockCtxRef: AudioContext | null = null;
 
 export function resetClock(audioCtx: AudioContext): void {
-  const now = audioCtx.currentTime;
-  audioStartTime = Number.isFinite(now) ? now : 0;
-}
-
-export function getManualOffsetMs(): number {
-  const raw = localStorage.getItem(OFFSET_KEY);
-  if (raw === null) {
-    return 0;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-  return clampOffset(parsed);
+  clockCtxRef = audioCtx;
+  audioStartTime = audioCtx.currentTime;
 }
 
 export function setManualOffset(ms: number): void {
-  const parsed = Number(ms);
-  const clamped = Number.isFinite(parsed) ? clampOffset(parsed) : 0;
-  localStorage.setItem(OFFSET_KEY, String(clamped));
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return;
+  manualOffsetMs = n;
+  try {
+    localStorage.setItem(OFFSET_KEY, String(n));
+  } catch {
+    /* ignore storage errors */
+  }
 }
 
-export function getManualOffsetSec(): number {
-  return getManualOffsetMs() / 1000;
+export function getManualOffset(): number {
+  return manualOffsetMs;
 }
 
-function clampOffset(ms: number): number {
-  if (ms < OFFSET_MIN_MS) return OFFSET_MIN_MS;
-  if (ms > OFFSET_MAX_MS) return OFFSET_MAX_MS;
-  return ms;
+export function offsetSeconds(): number {
+  return manualOffsetMs / 1000;
 }
