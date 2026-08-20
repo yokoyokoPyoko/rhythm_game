@@ -1,14 +1,11 @@
 [0m
 > build · hy3-free
 [0m
-[0m✱ [0mGrep "TW_CENTER_Y|TW_AMP"[90m 20 matches[0m
+[0m✱ [0mGrep "TW_CENTER_Y|TW_AMP"[90m 9 matches[0m
 [0m→ [0mRead src/game/cursor.ts
-[0m✱ [0mGlob "src/**/constants.ts"[90m 0 matches[0m
-The file already exists and matches the spec. Let me verify it compiles cleanly.
+The file already exists and matches the spec exactly. Let me verify there are no TS errors.
 [0m
 [0m$ [0mnpx tsc --noEmit 2>&1 | head -20
 (no output)
 [0m
-`src/game/cursor.ts` already implements the spec correctly (initial Y = `TW_CENTER_Y - TW_AMP`, speed `(2*TW_AMP)/(beatMs/1000)`, clamped to `[WAVE_TOP, WAVE_BOTTOM]`) and `tsc --noEmit` passes with zero errors.
-
 DONE
