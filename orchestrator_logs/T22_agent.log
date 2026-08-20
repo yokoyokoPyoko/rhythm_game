@@ -4,39 +4,16 @@
 [0m→ [0mRead src/types.ts
 [0m→ [0mRead src/game/waveEngine.ts
 [0m→ [0mRead src/audio/bpmTimeline.ts
+[0m✱ [0mGlob "src/game/*.ts"[90m 6 matches[0m
+[0m→ [0mRead src/game/ringSpawner.ts
+[0m→ [0mRead src/game/cursor.ts
+[0m→ [0mRead src/game/renderer.ts
+The file already implements the spec. Let me verify it compiles and check how X positioning is handled in the renderer.
+The RingSpawner already exists and matches the spec. Let me verify it compiles cleanly with `tsc --noEmit`.
 [0m
-[0m$ [0mgrep -rn "TW_JUDGE_X\|TW_SCROLL\|TW_LEAD_BEATS\|TW_CENTER_Y\|TW_AMP" /home/p-yoko/Program/TypeScript/rhythm_game/src --include=*.ts | grep -v "ringSpawner.ts"
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/waveEngine.ts:4:const TW_CENTER_Y = 600 / 2;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/waveEngine.ts:5:const TW_AMP = 80;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/waveEngine.ts:7:const WAVE_TOP = TW_CENTER_Y - TW_AMP;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/waveEngine.ts:8:const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:9:const TW_JUDGE_X = Math.round(800 * 0.26);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:10:const TW_SCROLL = 110;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:87:    ctx.moveTo(TW_JUDGE_X, 0);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:88:    ctx.lineTo(TW_JUDGE_X, CANVAS_HEIGHT);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:98:      const timeMs = songTimeMs + ((x - TW_JUDGE_X) / TW_SCROLL) * 1000;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:111:    ctx.arc(TW_JUDGE_X, judgeY, 3, 0, Math.PI * 2);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:117:      const x = TW_JUDGE_X + ((ring.hitTime - songTimeMs) / 1000) * TW_SCROLL;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:141:    ctx.arc(TW_JUDGE_X, y, 10, 0, Math.PI * 2);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:147:    ctx.moveTo(TW_JUDGE_X - 24, y);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:148:    ctx.lineTo(TW_JUDGE_X + 24, y);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:170:      ctx.fillText(`${stats.combo}`, TW_JUDGE_X, 60);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:173:      ctx.fillText('COMBO', TW_JUDGE_X, 92);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:197:      ctx.fillText(label, TW_JUDGE_X, safe(e.y, CANVAS_HEIGHT / 2) - 40 - age * 0.03);
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/cursor.ts:1:const TW_CENTER_Y = 600 / 2;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/cursor.ts:2:const TW_AMP = 80;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/cursor.ts:4:const WAVE_TOP = TW_CENTER_Y - TW_AMP;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/cursor.ts:5:const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;
-/home/p-yoko/Program/TypeScript/rhythm_game/src/game/cursor.ts:15:    const speed = (2 * TW_AMP) / (beatMs / 1000);
-[0m
-[0m← [0mWrite src/game/ringSpawner.ts
-Wrote file successfully.
-[0m
-[0m← [0mWrite src/game/ringSpawner.ts
-Wrote file successfully.
-[0m
-The ID logic is flawed. Let me simplify using the def index as id.
-[0m$ [0mnpx tsc --noEmit 2>&1 | head -20
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -30
 (no output)
 [0m
+The RingSpawner is already implemented and satisfies the spec: it spawns rings `TW_LEAD_BEATS=3` beats before `hitTime`, computes `hitTime = bpmTimeline.beatToMs(beat)`, and sets `targetY = waveEngine.waveYAt(beat)`. The X-position formula `TW_JUDGE_X + (ring.hitTime - songTimeMs)/1000*TW_SCROLL` is applied at render time in `renderer.ts:117`, consistent with how `RingState` is consumed. `tsc --noEmit` passes with zero errors.
+
 DONE
