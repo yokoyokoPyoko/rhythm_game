@@ -52,8 +52,7 @@ POSTMORTEM_FILE = POSTMORTEM_DIR / "POSTMORTEM.md"
 SCREENSHOT_DIR = ROOT / "screenshots"
 DYNAMIC_SPEC_FILE = ROOT / "tests" / "dynamic.spec.ts"
 
-DEV_PORT = 5173
-DEV_URL = f"http://127.0.0.1:{DEV_PORT}/"
+DEV_URL = os.environ.get("DEV_URL", "http://127.0.0.1:5173/")
 DEFAULT_BUDGET_MIN = 600
 
 # モデル定義カタログ (表示名, プロバイダ, モデルID)
@@ -95,11 +94,6 @@ POSTMORTEM_OPTIONS = [
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
 
-NON_UI_TASKS = {
-    "T00", "T82", "T01", "T02", "T10", "T11", "T12", "T13", "T14",
-    "T40", "T41", "T20", "T21", "T22", "T23", "T24", "T25", "T60", "T62"
-}
-
 log = logging.getLogger("orchestrator")
 
 
@@ -116,6 +110,7 @@ class Task:
     id: str
     desc: str
     depends_on: list[str] = field(default_factory=list)
+    ui: bool = False
 
 
 @dataclass
@@ -364,7 +359,12 @@ def load_tasks() -> list[Task]:
         if not tid or tid in ids:
             continue
         ids.add(tid)
-        tasks.append(Task(id=tid, desc=item.get("desc", ""), depends_on=item.get("depends_on", [])))
+        tasks.append(Task(
+            id=tid,
+            desc=item.get("desc", ""),
+            depends_on=item.get("depends_on", []),
+            ui=bool(item.get("ui", False)),
+        ))
     return tasks
 
 
@@ -552,8 +552,8 @@ VIDEO_DIR = ROOT / "recordings"
 
 
 def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
-    if task.id in NON_UI_TASKS or not has_dev_script():
-        return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} is non-UI -> Skip")
+    if not task.ui or not has_dev_script():
+        return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
 
     if not ensure_dev_server():
         return GateResult("Gate B (Dynamic Test)", False, "Dev server failed to start")
@@ -562,20 +562,21 @@ def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
     VIDEO_DIR.mkdir(exist_ok=True)
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""Generate a Playwright (TypeScript) test script for task {task.id} ({task.desc}).
+    prompt = f"""Generate a Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}).
 
 Context:
 This test execution will automatically record a video (.webm) of the browser in action.
-The recorded video will be passed to Gemini Video AI (Dynamic Reviewer) to inspect gameplay animations, sound/metronome timing, minimal dark UI, and keyboard input responsiveness.
+The recorded video will be passed to Gemini Video AI (Dynamic Reviewer) to verify actual UI rendering, animations, user interaction responses, and specification compliance.
 
-Specification:
+Specification from AGENTS.md:
 {spec}
 
 Requirements:
-1. Navigate to 'http://localhost:5173/', wait for 'domcontentloaded', and simulate realistic user interactions (clicks, Space rhythm hits, Arrow keys).
-2. Do not use strict expect(page.locator('#root')).toBeVisible() if the element has 0-height. Instead wait for specific UI elements or Canvas, or use expect(page.locator('body')).toBeAttached().
-3. Use adequate wait times (waitForTimeout(2000-4000)) so the video clearly records sound playback and Canvas 60fps animations.
-4. Listen to console errors: fail only on unhandled TypeError/ReferenceError.
+1. Access the web application target according to the project specification (e.g. baseURL or specific route). Wait for 'domcontentloaded' or networkidle.
+2. Simulate realistic user interactions relevant to the task specification (e.g. clicks, navigation, inputs, shortcuts).
+3. Do not use strict expect(page.locator('#root')).toBeVisible() if the container element has 0-height. Instead wait for specific UI components or use expect(page.locator('body')).toBeAttached().
+4. Use adequate wait times (waitForTimeout(2000-4000)) so the recorded video clearly captures visual transitions, animations, and dynamic state updates.
+5. Listen to console errors: fail only on unhandled TypeError/ReferenceError/Uncaught exceptions.
 
 Output only ```typescript ... ``` code block.
 """
@@ -587,10 +588,8 @@ Output only ```typescript ... ``` code block.
     code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
     if not code_match:
         test_code = """import { test, expect } from '@playwright/test';
-test('dynamic video test', async ({ page }) => {
-  await page.goto('http://localhost:5173/');
-  await page.waitForTimeout(2000);
-  await page.keyboard.press('Space');
+test('dynamic video smoke test', async ({ page }) => {
+  await page.goto('/');
   await page.waitForTimeout(2000);
 });
 """
@@ -607,21 +606,10 @@ test('dynamic video test', async ({ page }) => {
         detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
         return GateResult("Gate B (Dynamic Test)", False, detail)
 
-    # 録画された .webm 動画ファイルを探索し、ffmpeg で代表フレーム画像を抽出
+    # 録画された .webm 動画ファイルを探索
     videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
-    if videos:
-        latest_video = videos[-1]
-        log.info("Extracting verification frames from %s via ffmpeg...", latest_video.name)
-        # 既存のフレーム画像をクリーンアップ
-        for old_f in SCREENSHOT_DIR.glob("frame_*.png"):
-            old_f.unlink(missing_ok=True)
-        # 動画から 1fps でフレーム画像を抽出
-        ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(latest_video), "-vf", "fps=1", str(SCREENSHOT_DIR / "frame_%d.png")]
-        subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-
-    extracted_frames = sorted(list(SCREENSHOT_DIR.glob("frame_*.png")), key=lambda p: p.stat().st_mtime)
-    log.info("Playwright & ffmpeg completed (%d video(s), %d frame image(s) extracted).", len(videos), len(extracted_frames))
-    return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(extracted_frames)} frames extracted)")
+    log.info("Playwright execution completed (%d video recording(s) captured).", len(videos))
+    return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(videos)} video(s) recorded)")
 
 
 def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int = 90) -> tuple[int, str]:
@@ -634,8 +622,8 @@ def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int = 90) -
 
 
 def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
-    if task.id in NON_UI_TASKS or not has_dev_script():
-        return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} is non-UI -> Skip")
+    if not task.ui or not has_dev_script():
+        return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic review")
 
     videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
     if not videos:
@@ -645,25 +633,25 @@ def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
     latest_video = videos[-1]
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""You are the Dynamic Video Reviewer inspecting the browser gameplay video recording for task {task.id} ({task.desc}).
+    prompt = f"""You are the Dynamic Video Reviewer inspecting the browser execution video recording for task {task.id} ({task.desc}).
 
 Specification:
 {spec}
 
 STRICT VIDEO INSPECTION RULES:
-1. Inspect the attached gameplay video directly. Observe real-time animations, canvas rendering, timing, transitions, and minimal dark UI.
-2. If the screen is blank/white/broken, canvas waveform or rings are missing, or transitions fail, award 0-50 points (FAIL).
-3. If minimal dark UI, smooth waveform line, rings, HUD score/combo, and expected interactions are rendered properly in the video, award 80-100 points (PASS).
+1. Inspect the attached video recording directly. Observe actual rendering, dynamic UI state transitions, animations, and visual styling.
+2. If the screen is blank/white/broken, required UI elements or content/canvas are missing, or interactions fail, award 0-50 points (FAIL).
+3. If the UI components, smooth dynamic behavior, required content, and expected interactions specified in the requirements are rendered properly in the video, award 80-100 points (PASS).
 
 Evaluation Criteria (20pts each, pass >= 80pts):
-1. Canvas waveform line & cursor animations smooth without glitch
-2. Ring elements visible, correctly moving and timing synced
-3. Minimal dark Linear/Vercel styling consistency
-4. Score / Combo / Status HUD rendered cleanly
-5. Task specification completeness & correct scene transitions
+1. UI components & dynamic rendering (smooth visual behavior, no blank/glitched canvas or elements)
+2. Interactive responsiveness (proper state changes upon simulated user clicks/keys)
+3. Design system & layout consistency (clean minimal dark styling, typography, spacing)
+4. State management & data presentation (correct information displayed without overlapping/flickering)
+5. Task specification completeness & error-free execution
 
 Output JSON only:
-{{"score": 85, "verdict": "PASS", "comment": "detailed review reasoning based on the gameplay video"}} or {{"score": 45, "verdict": "FAIL", "comment": "specific failure reason seen in the video"}}
+{{"score": 85, "verdict": "PASS", "comment": "detailed review reasoning based on the attached video"}} or {{"score": 45, "verdict": "FAIL", "comment": "specific failure reason observed in the video"}}
 """
     log.info("Reviewer (Gemini Video AI via llm CLI) analyzing video: %s...", latest_video.name)
     code, out = run_llm_cli_video_review(latest_video, prompt, timeout=90)

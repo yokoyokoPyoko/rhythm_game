@@ -2,196 +2,345 @@
   {
     "id": "T00",
     "desc": "Vite + React + TypeScript プロジェクトスキャフォールド。smol-toml, react-router-dom をインストール。",
-    "depends_on": []
+    "depends_on": [],
+    "ui": false
   },
   {
     "id": "T82",
     "desc": "Playwright スモークテストスクリプト作成（Gate B用固定スクリプト。最初に作り、以後変更しない）",
-    "depends_on": ["T00"]
+    "depends_on": [
+      "T00"
+    ],
+    "ui": false
   },
   {
     "id": "T01",
     "desc": "src/types.ts に全TypeScript型定義を作成（Chart, Segment, BpmChange, RingDef, SongEntry, RingState, HitResult, GameMode）",
-    "depends_on": ["T00"]
+    "depends_on": [
+      "T00"
+    ],
+    "ui": false
   },
   {
     "id": "T02",
     "desc": "src/index.css にCSSデザインシステム（トークン変数、フォント、Linear/Vercel風ミニマルダーク）",
-    "depends_on": ["T00"]
+    "depends_on": [
+      "T00"
+    ],
+    "ui": false
   },
   {
     "id": "T10",
     "desc": "src/audio/AudioManager.ts: AudioContextのライフサイクル管理、ユーザー操作後にrunning状態、baseLatency取得",
-    "depends_on": ["T01"]
+    "depends_on": [
+      "T01"
+    ],
+    "ui": false
   },
   {
     "id": "T11",
     "desc": "src/audio/metronome.ts: lookahead=200msのビートスケジューラ。強拍/弱拍で音を分ける。",
-    "depends_on": ["T10"]
+    "depends_on": [
+      "T10"
+    ],
+    "ui": false
   },
   {
     "id": "T12",
     "desc": "src/audio/clock.ts: songNow()関数。audioCtx.currentTimeベース、manualOffsetMs加味。",
-    "depends_on": ["T11"]
+    "depends_on": [
+      "T11"
+    ],
+    "ui": false
   },
   {
     "id": "T13",
     "desc": "src/audio/loader.ts: 相対URL（/audio/xxx.flac等）からfetch→decodeAudioData→AudioBufferSourceで再生。失敗時はメトロノームのみ継続。",
-    "depends_on": ["T10"]
+    "depends_on": [
+      "T10"
+    ],
+    "ui": false
   },
   {
     "id": "T14",
     "desc": "src/audio/bpmTimeline.ts: bpm_changes配列を処理しbeat→ms変換。指定beatでBPMを変更しnextBeatTimeを更新。",
-    "depends_on": ["T11", "T12"]
+    "depends_on": [
+      "T11",
+      "T12"
+    ],
+    "ui": false
   },
   {
     "id": "T40",
     "desc": "src/chart/loader.ts: smol-tomlでChart型にパース。バリデーション。不正データはエラーを返す。",
-    "depends_on": ["T01"]
+    "depends_on": [
+      "T01"
+    ],
+    "ui": false
   },
   {
     "id": "T41",
     "desc": "public/songs.toml作成 + src/chart/manifest.ts: songs.tomlをfetchしてSongEntry[]を返す。",
-    "depends_on": ["T40"]
+    "depends_on": [
+      "T40"
+    ],
+    "ui": false
   },
   {
     "id": "T20",
     "desc": "src/game/waveEngine.ts: segments配列から waveYAt(beatPos): number を実装。累積ビート数で折れ線補間。",
-    "depends_on": ["T01", "T14"]
+    "depends_on": [
+      "T01",
+      "T14"
+    ],
+    "ui": false
   },
   {
     "id": "T21",
     "desc": "src/game/cursor.ts: ↑↓キー入力でカーソルY座標を更新。速度=(2*TW_AMP)/(beatMs/1000)px/sec。",
-    "depends_on": ["T20"]
+    "depends_on": [
+      "T20"
+    ],
+    "ui": false
   },
   {
     "id": "T22",
     "desc": "src/game/ringSpawner.ts: Chart.ringsからRingStateを生成。TW_LEAD_BEATS=3拍前にspawn、hitTimeにjudge lineへ到達するようスクロール。",
-    "depends_on": ["T20", "T12"]
+    "depends_on": [
+      "T20",
+      "T12"
+    ],
+    "ui": false
   },
   {
     "id": "T23",
     "desc": "src/game/hitJudge.ts: Space押下時に最近傍RingStateを検索。タイミング誤差±beatMs*0.4かつY距離±60pxでヒット。PERFECT/GOOD/MISSを返す。",
-    "depends_on": ["T22"]
+    "depends_on": [
+      "T22"
+    ],
+    "ui": false
   },
   {
     "id": "T24",
     "desc": "src/game/score.ts: PERFECT=300, GOOD=100, MISS=コンボリセット。トレース継続ボーナス（±26px内で0.15秒ごとにcombo+1）。",
-    "depends_on": ["T23"]
+    "depends_on": [
+      "T23"
+    ],
+    "ui": false
   },
   {
     "id": "T25",
     "desc": "src/game/renderer.ts: Canvas 2Dで波形・カーソル・リング・判定線・HUDを60fpsで描画。",
-    "depends_on": ["T20", "T21", "T22", "T24"]
+    "depends_on": [
+      "T20",
+      "T21",
+      "T22",
+      "T24"
+    ],
+    "ui": false
   },
   {
     "id": "T30",
     "desc": "src/App.tsx + react-router-dom: / → Select, /play/:songId → Game, /result → Result, /editor → Editor のルーティング。",
-    "depends_on": ["T01", "T02"]
+    "depends_on": [
+      "T01",
+      "T02"
+    ],
+    "ui": true
   },
   {
     "id": "T31",
     "desc": "src/screens/SelectScreen.tsx: songs.tomlからカード一覧表示。タイトル・アーティスト・難易度。クリックで/play/:songIdへ。",
-    "depends_on": ["T30", "T41"]
+    "depends_on": [
+      "T30",
+      "T41"
+    ],
+    "ui": true
   },
   {
     "id": "T32",
     "desc": "src/screens/GameScreen.tsx: CanvasをReactコンポーネントでラップ。useEffect内でゲームループ起動。ESC→Select、R→restart、曲終了→Result。",
-    "depends_on": ["T25", "T30"]
+    "depends_on": [
+      "T25",
+      "T30"
+    ],
+    "ui": true
   },
   {
     "id": "T33",
     "desc": "src/screens/ResultScreen.tsx: スコアカウントアップ、ランク(S/A/B/C/D)、PERFECT/GOOD/MISS数、「もう一回」「曲選択」ボタン。",
-    "depends_on": ["T30", "T24"]
+    "depends_on": [
+      "T30",
+      "T24"
+    ],
+    "ui": true
   },
   {
     "id": "T42",
     "desc": "統合: /play/:songId でsongs.toml→chart.toml→音楽ロード→波形・リング同期再生。全システムを繋げる。",
-    "depends_on": ["T31", "T32", "T41", "T13", "T14", "T20", "T22"]
+    "depends_on": [
+      "T31",
+      "T32",
+      "T41",
+      "T13",
+      "T14",
+      "T20",
+      "T22"
+    ],
+    "ui": true
   },
   {
     "id": "T50",
     "desc": "src/screens/EditorScreen.tsx: /editor のレイアウト基盤。左ペイン（音楽制御）・右ペイン（タイムライン）の二分割UI。",
-    "depends_on": ["T30", "T40"]
+    "depends_on": [
+      "T30",
+      "T40"
+    ],
+    "ui": true
   },
   {
     "id": "T51",
     "desc": "エディタ内オーディオプレイヤー: URL入力→再生/停止/シーク。現在位置を秒・beat両方で表示。BPM設定フィールド。",
-    "depends_on": ["T50", "T13"]
+    "depends_on": [
+      "T50",
+      "T13"
+    ],
+    "ui": true
   },
   {
     "id": "T52",
     "desc": "リング録音モード: 再生中にSpaceでbeat位置スタンプ。スナップ量設定可。録音済みリストを表示。",
-    "depends_on": ["T51"]
+    "depends_on": [
+      "T51"
+    ],
+    "ui": true
   },
   {
     "id": "T53",
     "desc": "セグメントエディタ: up/downセグメントの追加/削除/順序変更。変更するとリアルタイムで波形プレビュー更新。",
-    "depends_on": ["T50"]
+    "depends_on": [
+      "T50"
+    ],
+    "ui": true
   },
   {
     "id": "T54",
     "desc": "BPMエディタ: 基本BPM設定 + BPM変更リスト（beat, newBpm）。タップテンポ入力対応。",
-    "depends_on": ["T50"]
+    "depends_on": [
+      "T50"
+    ],
+    "ui": true
   },
   {
     "id": "T55",
     "desc": "TOMLエクスポート: 現在のエディタ状態を正規TOMLに変換しダウンロード。T40でパースできることを確認。",
-    "depends_on": ["T52", "T53", "T54"]
+    "depends_on": [
+      "T52",
+      "T53",
+      "T54"
+    ],
+    "ui": true
   },
   {
     "id": "T56",
     "desc": "エディタ内プレイテスト: 「プレイテスト」ボタンでエクスポートせずゲーム画面を起動し現在譜面を確認。",
-    "depends_on": ["T55", "T42"]
+    "depends_on": [
+      "T55",
+      "T42"
+    ],
+    "ui": true
   },
   {
     "id": "T60",
     "desc": "手動オフセット調整: </> キーでmanualOffsetMsを±10ms変更。localStorageに保存。ゲーム内右下に表示。",
-    "depends_on": ["T12"]
+    "depends_on": [
+      "T12"
+    ],
+    "ui": false
   },
   {
     "id": "T61",
     "desc": "Lキーキャリブレーション画面: メトロノームに合わせてSpace×8回、最初の2サンプル破棄して平均からoffset自動設定。",
-    "depends_on": ["T11", "T60"]
+    "depends_on": [
+      "T11",
+      "T60"
+    ],
+    "ui": true
   },
   {
     "id": "T62",
     "desc": "キー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
-    "depends_on": ["T11"]
+    "depends_on": [
+      "T11"
+    ],
+    "ui": false
   },
   {
     "id": "T70",
     "desc": "曲選択画面ポリッシュ: カードホバーアニメーション、難易度バー、フォント整備。Linear風。",
-    "depends_on": ["T31"]
+    "depends_on": [
+      "T31"
+    ],
+    "ui": true
   },
   {
     "id": "T71",
     "desc": "ゲーム画面ポリッシュ: 波形グラデーション、コンボ色変化、PERFECT演出、ビートパルス。ゲーミングRGB・過剰グロー禁止。",
-    "depends_on": ["T42"]
+    "depends_on": [
+      "T42"
+    ],
+    "ui": true
   },
   {
     "id": "T72",
     "desc": "リザルト画面ポリッシュ: スコアカウントアップアニメーション、ランク大文字表示、PERFECT/GOOD/MISS統計。",
-    "depends_on": ["T33"]
+    "depends_on": [
+      "T33"
+    ],
+    "ui": true
   },
   {
     "id": "T73",
     "desc": "オーサリングツールポリッシュ: タイムラインにリング縦線表示。UI全体のLinear風整合性。",
-    "depends_on": ["T52", "T53"]
+    "depends_on": [
+      "T52",
+      "T53"
+    ],
+    "ui": true
   },
   {
     "id": "T74",
     "desc": "画面遷移アニメーション: 全画面切り替えにCSS Transitionでフェード/スライド。",
-    "depends_on": ["T31", "T32", "T33"]
+    "depends_on": [
+      "T31",
+      "T32",
+      "T33"
+    ],
+    "ui": true
   },
   {
     "id": "T81",
     "desc": "エラーハンドリング: TOML構文エラー・チャートファイル404・音楽ロード失敗を分かりやすいUIメッセージで表示。",
-    "depends_on": ["T42", "T13"]
+    "depends_on": [
+      "T42",
+      "T13"
+    ],
+    "ui": false
   },
   {
     "id": "T80",
     "desc": "E2E統合確認: 曲選択→ゲーム→リザルト→再プレイ→曲選択の完全フロー手動確認。コンソールエラーなし。",
-    "depends_on": ["T70", "T71", "T72", "T73", "T74", "T56", "T61", "T62", "T81"]
+    "depends_on": [
+      "T70",
+      "T71",
+      "T72",
+      "T73",
+      "T74",
+      "T56",
+      "T61",
+      "T62",
+      "T81"
+    ],
+    "ui": true
   }
 ]
