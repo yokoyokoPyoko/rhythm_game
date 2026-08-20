@@ -63,14 +63,14 @@
     },
     "T41": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1787207291.978034,
-      "finished": 1787205475.055032
+      "finished": 1787207320.8760092
     },
     "T20": {
       "attempts": 1,
-      "status": "passed",
-      "started": 1787205475.0554037,
+      "status": "running",
+      "started": 1787207320.8765368,
       "finished": 1787205525.6607695
     },
     "T21": {

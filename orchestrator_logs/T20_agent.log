@@ -1,17 +1,240 @@
 [0m
 > build · hy3-free
 [0m
-[0m→ [0mRead src/game
-[0m→ [0mRead src/audio/bpmTimeline.ts
-[0m→ [0mRead src/game/waveEngine.ts
-The file already exists and is fully implemented per spec. Let me verify it compiles cleanly.
+[0m$ [0mcat /home/p-yoko/Program/TypeScript/rhythm_game/src/game/waveEngine.ts 2>/dev/null; echo "---TYPES---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/types.ts; echo "---BPM---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/bpmTimeline.ts 2>/dev/null; echo "---CONSTANTS---"; grep -rn "TW_CENTER_Y\|TW_AMP\|TW_JUDGE_X\|TW_SCROLL\|TW_LEAD_BEATS\|TW_TOLERANCE" /home/p-yoko/Program/TypeScript/rhythm_game/src --include=*.ts | grep -v waveEngine | head
+import type { BpmTimeline } from '../audio/bpmTimeline';
+import type { Segment } from '../types';
+
+const TW_CENTER_Y = 600 / 2;
+const TW_AMP = 80;
+
+const WAVE_TOP = TW_CENTER_Y - TW_AMP;
+const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;
+
+interface WavePoint {
+  beat: number;
+  y: number;
+}
+
+function sanitizeBeat(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return value;
+}
+
+function sanitizeDirection(value: unknown): 'up' | 'down' {
+  return value === 'down' ? 'down' : 'up';
+}
+
+export class WaveEngine {
+  private readonly timeline: BpmTimeline;
+  private readonly points: WavePoint[];
+
+  constructor(segments: Segment[], bpmTimeline: BpmTimeline) {
+    this.timeline = bpmTimeline;
+    this.points = this.buildPoints(segments ?? []);
+  }
+
+  private buildPoints(segments: Segment[]): WavePoint[] {
+    const points: WavePoint[] = [{ beat: 0, y: WAVE_TOP }];
+    let beat = 0;
+    for (const seg of segments) {
+      if (!seg) {
+        continue;
+      }
+      const beats = sanitizeBeat(seg.beats);
+      if (beats <= 0) {
+        continue;
+      }
+      beat += beats;
+      points.push({
+        beat,
+        y: sanitizeDirection(seg.direction) === 'up' ? WAVE_TOP : WAVE_BOTTOM,
+      });
+    }
+    if (points.length === 1) {
+      points.push({ beat: 1, y: WAVE_TOP });
+    }
+    return points;
+  }
+
+  waveYAt(beat: number): number {
+    if (!Number.isFinite(beat)) {
+      return WAVE_TOP;
+    }
+    if (beat <= 0) {
+      return WAVE_TOP;
+    }
+    const last = this.points[this.points.length - 1];
+    if (beat >= last.beat) {
+      return last.y;
+    }
+    for (let i = 0; i < this.points.length - 1; i++) {
+      const p0 = this.points[i];
+      const p1 = this.points[i + 1];
+      if (beat >= p0.beat && beat <= p1.beat) {
+        if (p1.beat <= p0.beat) {
+          return p1.y;
+        }
+        const t = (beat - p0.beat) / (p1.beat - p0.beat);
+        return p0.y + (p1.y - p0.y) * t;
+      }
+    }
+    return last.y;
+  }
+
+  waveYAtMs(ms: number): number {
+    if (!Number.isFinite(ms)) {
+      return WAVE_TOP;
+    }
+    return this.waveYAt(this.timeline.msToBeat(ms));
+  }
+}
+---TYPES---
+export interface Segment { direction: 'up' | 'down'; beats: number; }
+export interface BpmChange { beat: number; bpm: number; }
+export interface RingDef { beat: number; }
+export interface Chart {
+  title: string; artist: string; bpm: number; audio: string;
+  bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
+}
+export interface SongEntry {
+  id: string; title: string; artist: string; chartPath: string; difficulty: number;
+}
+export interface RingState {
+  id: number; spawnTime: number; hitTime: number; targetY: number;
+  resolved: boolean; hit: boolean;
+}
+export type HitResult = 'perfect' | 'good' | 'miss';
+export type GameMode = 'select' | 'playing' | 'result' | 'editor' | 'calibration';
+export interface HitJudgement { result: HitResult; errorMs: number; }
+---BPM---
+import type { BpmChange } from '../types';
+
+interface BpmSegment {
+  startBeat: number;
+  endBeat: number;
+  bpm: number;
+  beatMs: number;
+}
+
+const MIN_BPM = 1;
+const MAX_BPM = 1000;
+
+function sanitizeBpm(value: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return MIN_BPM;
+  return Math.min(MAX_BPM, n);
+}
+
+export class BpmTimeline {
+  private readonly baseBpm: number;
+  private readonly segments: BpmSegment[];
+
+  constructor(baseBpm: number, bpmChanges: BpmChange[] = []) {
+    this.baseBpm = sanitizeBpm(baseBpm);
+
+    const changes = (bpmChanges ?? [])
+      .filter((c): c is BpmChange => !!c && Number.isFinite(c.beat) && Number.isFinite(c.bpm))
+      .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm) }))
+      .sort((a, b) => a.beat - b.beat);
+
+    const segs: BpmSegment[] = [];
+    let currentBpm = this.baseBpm;
+    let currentBeat = 0;
+
+    for (const change of changes) {
+      if (change.beat < currentBeat) continue;
+      segs.push({
+        startBeat: currentBeat,
+        endBeat: change.beat,
+        bpm: currentBpm,
+        beatMs: 60000 / currentBpm,
+      });
+      currentBpm = change.bpm;
+      currentBeat = change.beat;
+    }
+
+    segs.push({
+      startBeat: currentBeat,
+      endBeat: Infinity,
+      bpm: currentBpm,
+      beatMs: 60000 / currentBpm,
+    });
+
+    this.segments = segs;
+  }
+
+  private segmentAt(beat: number): BpmSegment {
+    const b = Number.isFinite(beat) ? beat : 0;
+    for (const seg of this.segments) {
+      if (b >= seg.startBeat && b < seg.endBeat) return seg;
+    }
+    return this.segments[this.segments.length - 1];
+  }
+
+  bpmAt(beat: number): number {
+    return this.segmentAt(beat).bpm;
+  }
+
+  beatMsAt(beat: number): number {
+    return this.segmentAt(beat).beatMs;
+  }
+
+  beatToMs(beat: number): number {
+    const b = Number.isFinite(beat) ? beat : 0;
+    let ms = 0;
+    for (const seg of this.segments) {
+      if (b <= seg.startBeat) break;
+      const end = Math.min(b, seg.endBeat);
+      ms += (end - seg.startBeat) * seg.beatMs;
+    }
+    return ms;
+  }
+
+  msToBeat(ms: number): number {
+    const m = Number.isFinite(ms) && ms > 0 ? ms : 0;
+    let remaining = m;
+    let beat = 0;
+    for (const seg of this.segments) {
+      if (seg.endBeat === Infinity) {
+        beat += remaining / seg.beatMs;
+        break;
+      }
+      const segMs = (seg.endBeat - seg.startBeat) * seg.beatMs;
+      if (remaining <= segMs) {
+        beat += remaining / seg.beatMs;
+        break;
+      }
+      remaining -= segMs;
+      beat += seg.endBeat - seg.startBeat;
+    }
+    return beat;
+  }
+}
+---CONSTANTS---
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:9:const TW_JUDGE_X = Math.round(800 * 0.26);
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:10:const TW_SCROLL = 110;
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:87:    ctx.moveTo(TW_JUDGE_X, 0);
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:88:    ctx.lineTo(TW_JUDGE_X, CANVAS_HEIGHT);
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:98:      const timeMs = songTimeMs + ((x - TW_JUDGE_X) / TW_SCROLL) * 1000;
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:111:    ctx.arc(TW_JUDGE_X, judgeY, 3, 0, Math.PI * 2);
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:117:      const x = TW_JUDGE_X + ((ring.hitTime - songTimeMs) / 1000) * TW_SCROLL;
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:141:    ctx.arc(TW_JUDGE_X, y, 10, 0, Math.PI * 2);
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:147:    ctx.moveTo(TW_JUDGE_X - 24, y);
+/home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts:148:    ctx.lineTo(TW_JUDGE_X + 24, y);
 [0m
-[0m$ [0mnpx tsc --noEmit 2>&1 | head -30
-(no output)
+The file already exists and implements the spec. Let me verify it compiles cleanly.
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -30; echo "EXIT: $?"
+EXIT: 0
 [0m
-The `WaveEngine` is already implemented and compiles with zero TS errors. It matches the spec:
-- `waveYAt(beat)`: beat 0 → top (`TW_CENTER_Y - TW_AMP`), builds cumulative-beat points from segments, linearly interpolates; `up`→top, `down`→bottom.
-- `waveYAtMs(ms)`: converts ms→beat via `BpmTimeline.msToBeat` then delegates to `waveYAt`.
-- Includes finite/non-negative input validation with safe fallbacks.
+`src/game/waveEngine.ts` already implements the full spec and compiles with zero TS errors:
+
+- `WaveEngine` class with `constructor(segments, bpmTimeline)`
+- `waveYAt`: beat=0 → `TW_CENTER_Y - TW_AMP` (top), cumulative-beat piecewise linear interpolation, `up`→top / `down`→bottom endpoints (top start)
+- `waveYAtMs` delegates to `timeline.msToBeat`
+
+`tsc --noEmit` passes (exit 0).
 
 DONE
