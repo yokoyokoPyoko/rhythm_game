@@ -1,6 +1,10 @@
 export interface Segment { direction: 'up' | 'down' | 'stay'; beats: number; }
 export interface BpmChange { beat: number; bpm: number; }
-export interface RingDef { beat: number; }
+export interface RingDef {
+  beat: number;
+  duration?: number;
+  type?: 'single' | 'hold';
+}
 export interface Chart {
   title: string; artist: string; bpm: number; audio: string;
   audio_offset: number;
@@ -14,6 +18,11 @@ export interface SongEntry {
 export interface RingState {
   id: number; spawnTime: number; hitTime: number; targetY: number;
   resolved: boolean; hit: boolean;
+  type?: 'single' | 'hold';
+  duration?: number;
+  releaseTime?: number;
+  holding?: boolean;
+  holdCompleted?: boolean;
 }
 export type HitResult = 'perfect' | 'good' | 'miss';
 export type GameMode = 'select' | 'playing' | 'result' | 'editor' | 'calibration';

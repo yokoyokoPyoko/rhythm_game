@@ -26,7 +26,11 @@ function parseRings(v: unknown): RingDef[] {
   return v
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
     .filter((item) => isFiniteNumber(item.beat) && item.beat >= 0)
-    .map((item) => ({ beat: item.beat as number }));
+    .map((item) => ({
+      beat: item.beat as number,
+      duration: isFiniteNumber(item.duration) && (item.duration as number) > 0 ? (item.duration as number) : undefined,
+      type: item.type === 'hold' ? ('hold' as const) : ('single' as const),
+    }));
 }
 
 export async function loadChart(url: string): Promise<Chart> {

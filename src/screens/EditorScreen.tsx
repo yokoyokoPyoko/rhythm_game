@@ -165,7 +165,7 @@ export default function EditorScreen() {
         const snapped = Math.round(rawBeat / snap) * snap
         setRings((prev) => {
           if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) return prev
-          return [...prev, { beat: snapped }]
+          return [...prev, { beat: snapped, type: 'single' }]
         })
         return
       }
@@ -356,6 +356,36 @@ export default function EditorScreen() {
                 {rings.map((ring, i) => (
                   <li key={`${i}-${ring.beat}`} className="ring-list-item">
                     <span className="ring-list-beat">beat: {ring.beat.toFixed(2)}</span>
+                    <select
+                      className="editor-input ring-type-select"
+                      value={ring.type ?? 'single'}
+                      onChange={(e) => {
+                        const type = e.target.value as 'single' | 'hold'
+                        setRings((prev) =>
+                          prev.map((r, idx) => (idx === i ? { ...r, type, duration: type === 'hold' ? (r.duration ?? 1) : undefined } : r))
+                        )
+                      }}
+                      aria-label={`beat ${ring.beat.toFixed(2)} のタイプ`}
+                    >
+                      <option value="single">単発</option>
+                      <option value="hold">ホールド</option>
+                    </select>
+                    {ring.type === 'hold' && (
+                      <input
+                        className="editor-input ring-duration-input"
+                        type="number"
+                        min={0.25}
+                        step={0.25}
+                        value={ring.duration ?? 1}
+                        onChange={(e) => {
+                          const duration = Math.max(0.25, Number(e.target.value))
+                          setRings((prev) =>
+                            prev.map((r, idx) => (idx === i ? { ...r, duration } : r))
+                          )
+                        }}
+                        aria-label={`beat ${ring.beat.toFixed(2)} の長さ`}
+                      />
+                    )}
                     <button
                       type="button"
                       className="ring-list-delete"

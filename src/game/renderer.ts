@@ -71,7 +71,7 @@ export class Renderer {
     this.drawBackground(ctx);
     this.drawJudgeLine(ctx);
     this.drawWave(ctx, waveEngine, songTimeMs, scrollSpeed);
-    this.drawRings(ctx, rings, songTimeMs, scrollSpeed);
+    this.drawRings(ctx, rings, songTimeMs, scrollSpeed, waveEngine);
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
     this.drawJudgements(ctx, params.judgementEvents ?? [], songTimeMs);
@@ -114,8 +114,30 @@ export class Renderer {
     ctx.fill();
   }
 
-  private drawRings(ctx: CanvasRenderingContext2D, rings: RingState[], songTimeMs: number, scrollSpeed: number): void {
+  private drawRings(ctx: CanvasRenderingContext2D, rings: RingState[], songTimeMs: number, scrollSpeed: number, waveEngine: WaveEngine): void {
     for (const ring of rings) {
+      if (ring.type === 'hold' && ring.releaseTime !== undefined) {
+        ctx.strokeStyle = ring.holdCompleted || ring.hit ? COLORS.positive : COLORS.accentSub;
+        ctx.globalAlpha = ring.resolved && !ring.hit ? 0.25 : 0.6;
+        ctx.lineWidth = 10;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        let first = true;
+        const stepMs = 30;
+        for (let t = Math.max(songTimeMs - 200, ring.hitTime); t <= Math.min(songTimeMs + 800, ring.releaseTime); t += stepMs) {
+          const rx = TW_JUDGE_X + ((t - songTimeMs) / 1000) * scrollSpeed;
+          const ry = safe(waveEngine.waveYAtMs(t), CANVAS_HEIGHT / 2);
+          if (first) {
+            ctx.moveTo(rx, ry);
+            first = false;
+          } else {
+            ctx.lineTo(rx, ry);
+          }
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
       const x = TW_JUDGE_X + ((ring.hitTime - songTimeMs) / 1000) * scrollSpeed;
       if (x < -80 || x > CANVAS_WIDTH + 80) {
         continue;

@@ -28,7 +28,14 @@ export function chartToToml(chart: Chart): string {
   }
 
   for (const ring of chart.rings) {
-    lines.push('', '[[rings]]', `beat = ${fmt(ring.beat)}`)
+    const ringLines = ['', '[[rings]]', `beat = ${fmt(ring.beat)}`];
+    if (ring.type === 'hold') {
+      ringLines.push(`type = "hold"`);
+    }
+    if (typeof ring.duration === 'number' && Number.isFinite(ring.duration) && ring.duration > 0) {
+      ringLines.push(`duration = ${fmt(ring.duration)}`);
+    }
+    lines.push(...ringLines);
   }
 
   return lines.join('\n') + '\n'

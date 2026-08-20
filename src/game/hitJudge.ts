@@ -15,6 +15,7 @@ export function judgeHit(
   const candidates: { ring: RingState; err: number; yDist: number }[] = [];
   for (const ring of rings) {
     if (ring.resolved) continue;
+    if (ring.type === 'hold' && ring.hit) continue;
     const err = Math.abs(pressTimeMs - ring.hitTime);
     if (err < windowMs) {
       const yDist = Math.abs(cursorY - ring.targetY);
@@ -43,9 +44,19 @@ export function judgeHit(
     result = 'miss';
   }
 
-  selected.ring.resolved = true;
-  if (result !== 'miss') {
+  if (selected.ring.type === 'hold') {
     selected.ring.hit = true;
+    if (result !== 'miss') {
+      selected.ring.holding = true;
+      selected.ring.resolved = false;
+    } else {
+      selected.ring.resolved = true;
+    }
+  } else {
+    selected.ring.resolved = true;
+    if (result !== 'miss') {
+      selected.ring.hit = true;
+    }
   }
 
   return { result, errorMs: pressTimeMs - selected.ring.hitTime };

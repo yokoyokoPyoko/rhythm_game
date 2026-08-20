@@ -46,7 +46,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   const bufferRef = useRef<AudioBuffer | null>(null)
   const musicSourceRef = useRef<AudioBufferSourceNode | null>(null)
   const metronomeTimerRef = useRef<number | null>(null)
-  const keysRef = useRef({ up: false, down: false })
+  const keysRef = useRef({ up: false, down: false, space: false })
   const startedRef = useRef(false)
   const endedRef = useRef(false)
 
@@ -271,6 +271,20 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       if (startedRef.current) {
         for (const ring of ringsRef.current) {
           if (ring.resolved) continue
+          if (ring.type === 'hold' && ring.hit && ring.holding) {
+            if (songTimeMs >= (ring.releaseTime ?? ring.hitTime)) {
+              ring.resolved = true
+              ring.holdCompleted = true
+              scoreRef.current.recordHit('perfect')
+              judgementEventsRef.current.push({ result: 'perfect', y: ring.targetY, at: songTimeMs })
+            } else if (!keysRef.current.space) {
+              ring.holding = false
+              ring.resolved = true
+              scoreRef.current.recordHit('miss')
+              judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs })
+            }
+            continue
+          }
           const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
           if (songTimeMs > ring.hitTime + windowMs) {
             ring.resolved = true
@@ -375,6 +389,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       if (e.code === 'Space') {
         e.preventDefault()
         if (statusRef.current !== 'ready') return
+        keysRef.current.space = true
         if (keySoundOnRef.current) playKeyClick()
         if (!startedRef.current) {
           void startGame()
@@ -387,6 +402,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'ArrowUp') keysRef.current.up = false
       if (e.key === 'ArrowDown') keysRef.current.down = false
+      if (e.code === 'Space') keysRef.current.space = false
     }
 
     window.addEventListener('keydown', onKeyDown)

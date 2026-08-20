@@ -20,7 +20,11 @@ export class RingSpawner {
   constructor(rings: RingDef[] = []) {
     this.ringDefs = (rings ?? [])
       .filter((r): r is RingDef => !!r && Number.isFinite(r.beat))
-      .map((r) => ({ beat: sanitizeBeat(r.beat) }))
+      .map((r) => ({
+        beat: sanitizeBeat(r.beat),
+        duration: typeof r.duration === 'number' && r.duration > 0 ? r.duration : undefined,
+        type: r.type === 'hold' ? ('hold' as const) : ('single' as const),
+      }))
       .sort((a, b) => a.beat - b.beat);
   }
 
@@ -35,7 +39,11 @@ export class RingSpawner {
     if (rings !== this.lastRingsRef) {
       this.ringDefs = (rings ?? [])
         .filter((r): r is RingDef => !!r && Number.isFinite(r.beat))
-        .map((r) => ({ beat: sanitizeBeat(r.beat) }))
+        .map((r) => ({
+          beat: sanitizeBeat(r.beat),
+          duration: typeof r.duration === 'number' && r.duration > 0 ? r.duration : undefined,
+          type: r.type === 'hold' ? ('hold' as const) : ('single' as const),
+        }))
         .sort((a, b) => a.beat - b.beat);
       this.lastRingsRef = rings;
       this.spawned.length = 0;
@@ -50,6 +58,11 @@ export class RingSpawner {
       const spawnTime = hitTime - leadMs;
 
       if (now >= spawnTime) {
+        const type = def.type === 'hold' ? ('hold' as const) : ('single' as const);
+        const duration = type === 'hold' && typeof def.duration === 'number' && def.duration > 0 ? def.duration : 0;
+        const releaseBeat = def.beat + duration;
+        const releaseTime = bpmTimeline.beatToMs(releaseBeat);
+
         this.spawned.push({
           id: this.nextIndex,
           spawnTime,
@@ -57,6 +70,11 @@ export class RingSpawner {
           targetY: waveEngine.waveYAt(def.beat),
           resolved: false,
           hit: false,
+          type,
+          duration,
+          releaseTime,
+          holding: false,
+          holdCompleted: false,
         });
         this.nextIndex++;
       } else {
