@@ -1,45 +1,57 @@
 import type { BpmTimeline } from '../audio/bpmTimeline';
-import type { RingDef, RingState } from '../types';
 import type { WaveEngine } from './waveEngine';
+import type { RingDef, RingState } from '../types';
 
-const TW_JUDGE_X = Math.round(800 * 0.26);
-const TW_SCROLL = 110;
 const TW_LEAD_BEATS = 3;
 
+function sanitizeBeat(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return value;
+}
+
 export class RingSpawner {
+  private readonly ringDefs: RingDef[];
+  private readonly spawned: RingState[] = [];
   private nextIndex = 0;
-  private nextId = 0;
-  private readonly active: RingState[] = [];
+
+  constructor(rings: RingDef[] = []) {
+    this.ringDefs = (rings ?? [])
+      .filter((r): r is RingDef => !!r && Number.isFinite(r.beat))
+      .map((r) => ({ beat: sanitizeBeat(r.beat) }))
+      .sort((a, b) => a.beat - b.beat);
+  }
 
   update(
     songTimeMs: number,
-    rings: RingDef[],
     bpmTimeline: BpmTimeline,
     waveEngine: WaveEngine,
   ): RingState[] {
-    while (this.nextIndex < rings.length) {
-      const ring = rings[this.nextIndex];
-      const beat = Number.isFinite(ring.beat) && ring.beat >= 0 ? ring.beat : 0;
-      const hitTime = bpmTimeline.beatToMs(beat);
-      const beatMs = Number.isFinite(bpmTimeline.beatMsAt(beat)) ? bpmTimeline.beatMsAt(beat) : 500;
-      const leadMs = TW_LEAD_BEATS * beatMs;
-      if (songTimeMs < hitTime - leadMs) {
+    const now = Number.isFinite(songTimeMs) ? songTimeMs : 0;
+
+    while (this.nextIndex < this.ringDefs.length) {
+      const def = this.ringDefs[this.nextIndex];
+      const hitTime = bpmTimeline.beatToMs(def.beat);
+      const beatMs = bpmTimeline.beatMsAt(def.beat);
+      const leadMs = TW_LEAD_BEATS * (Number.isFinite(beatMs) && beatMs > 0 ? beatMs : 500);
+      const spawnTime = hitTime - leadMs;
+
+      if (now >= spawnTime) {
+        this.spawned.push({
+          id: this.nextIndex,
+          spawnTime,
+          hitTime,
+          targetY: waveEngine.waveYAt(def.beat),
+          resolved: false,
+          hit: false,
+        });
+        this.nextIndex++;
+      } else {
         break;
       }
-      this.active.push({
-        id: this.nextId++,
-        spawnTime: hitTime - leadMs,
-        hitTime,
-        targetY: waveEngine.waveYAt(beat),
-        resolved: false,
-        hit: false,
-      });
-      this.nextIndex++;
     }
-    return this.active;
-  }
 
-  xAt(ring: RingState, songTimeMs: number): number {
-    return TW_JUDGE_X + ((ring.hitTime - songTimeMs) / 1000) * TW_SCROLL;
+    return this.spawned.filter((r) => !r.resolved);
   }
 }
