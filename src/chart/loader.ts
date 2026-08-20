@@ -9,8 +9,8 @@ function parseSegments(v: unknown): Segment[] {
   if (!Array.isArray(v)) return [];
   return v
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-    .filter((item) => (item.direction === 'up' || item.direction === 'down') && isFiniteNumber(item.beats) && item.beats > 0)
-    .map((item) => ({ direction: item.direction as 'up' | 'down', beats: item.beats as number }));
+    .filter((item) => (item.direction === 'up' || item.direction === 'down' || item.direction === 'stay') && isFiniteNumber(item.beats) && item.beats > 0)
+    .map((item) => ({ direction: item.direction as 'up' | 'down' | 'stay', beats: item.beats as number }));
 }
 
 function parseBpmChanges(v: unknown): BpmChange[] {

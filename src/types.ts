@@ -1,4 +1,4 @@
-export interface Segment { direction: 'up' | 'down'; beats: number; }
+export interface Segment { direction: 'up' | 'down' | 'stay'; beats: number; }
 export interface BpmChange { beat: number; bpm: number; }
 export interface RingDef { beat: number; }
 export interface Chart {

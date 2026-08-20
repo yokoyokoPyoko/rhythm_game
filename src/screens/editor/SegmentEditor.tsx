@@ -14,7 +14,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
     onSegmentsChange(segments.filter((_, i) => i !== index))
   }
 
-  const updateDirection = (index: number, direction: 'up' | 'down') => {
+  const updateDirection = (index: number, direction: 'up' | 'down' | 'stay') => {
     onSegmentsChange(segments.map((seg, i) => (i === index ? { ...seg, direction } : seg)))
   }
 
@@ -40,6 +40,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
           追加
         </button>
       </div>
+      <p className="editor-hint">再生中に ↑/↓/→ (W/S/D) でリアルタイムにセグメントをスタンプ録音</p>
       {segments.length === 0 ? (
         <p className="editor-empty">セグメントなし</p>
       ) : (
@@ -50,11 +51,12 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
               <select
                 className="editor-input segment-direction"
                 value={seg.direction}
-                onChange={(e) => updateDirection(i, e.target.value as 'up' | 'down')}
+                onChange={(e) => updateDirection(i, e.target.value as 'up' | 'down' | 'stay')}
                 aria-label={`セグメント${i + 1}の方向`}
               >
                 <option value="up">↑</option>
                 <option value="down">↓</option>
+                <option value="stay">―</option>
               </select>
               <input
                 className="editor-input segment-beats"

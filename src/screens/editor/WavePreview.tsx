@@ -7,6 +7,7 @@ const GAME_CENTER_Y = 300
 const GAME_AMP = 130
 const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
+const STAY_COLOR = '#fbbf24'
 
 export default function WavePreview({
   segments,
@@ -73,7 +74,7 @@ export default function WavePreview({
     let currentBeat = 0
     for (const seg of segments) {
       const subSteps = Math.max(10, Math.round((seg.beats / lastBeat) * cssW))
-      ctx.strokeStyle = seg.direction === 'up' ? ACCENT_COLOR : SUB_COLOR
+      ctx.strokeStyle = seg.direction === 'up' ? ACCENT_COLOR : seg.direction === 'down' ? SUB_COLOR : STAY_COLOR
       ctx.lineWidth = 2
       ctx.beginPath()
       for (let s = 0; s <= subSteps; s++) {

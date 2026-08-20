@@ -158,14 +158,38 @@ export default function EditorScreen() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return
-      e.preventDefault()
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (!isPlayingRef.current) return
+        const rawBeat = timeline.msToBeat(positionRef.current)
+        const snapped = Math.round(rawBeat / snap) * snap
+        setRings((prev) => {
+          if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) return prev
+          return [...prev, { beat: snapped }]
+        })
+        return
+      }
+
       if (!isPlayingRef.current) return
-      const rawBeat = timeline.msToBeat(positionRef.current)
-      const snapped = Math.round(rawBeat / snap) * snap
-      setRings((prev) => {
-        if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) return prev
-        return [...prev, { beat: snapped }]
+
+      let direction: 'up' | 'down' | 'stay' | null = null
+      if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') {
+        direction = 'up'
+      } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') {
+        direction = 'down'
+      } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight' || e.code === 'KeyD' || e.code === 'KeyE') {
+        direction = 'stay'
+      }
+
+      if (!direction) return
+      e.preventDefault()
+
+      const currentBeat = timeline.msToBeat(positionRef.current)
+      setSegments((prevSegments) => {
+        const lastEndBeat = prevSegments.reduce((sum, s) => sum + s.beats, 0)
+        const rawBeats = currentBeat - lastEndBeat
+        const beats = Math.max(snap, Math.round(rawBeats / snap) * snap)
+        return [...prevSegments, { direction, beats }]
       })
     }
     window.addEventListener('keydown', onKeyDown)

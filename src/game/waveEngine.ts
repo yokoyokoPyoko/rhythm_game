@@ -15,8 +15,10 @@ function sanitizeBeat(value: number): number {
   return value;
 }
 
-function sanitizeDirection(value: unknown): 'up' | 'down' {
-  return value === 'down' ? 'down' : 'up';
+function sanitizeDirection(value: unknown): 'up' | 'down' | 'stay' {
+  if (value === 'down') return 'down';
+  if (value === 'stay') return 'stay';
+  return 'up';
 }
 
 export class WaveEngine {
@@ -35,6 +37,7 @@ export class WaveEngine {
     const waveBottom = TW_CENTER_Y + this.amplitude;
     const points: WavePoint[] = [{ beat: 0, y: waveTop }];
     let beat = 0;
+    let currentY = waveTop;
     for (const seg of segments) {
       if (!seg) {
         continue;
@@ -44,9 +47,17 @@ export class WaveEngine {
         continue;
       }
       beat += beats;
+      const dir = sanitizeDirection(seg.direction);
+      if (dir === 'up') {
+        currentY = waveTop;
+      } else if (dir === 'down') {
+        currentY = waveBottom;
+      } else {
+        // stay: currentY remains unchanged
+      }
       points.push({
         beat,
-        y: sanitizeDirection(seg.direction) === 'up' ? waveTop : waveBottom,
+        y: currentY,
       });
     }
     if (points.length === 1) {
