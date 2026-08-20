@@ -1,5 +1,7 @@
 import type { BpmChange } from '../types';
 
+const FALLBACK_BPM = 120;
+
 interface BpmSegment {
   startBeat: number;
   endBeat: number;
@@ -11,19 +13,39 @@ function beatMs(bpm: number): number {
   return 60000 / bpm;
 }
 
+function sanitizeBpm(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return FALLBACK_BPM;
+  }
+  return Math.min(Math.max(value, 20), 400);
+}
+
+function sanitizeBeat(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return value;
+}
+
 export class BpmTimeline {
   private segments: BpmSegment[];
 
   constructor(baseBpm: number, bpmChanges: BpmChange[]) {
-    this.segments = this.buildSegments(baseBpm, bpmChanges);
+    this.segments = this.buildSegments(baseBpm, bpmChanges ?? []);
   }
 
   private buildSegments(baseBpm: number, bpmChanges: BpmChange[]): BpmSegment[] {
-    const sorted = [...bpmChanges].sort((a, b) => a.beat - b.beat);
+    const sorted = [...bpmChanges]
+      .map((c) => ({
+        beat: sanitizeBeat(c?.beat),
+        bpm: sanitizeBpm(c?.bpm),
+      }))
+      .filter((c) => c.beat > 0)
+      .sort((a, b) => a.beat - b.beat);
     const segments: BpmSegment[] = [];
     let cursorBeat = 0;
     let cursorMs = 0;
-    let bpm = baseBpm;
+    let bpm = sanitizeBpm(baseBpm);
     for (const change of sorted) {
       if (change.beat <= cursorBeat) {
         continue;
