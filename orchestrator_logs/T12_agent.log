@@ -1,68 +1,12 @@
 [0m
 > build · hy3-free
 [0m
-[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/ 2>/dev/null; echo "---"; cat /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts 2>/dev/null
-AudioManager.ts
-bpmTimeline.ts
-clock.ts
-keySound.ts
-loader.ts
-metronome.ts
----
-const OFFSET_KEY = 'rhythmManualOffsetMs';
-
-let audioStartTime: number | null = null;
-
-export function songNow(audioCtx: AudioContext): number {
-  if (audioStartTime === null) {
-    return 0;
-  }
-  return (audioCtx.currentTime - audioStartTime) * 1000;
-}
-
-export function resetClock(audioCtx: AudioContext): void {
-  audioStartTime = audioCtx.currentTime;
-}
-
-export function getManualOffsetMs(): number {
-  const raw = localStorage.getItem(OFFSET_KEY);
-  if (raw === null) {
-    return 0;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-export function setManualOffset(ms: number): void {
-  localStorage.setItem(OFFSET_KEY, String(ms));
-}
-
-export function getManualOffsetSec(): number {
-  return getManualOffsetMs() / 1000;
-}
-[0m
-[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && grep -rn "songNow\|getManualOffset\|setManualOffset\|manualOffset" src/ 2>/dev/null
-src/screens/CalibrationScreen.tsx:4:import { getManualOffsetMs, setManualOffset } from '../audio/clock'
-src/screens/CalibrationScreen.tsx:21:  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
-src/screens/CalibrationScreen.tsx:69:        setManualOffset(next)
-src/screens/GameScreen.tsx:5:import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audio/clock'
-src/screens/GameScreen.tsx:55:  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
-src/screens/GameScreen.tsx:132:      const songTimeMs = songNow(audioMgr.ctx)
-src/screens/GameScreen.tsx:243:          songTimeMs = songNow(audioMgr.ctx)
-src/screens/GameScreen.tsx:307:    const next = Math.round(getManualOffsetMs() + delta)
-src/screens/GameScreen.tsx:308:    setManualOffset(next)
-src/audio/metronome.ts:1:import { getManualOffsetSec } from './clock';
-src/audio/metronome.ts:63:  const when = nextBeatTime + getManualOffsetSec() + Math.max(0, latency);
-src/audio/clock.ts:5:export function songNow(audioCtx: AudioContext): number {
-src/audio/clock.ts:16:export function getManualOffsetMs(): number {
-src/audio/clock.ts:25:export function setManualOffset(ms: number): void {
-src/audio/clock.ts:29:export function getManualOffsetSec(): number {
-src/audio/clock.ts:30:  return getManualOffsetMs() / 1000;
+[0m→ [0mRead src/audio/AudioManager.ts
 [0m
 [0m← [0mWrite src/audio/clock.ts
 Wrote file successfully.
 [0m
-[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | tail -20
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -20
 (no output)
 [0m
 DONE
