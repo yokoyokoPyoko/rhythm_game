@@ -562,21 +562,19 @@ def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
     VIDEO_DIR.mkdir(exist_ok=True)
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""Generate a Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}).
+    prompt = f"""Generate a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}).
 
 Context:
-This test execution will automatically record a video (.webm) of the browser in action.
-The recorded video will be passed to Gemini Video AI (Dynamic Reviewer) to verify actual UI rendering, animations, user interaction responses, and specification compliance.
+This test execution automatically records a video (.webm) of the browser in action. The recorded video is inspected by an uncompromising Product Director / Senior UX/UI Critic (Gate C Reviewer) to evaluate visual polish, fluidity, and interaction craftsmanship.
 
 Specification from AGENTS.md:
 {spec}
 
-Requirements:
-1. Access the web application target according to the project specification (e.g. baseURL or specific route). Wait for 'domcontentloaded' or networkidle.
-2. Simulate realistic user interactions relevant to the task specification (e.g. clicks, navigation, inputs, shortcuts).
-3. Do not use strict expect(page.locator('#root')).toBeVisible() if the container element has 0-height. Instead wait for specific UI components or use expect(page.locator('body')).toBeAttached().
-4. Use adequate wait times (waitForTimeout(2000-4000)) so the recorded video clearly captures visual transitions, animations, and dynamic state updates.
-5. Listen to console errors: fail only on unhandled TypeError/ReferenceError/Uncaught exceptions.
+STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
+1. Comprehensive Interaction: Do not just load the page. Actively simulate realistic, thorough user interactions for ALL features mentioned in the specification (e.g., clicking specific buttons, navigating routes, inputting data, testing shortcuts).
+2. Visual Capture Timing: Insert adequate wait times (`page.waitForTimeout(1500-3000)` between critical actions) so that CSS transitions, animations, hover states, and dynamic state updates are clearly and smoothly captured in the recorded video.
+3. Robust Locators & Stability: Use robust locators (e.g., text, roles, specific test IDs or classes). Avoid strict container visibility checks if 0-height.
+4. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
 
 Output only ```typescript ... ``` code block.
 """
@@ -633,25 +631,26 @@ def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
     latest_video = videos[-1]
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""You are the Dynamic Video Reviewer inspecting the browser execution video recording for task {task.id} ({task.desc}).
+    prompt = f"""You are an Uncompromising Product Director and Senior UX/UI Critic inspecting the browser execution video recording for task {task.id} ({task.desc}).
 
-Specification:
+Specification & Intent:
 {spec}
 
-STRICT VIDEO INSPECTION RULES:
-1. Inspect the attached video recording directly. Observe actual rendering, dynamic UI state transitions, animations, and visual styling.
-2. If the screen is blank/white/broken, required UI elements or content/canvas are missing, or interactions fail, award 0-50 points (FAIL).
-3. If the UI components, smooth dynamic behavior, required content, and expected interactions specified in the requirements are rendered properly in the video, award 80-100 points (PASS).
+EVALUATION PHILOSOPHY:
+Do not merely check if technical bullet points or bare-minimum features exist. Evaluate whether the implementation achieves high-end product polish, delightful user experience (UX), and refined visual craftsmanship. If a feature technically works but feels crude, janky, unpolished, or visually unappealing, it fails.
 
-Evaluation Criteria (20pts each, pass >= 80pts):
-1. UI components & dynamic rendering (smooth visual behavior, no blank/glitched canvas or elements)
-2. Interactive responsiveness (proper state changes upon simulated user clicks/keys)
-3. Design system & layout consistency (clean minimal dark styling, typography, spacing)
-4. State management & data presentation (correct information displayed without overlapping/flickering)
-5. Task specification completeness & error-free execution
+MANDATORY EXCELLENCE CRITERIA (All must be met for a PASS):
+1. Fluidity & Responsiveness: Interactions and animations must be butter-smooth, responsive, and completely free of stutter, jank, or frozen states.
+2. Visual Polish & Hierarchy: Clean typography, precise spacing, consistent styling, and professional aesthetic (no raw unstyled defaults or ugly overlapping).
+3. Feedback & State Clarity: Clear, immediate visual feedback for user actions; accurate data presentation without flickering or visual artifacts.
+4. Craft & Delight: The implementation should feel like a finished, polished product ready for users, demonstrating thoughtful care beyond mere functional compliance.
+
+SCORE TIERS & VERDICT (Binary Gate):
+- [80 - 100 pts] PASS: Outstanding execution. Fully functional, highly polished, visually refined, and delivers an exceptional user experience with zero noticeable flaws.
+- [0 - 79 pts]   FAIL (Immediate Rejection): Any jank, crude UI, missing polish, unresponsive feedback, design inconsistency, or superficial implementation that fails to deliver a truly finished product experience.
 
 Output JSON only:
-{{"score": 85, "verdict": "PASS", "comment": "detailed review reasoning based on the attached video"}} or {{"score": 45, "verdict": "FAIL", "comment": "specific failure reason observed in the video"}}
+{{"score": 90, "verdict": "PASS", "comment": "detailed product/UX critique"}} or {{"score": 50, "verdict": "FAIL", "comment": "specific UX/polish flaw observed"}}
 """
     log.info("Reviewer (Gemini Video AI via llm CLI) analyzing video: %s...", latest_video.name)
     code, out = run_llm_cli_video_review(latest_video, prompt, timeout=90)

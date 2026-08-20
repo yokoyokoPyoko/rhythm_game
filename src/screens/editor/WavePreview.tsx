@@ -4,7 +4,7 @@ import { WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
 const GAME_CENTER_Y = 300
-const GAME_AMP = 80
+const GAME_AMP = 130
 const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
 

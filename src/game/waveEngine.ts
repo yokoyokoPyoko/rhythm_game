@@ -2,7 +2,7 @@ import type { BpmTimeline } from '../audio/bpmTimeline';
 import type { Segment } from '../types';
 
 const TW_CENTER_Y = 600 / 2;
-const TW_AMP = 80;
+const TW_AMP = 130;
 
 const WAVE_TOP = TW_CENTER_Y - TW_AMP;
 const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;

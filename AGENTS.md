@@ -632,11 +632,57 @@ CSS Transition のみ（ライブラリ不使用）:
 - 現行: `startGame()` は async（`await audioMgr.ensure()`）のため、await 中に Space連打で複数回呼ばれ、`resetClock` と音楽開始が複数回実行され得る。
 - 修正: `startGame` 内で `startedRef.current` を最初に確認し、既に true なら即 return する二重起動ガードを追加。
 
-**7. 回帰確認（挙動を壊さないこと）**
+**7. 回帰確認（挙동を壊さないこと）**
 - 開始前（`startedRef.current === false`）にスコア・トレース・MISSが計上されないこと
 - ヒット済みリングが後からMISS再計上されないこと（T90の成果を維持）
 - メトロノームが連続して鳴り続けること（`schedule()` の `when` クランプと try/catch 継続）
 - カーソル速度が波形の斜度（segmentBeats）と一致すること
+
+---
+
+### [T92] プレイ表示領域（波形上下幅）の固定拡張
+
+`src/game/cursor.ts` + `src/game/waveEngine.ts` + `src/game/renderer.ts`:
+- 振幅定数 `TW_AMP` を `80` から **`130`** に変更。
+- 上下幅範囲が Y: 170〜430px（全高260px）になり、上部SCORE/COMBOや下部操作ヒントに侵食しない範囲でゲームプレイ領域を拡張。
+
+---
+
+### [T93] 譜面設定（TOML）拡張：縦横進み幅＆開始オフセット
+
+`src/types.ts` + `src/chart/loader.ts` + `src/chart/serialize.ts` + `src/screens/editor/BpmEditor.tsx` (または ChartSettings) + `src/screens/GameScreen.tsx`:
+- チャートTOMLおよび `Chart` 型に以下を追加:
+  - `audio_offset`: number (ms)
+  - `scroll_speed`: number (px/sec)
+  - `amplitude`: number (px)
+- エディタの「BPM設定」ペイン（またはチャート設定ペイン）でこれらのパラメータを編集可能にし、TOMLエクスポートに含める。ゲーム画面や波形プレビューでも反映。
+
+---
+
+### [T94] セグメント方向「とどまる (stay)」追加 ＆ リアルタイムセグメント録音
+
+`src/types.ts` + `src/game/waveEngine.ts` + `src/screens/editor/SegmentEditor.tsx` + `src/screens/EditorScreen.tsx`:
+- `Segment.direction` に `'stay'` （水平にとどまる）を追加。
+- `WaveEngine` で `'stay'` セグメントのY座標を直前のY位置のまま固定するロジックを実装。
+- エディタ再生中にキー入力（矢印キー等）でリアルタイムにセグメント（方向・拍数）をスタンプ録音できる機能を追加。
+
+---
+
+### [T95] ホールドリング（長押しノーツ）の追加
+
+`src/types.ts` + `src/game/ringSpawner.ts` + `src/game/hitJudge.ts` + `src/game/renderer.ts` + `src/screens/EditorScreen.tsx`:
+- リング定義 (`RingDef`, `RingState`) に `duration?: number` と `type?: 'single' | 'hold'` を追加。
+- ゲーム画面でホールドリングの長押しトレース判定（キー押し続け中の継続判定）およびテール描画を実装。
+- エディタで単発/ホールドの切り替えおよび長さ指定を可能にする。
+
+---
+
+### [T96] オーサリングツール（エディタ）のUI/UX刷新
+
+`src/screens/EditorScreen.tsx` + `src/screens/editor/WavePreview.tsx` + `src/screens/editor/SegmentEditor.tsx`:
+- **プレビュー拡大**: `WavePreview` の縦幅を大幅に拡大し、グリッド・判定線・ノーツを高視認化。
+- **デフォルト折りたたみ**: 右ペインの「リング一覧」「セグメント一覧」を `<details>` アコーディオン化し、デフォルトで折りたたむ。
+- **直感編集**: タイムライン/プレビュー上で直接クリックやドラッグによるノーツ追加・選択・移動・削除をサポート。
 
 ---
 
