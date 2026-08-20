@@ -27,13 +27,19 @@ export function judgeHit(
   if (nearestErr >= windowMs) return null;
 
   const yDist = Math.abs(cursorY - nearest.targetY);
+  let result: 'perfect' | 'good' | 'miss';
   if (yDist >= HIT_Y) {
-    return { result: 'miss', errorMs: pressTimeMs - nearest.hitTime };
+    result = 'miss';
+  } else if (nearestErr < PERFECT_MS && yDist < PERFECT_Y) {
+    result = 'perfect';
+  } else {
+    result = 'good';
   }
 
-  if (nearestErr < PERFECT_MS && yDist < PERFECT_Y) {
-    return { result: 'perfect', errorMs: pressTimeMs - nearest.hitTime };
+  nearest.resolved = true;
+  if (result !== 'miss') {
+    nearest.hit = true;
   }
 
-  return { result: 'good', errorMs: pressTimeMs - nearest.hitTime };
+  return { result, errorMs: pressTimeMs - nearest.hitTime };
 }

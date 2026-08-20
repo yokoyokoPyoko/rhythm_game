@@ -342,5 +342,21 @@
       "T81"
     ],
     "ui": true
+  },
+  {
+    "id": "T90",
+    "desc": "ヒット判定のリング解決バグ修正: judgeHit()がヒットしたリングをresolved=trueにしないため、同一リングの複数回ヒットと、ヒット済みリングの後からのMISS二重計上が発生する。",
+    "depends_on": [
+      "T23"
+    ],
+    "ui": false
+  },
+  {
+    "id": "T91",
+    "desc": "総合デバッグ: リング選定改善・曲終了判定の音楽長基準化・メトロノームlatency補正・キャリブレーションoffsetリセット・WavePreviewのBPM変更反映・startGame二重起動防止・回帰確認。",
+    "depends_on": [
+      "T90"
+    ],
+    "ui": true
   }
 ]

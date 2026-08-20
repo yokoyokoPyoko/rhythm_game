@@ -588,6 +588,58 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T90] ヒット判定のリング解決バグ修正
+
+`src/game/hitJudge.ts`:
+- 背景: `judgeHit()` はヒット判定（perfect/good/miss）を返すだけで、対象リングの `resolved` / `hit` を更新していない。このため
+  1. 同じリングに Space 連打で複数回ヒットできてしまう
+  2. `GameScreen.tsx` のウィンドウ超過ループ（`songTimeMs > ring.hitTime + windowMs` で `ring.resolved=true; recordHit('miss')`）が、既にヒット済みのリングにも後から MISS を再計上する
+- 修正方針: `judgeHit()` 内で、ヒット対象となったリングを `resolved: true` に設定し、`result === 'miss'` でなければ `hit: true` にも設定する。
+- `HitJudgement` は変更不要（`resolved` の副作用をリングオブジェクトに直接反映）。
+- 既存仕様は維持: タイミング誤差 < beatMs*0.4 AND Y距離 < 60 でヒット。PERFECT: 誤差 < 50ms AND Y < 30px。
+
+---
+
+### [T91] 総合デバッグ
+
+`src/game/hitJudge.ts` + `src/screens/GameScreen.tsx` + `src/screens/CalibrationScreen.tsx` + `src/screens/editor/WavePreview.tsx` + `src/audio/metronome.ts` + `src/screens/EditorScreen.tsx`:
+
+**1. ヒット判定の対象リング選定改善**
+- 現行バグ: タイミング誤差最小のリングを1つだけ選び（`err` 最小）、そのリングのY距離が60px以上なら即 `miss` を返す。このため、タイミングは近いがYが外れたリングに先に判定され、本来当たるべき（タイミングもYも合う）別リングに当てられない。
+- 修正方針: タイミングウィンドウ内（誤差 < beatMs*0.4）の未解決リングの中から、**Y距離 < 60 を満たすもの**を優先して選ぶ。
+  - Y距離 < 60 を満たすリングが複数ある場合 → タイミング誤差最小を採用
+  - Y距離 < 60 を満たすリングが1つもない場合 → タイミング誤差最小のリングで `miss` を返す（従来挙動維持）
+- PERFECT条件は維持: 誤差 < 50ms AND Y < 30px
+
+**2. 曲終了判定を音楽の実長さ基準に**
+- 現行: 最後のリングの hitTime + 2秒で終了判定（`lastHitTime`）。リングが曲より短いと曲が切れ、リングが曲より長いと終わらない。リング0個だと永遠に続く。
+- 修正: 音楽ロード成功時は `buffer.duration * 1000` を終了時間の基準にし、`songTimeMs > buffer.duration*1000` で終了。音楽ロード失敗時は従来の「最後のリングのhitTime + 2秒」フォールバック。
+- リング0個 + 音楽失敗の場合は「開始からの経過時間（例: 曲長が不明なら 60秒 で強制終了）」で終了できるようにする。
+
+**3. メトロノームの latency 補正**
+- 現行: `schedule()` の `when = nextBeatTime + offsetSeconds() + latency`。`osc.start(when)` は `when` ちょうどに鳴るため、`+latency` は音をさらに遅らせ、音楽（同ctxで再生）との相対同期が崩れる。
+- 修正: `when = nextBeatTime + offsetSeconds()` にする（latency を足さない）。`latency` パラメータは削除し、呼び出し側（GameScreen / CalibrationScreen）の `latency = baseLatency + outputLatency` 計算も除去する。
+
+**4. キャリブレーションのオフセットリセット**
+- 現行: 計測開始時に既存 `manualOffsetMs` が効いたまま計測するため、計測値に既存オフセットが混ざる。
+- 修正: Space 1回目（開始時）に `setManualOffset(0)` を呼んでから計測を始める。計測完了時に新オフセットを保存。
+
+**5. WavePreview の BPM変更反映**
+- 現行: `new BpmTimeline(bpm, [])` で BPM変更を無視。
+- 修正: `WavePreview` に `bpmChanges` を渡し、`new BpmTimeline(bpm, bpmChanges)` にする。呼び出し側（EditorScreen）から `bpmChanges` を渡す。
+
+**6. startGame の二重起動防止**
+- 現行: `startGame()` は async（`await audioMgr.ensure()`）のため、await 中に Space連打で複数回呼ばれ、`resetClock` と音楽開始が複数回実行され得る。
+- 修正: `startGame` 内で `startedRef.current` を最初に確認し、既に true なら即 return する二重起動ガードを追加。
+
+**7. 回帰確認（挙動を壊さないこと）**
+- 開始前（`startedRef.current === false`）にスコア・トレース・MISSが計上されないこと
+- ヒット済みリングが後からMISS再計上されないこと（T90の成果を維持）
+- メトロノームが連続して鳴り続けること（`schedule()` の `when` クランプと try/catch 継続）
+- カーソル速度が波形の斜度（segmentBeats）と一致すること
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |

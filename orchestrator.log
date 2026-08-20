@@ -2417,3 +2417,38 @@
 2026-08-20 16:54:21,946 [INFO] Dispatching Video Review via Simon Willison's llm CLI (model=gemini-3.5-flash-lite, video=video.webm)...
 2026-08-20 16:54:26,493 [INFO] Review Verdict: [38;2;74;222;128mPASS (90/100)[0m | Reason: The video shows smooth screen transitions between different views (main menu, gameplay, calibration, authoring, and result screens) with clean minimal dark styling and correct UI component rendering matching the specified CSS transition requirements.
 2026-08-20 16:54:26,493 [INFO] [T74] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-08-20 16:54:26,512 [INFO] [T81] Already passed -> Skip (--force to rerun)
+2026-08-20 16:54:26,512 [INFO] [T80] Already passed -> Skip (--force to rerun)
+2026-08-20 17:07:48,680 [INFO] Orchestrator range execution: 1 tasks (from=T90, to=T90, budget=600m)
+2026-08-20 17:07:48,680 [INFO]   Plan: T90 <- ヒット判定のリング解決バグ修正: judgeHit()がヒットしたリングをresolved=trueにしないため、同一リングの複数回ヒットと、ヒット済みリングの後からのMISS二重計上が発生する。
+2026-08-20 17:13:52,785 [INFO] Orchestrator range execution: 2 tasks (from=T90, to=T91, budget=600m)
+2026-08-20 17:13:52,785 [INFO]   Plan: T90 <- ヒット判定のリング解決バグ修正: judgeHit()がヒットしたリングをresolved=trueにしないため、同一リングの複数回ヒットと、ヒット済みリングの後からのMISS二重計上が発生する。
+2026-08-20 17:13:52,785 [INFO]   Plan: T91 <- 総合デバッグ: ヒット判定の対象リング選定改善（タイミング+Y両条件を優先）+ 開始前スコア計上・メトロノーム同期まわりの回帰確認。
+2026-08-20 17:25:54,450 [INFO] Orchestrator range execution: 2 tasks (from=T90, to=T91, budget=600m)
+2026-08-20 17:25:54,450 [INFO]   Plan: T90 <- ヒット判定のリング解決バグ修正: judgeHit()がヒットしたリングをresolved=trueにしないため、同一リングの複数回ヒットと、ヒット済みリングの後からのMISS二重計上が発生する。
+2026-08-20 17:25:54,450 [INFO]   Plan: T91 <- 総合デバッグ: リング選定改善・曲終了判定の音楽長基準化・メトロノームlatency補正・キャリブレーションoffsetリセット・WavePreviewのBPM変更反映・startGame二重起動防止・回帰確認。
+2026-08-20 17:29:49,173 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-20 17:30:30,244 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-20 17:30:35,659 [INFO] Orchestrator range execution: 2 tasks (from=T90, to=T91, budget=600m)
+2026-08-20 17:30:35,662 [INFO] Starting implementation [T90] (attempt 1/2)
+2026-08-20 17:30:35,663 [INFO] RateLimit sleep: 5s...
+2026-08-20 17:30:40,664 [INFO] Dispatching [1mCoder(T90)[0m (model=[90mopencode/hy3-free, variant=medium[0m, attempt=1/5, timeout=300s)
+2026-08-20 17:35:40,730 [WARNING] Timeout reached (300s). Terminating process.
+2026-08-20 17:35:41,730 [WARNING] Process timed out (300s). Retrying...
+2026-08-20 17:35:41,730 [INFO] RateLimit sleep: 5s...
+2026-08-20 17:35:46,730 [INFO] Dispatching [1mCoder(T90)[0m (model=[90mopencode/hy3-free, variant=medium[0m, attempt=2/5, timeout=300s)
+2026-08-20 17:39:39,373 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-20 17:39:44,590 [INFO] Orchestrator range execution: 2 tasks (from=T90, to=T91, budget=600m)
+2026-08-20 17:39:44,592 [INFO] Starting implementation [T90] (attempt 1/2)
+2026-08-20 17:39:44,593 [INFO] RateLimit sleep: 5s...
+2026-08-20 17:39:49,593 [INFO] Dispatching [1mCoder(T90)[0m (model=[90mopencode/deepseek-v4-flash-free, variant=medium[0m, attempt=1/5, timeout=300s)
+2026-08-20 17:44:49,668 [WARNING] Timeout reached (300s). Terminating process.
+2026-08-20 17:44:50,669 [WARNING] Process timed out (300s). Retrying...
+2026-08-20 17:44:50,669 [INFO] RateLimit sleep: 5s...
+2026-08-20 17:44:55,669 [INFO] Dispatching [1mCoder(T90)[0m (model=[90mopencode/deepseek-v4-flash-free, variant=medium[0m, attempt=2/5, timeout=300s)
+2026-08-20 17:46:28,572 [INFO] Orchestrator range execution: 2 tasks (from=T90, to=T91, budget=600m)
+2026-08-20 17:46:28,574 [INFO] Starting implementation [T90] (attempt 1/2)
+2026-08-20 17:46:28,574 [INFO] RateLimit sleep: 5s...
+2026-08-20 17:46:33,574 [INFO] Dispatching [1mCoder(T90)[0m (model=[90mgoogle/gemini-3.5-flash-lite, variant=medium[0m, attempt=1/5, timeout=300s)
+2026-08-20 17:46:52,829 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
+2026-08-20 17:46:55,856 [INFO] [T90] [38;2;74;222;128mGate A (tsc) PASS[0m
