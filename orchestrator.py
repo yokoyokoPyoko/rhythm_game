@@ -66,32 +66,32 @@ MODEL_CATALOG = {
 }
 
 CODER_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "自律・精度 (Rank 1: 高速&高精度 TypeScript 実装)"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "自律・精度 (Rank 2: 豊富なコード知識・MoE)"),
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "自律・精度 (Rank 3: 高度論理思考・長考型)"),
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速・軽量 (待ち時間最小・超安定)"),
-    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "爆速・軽量 (完全無料・軽量コード生成)"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: 高速・高精度 TypeScript コード生成"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 豊富なコード知識・MoE"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高度論理思考・長考型"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
+    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "自律枠: 完全無料・自律コード生成"),
 ]
 
 QA_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "自律・精度 (Rank 1: ブラウザ自律操作・Playwright生成)"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "自律・精度 (Rank 2: 論理的テストケース網羅)"),
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "自律・精度 (Rank 3: 高難度ロジック検証)"),
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速・軽量 (即時テストスクリプト生成)"),
-    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "爆速・軽量 (完全無料)"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・Playwright生成"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 論理的テストケース網羅"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時テスト生成"),
+    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "自律枠: 完全無料・自律テスト生成"),
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "クラウド最適解 (マルチモーダル5連フレーム高速審査)"),
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "思考・画像認識 (画像認識 + 思考推論)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "クラウド最適解: マルチモーダル5連フレーム高速審査"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "思考・画像認識: 画像認識 + 思考推論"),
 ]
 
 POSTMORTEM_OPTIONS = [
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "自律・推論 (Rank 1: 推論特化・根本原因究明)"),
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "自律・推論 (Rank 2: 最新TS仕様知識+熟考)"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "自律・推論 (Rank 3: 長文ログ解析)"),
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速・軽量 (即時エラー要約)"),
-    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "爆速・軽量 (完全無料)"),
+    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 1: 推論特化・根本原因究明"),
+    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 2: 最新TS仕様知識+熟考"),
+    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 3: 長文ログ解析"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時エラー要約"),
+    ("laguna_free", "[OpenCode Zen] Laguna S 2.1 Free", "自律枠: 完全無料・自律原因分析"),
 ]
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
