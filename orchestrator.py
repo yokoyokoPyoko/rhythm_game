@@ -424,11 +424,14 @@ def rate_limit_sleep(model: str) -> None:
         time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode", variant: str | None = None) -> tuple[int, str]:
+def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode", variant: str | None = None, files: list[str] | None = None) -> tuple[int, str]:
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model]
     if variant:
         cmd.extend(["--variant", variant])
-    cmd.append(prompt)
+    if files:
+        for f in files:
+            cmd.extend(["-f", f])
+    cmd.extend(["--", prompt])
 
     for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
         rate_limit_sleep(model)
@@ -604,37 +607,74 @@ test('dynamic video test', async ({ page }) => {
         detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
         return GateResult("Gate B (Dynamic Test)", False, detail)
 
-    # 録画された .webm 動画ファイルを探索
-    videos = list(VIDEO_DIR.glob("**/*.webm"))
-    log.info("Playwright execution completed (%d video recording(s) captured).", len(videos))
-    return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(videos)} video(s) recorded)")
+    # 録画された .webm 動画ファイルを探索し、ffmpeg で代表フレーム画像を抽出
+    videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
+    if videos:
+        latest_video = videos[-1]
+        log.info("Extracting verification frames from %s via ffmpeg...", latest_video.name)
+        # 既存のフレーム画像をクリーンアップ
+        for old_f in SCREENSHOT_DIR.glob("frame_*.png"):
+            old_f.unlink(missing_ok=True)
+        # 動画から 1fps でフレーム画像を抽出
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(latest_video), "-vf", "fps=1", str(SCREENSHOT_DIR / "frame_%d.png")]
+        subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+
+    extracted_frames = sorted(list(SCREENSHOT_DIR.glob("frame_*.png")), key=lambda p: p.stat().st_mtime)
+    log.info("Playwright & ffmpeg completed (%d video(s), %d frame image(s) extracted).", len(videos), len(extracted_frames))
+    return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(extracted_frames)} frames extracted)")
 
 
 def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
     if task.id in NON_UI_TASKS or not has_dev_script():
         return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} is non-UI -> Skip")
 
-    videos = list(VIDEO_DIR.glob("**/*.webm"))
-    latest_video = str(videos[-1].relative_to(ROOT)) if videos else "none"
+    all_frames = sorted(list(SCREENSHOT_DIR.glob("frame_*.png")), key=lambda p: p.stat().st_mtime)
+    # 代表的な 5 フレームを選択 (最初, 1/4, 2/4, 3/4, 最後)
+    selected_frames: list[Path] = []
+    if all_frames:
+        n = len(all_frames)
+        indices = [0, n // 4, n // 2, (3 * n) // 4, n - 1]
+        seen_idx = set()
+        for idx in indices:
+            if idx < n and idx not in seen_idx:
+                seen_idx.add(idx)
+                selected_frames.append(all_frames[idx])
+
+    frame_rel_paths = [str(f.relative_to(ROOT)) for f in selected_frames]
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""You are the Dynamic Reviewer evaluating browser gameplay video recording ({latest_video}) for task {task.id} ({task.desc}).
+    prompt = f"""You are the Dynamic Visual Reviewer inspecting actual browser gameplay frame images for task {task.id} ({task.desc}).
+
+Attached Images:
+{', '.join(frame_rel_paths) if frame_rel_paths else 'No frames captured (Automatic 0pts)'}
 
 Specification:
 {spec}
 
+STRICT VISUAL INSPECTION RULES:
+1. You MUST directly inspect the attached image files ({', '.join(frame_rel_paths)}). Do NOT just read source code files.
+2. If the screen is completely blank/white/black, or if the Canvas wave line / rings / text are missing, award 0-40 points (FAIL).
+3. If minimal dark UI, smooth waveform line, rings, and HUD score/combo are properly rendered on screen, award 80-100 points (PASS).
+
 Evaluation Criteria (20pts each, pass >= 80pts):
-1. Dynamic UI/Audio behavior & smooth Canvas animations (no jitter, no frozen screen)
-2. Audio synchronization & Metronome timing accuracy
-3. Minimal dark Linear/Vercel design system consistency (no rainbow RGB/excessive glow)
-4. Input responsiveness & prevention of invalid premature scoring
-5. Task specification completeness
+1. Canvas waveform line rendered properly (accent line)
+2. Ring elements positioned & visible
+3. Minimal dark Linear/Vercel styling consistency
+4. Score / Combo / Status HUD rendered without overlap
+5. Task UI completeness & no blank error screens
 
 Output JSON only:
-{{"score": 85, "verdict": "PASS", "comment": "reason"}} or {{"score": 65, "verdict": "FAIL", "comment": "reason"}}
+{{"score": 85, "verdict": "PASS", "comment": "detailed reason based on attached image frames"}} or {{"score": 40, "verdict": "FAIL", "comment": "reason based on attached image frames"}}
 """
-    log.info("Reviewer (Gemini Video AI) evaluating gameplay recording (%s)...", latest_video)
-    code, out = run_opencode_with_retry(reviewer_model, prompt, timeout=90, label="Dynamic-Review", variant="medium")
+    log.info("Reviewer (Gemini Multimodal AI) evaluating attached frames (%s)...", ", ".join(frame_rel_paths))
+    code, out = run_opencode_with_retry(
+        reviewer_model,
+        prompt,
+        timeout=90,
+        label="Dynamic-Review",
+        variant="medium",
+        files=frame_rel_paths if frame_rel_paths else None,
+    )
     
     if code != 0:
         log.error("Reviewer model failed/timed out. Rejecting Gate C.")
