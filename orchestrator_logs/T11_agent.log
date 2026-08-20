@@ -1,9 +1,7 @@
 [0m
 > build · hy3-free
 [0m
-[0m→ [0mRead src/audio/AudioManager.ts
-[0m
-[0m$ [0mls /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/ 2>/dev/null; echo "---"; ls /home/p-yoko/Program/TypeScript/rhythm_game/src/types.ts 2>/dev/null
+[0m$ [0mls src/audio 2>/dev/null; echo "---"; ls src 2>/dev/null
 AudioManager.ts
 bpmTimeline.ts
 clock.ts
@@ -11,15 +9,375 @@ keySound.ts
 loader.ts
 metronome.ts
 ---
-/home/p-yoko/Program/TypeScript/rhythm_game/src/types.ts
+App.tsx
+assets
+audio
+chart
+game
+index.css
+main.tsx
+screens
+types.ts
+vite-env.d.ts
 [0m
 [0m→ [0mRead src/audio/metronome.ts
-[0m✱ [0mGrep "getManualOffsetSec"[90m in src/audio/clock.ts · 3 matches[0m
-The file already exists and matches the spec. Let me verify it compiles.
+[0m→ [0mRead src/audio/clock.ts
 [0m
-[0m$ [0mcd /home/p-yoko/Program/TypeScript/rhythm_game && npx tsc --noEmit 2>&1 | head -20; echo "EXIT: ${PIPESTATUS[0]}"
-EXIT: 0
+[0m$ [0mnpx tsc --noEmit 2>&1 | head -30
+(no output)
 [0m
-`src/audio/metronome.ts` already exists and satisfies the spec: `LOOKAHEAD_MS = 200`, `schedule(audioCtx, nextBeatTime, beat, latency)` with strong beat (beat%4===0) at 880Hz, weak at 440Hz, short click. It compiles with zero errors.
+[0m$ [0mcat tsconfig.json 2>/dev/null; echo "==="; cat tsconfig.node.json 2>/dev/null
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+===
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["vite.config.ts"]
+}
+[0m
+[0m$ [0mcat tsconfig.app.json 2>/dev/null
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src"]
+}
+[0m
+[0m$ [0mnpx tsc --noEmit -p tsconfig.app.json 2>&1 | head -30
+src/audio/metronome.ts(1,10): error TS2724: '"./clock"' has no exported member named 'getManualOffsetSec'. Did you mean 'getManualOffset'?
+src/audio/metronome.ts(14,11): error TS6133: 'startAudioTime' is declared but its value is never read.
+src/game/renderer.ts(67,59): error TS6133: 'bpmTimeline' is declared but its value is never read.
+src/screens/CalibrationScreen.tsx(4,10): error TS2724: '"../audio/clock"' has no exported member named 'getManualOffsetMs'. Did you mean 'getManualOffset'?
+src/screens/CalibrationScreen.tsx(5,10): error TS2459: Module '"../audio/metronome"' declares 'LOOKAHEAD_MS' locally, but it is not exported.
+src/screens/GameScreen.tsx(5,10): error TS2724: '"../audio/clock"' has no exported member named 'getManualOffsetMs'. Did you mean 'getManualOffset'?
+src/screens/GameScreen.tsx(8,10): error TS2459: Module '"../audio/metronome"' declares 'LOOKAHEAD_MS' locally, but it is not exported.
+src/screens/GameScreen.tsx(132,34): error TS2554: Expected 0 arguments, but got 1.
+src/screens/GameScreen.tsx(243,32): error TS2554: Expected 0 arguments, but got 1.
+src/screens/GameScreen.tsx(249,87): error TS2554: Expected 3 arguments, but got 4.
+[0m
+[0m$ [0mnpx tsc --noEmit -p tsconfig.app.json 2>&1 | grep -E "metronome|clock" 
+src/audio/metronome.ts(1,10): error TS2724: '"./clock"' has no exported member named 'getManualOffsetSec'. Did you mean 'getManualOffset'?
+src/audio/metronome.ts(14,11): error TS6133: 'startAudioTime' is declared but its value is never read.
+src/screens/CalibrationScreen.tsx(4,10): error TS2724: '"../audio/clock"' has no exported member named 'getManualOffsetMs'. Did you mean 'getManualOffset'?
+src/screens/CalibrationScreen.tsx(5,10): error TS2459: Module '"../audio/metronome"' declares 'LOOKAHEAD_MS' locally, but it is not exported.
+src/screens/GameScreen.tsx(5,10): error TS2724: '"../audio/clock"' has no exported member named 'getManualOffsetMs'. Did you mean 'getManualOffset'?
+src/screens/GameScreen.tsx(8,10): error TS2459: Module '"../audio/metronome"' declares 'LOOKAHEAD_MS' locally, but it is not exported.
+[0m
+[0m$ [0mgrep -nE "getManualOffsetMs|LOOKAHEAD_MS|metronome|getManualOffset|offsetSeconds|new Metronome|Metronome\(" src/screens/GameScreen.tsx src/screens/CalibrationScreen.tsx
+src/screens/GameScreen.tsx:5:import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audio/clock'
+src/screens/GameScreen.tsx:8:import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
+src/screens/GameScreen.tsx:48:  const metronomeTimerRef = useRef<number | null>(null)
+src/screens/GameScreen.tsx:55:  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
+src/screens/GameScreen.tsx:81:    if (metronomeTimerRef.current !== null) {
+src/screens/GameScreen.tsx:82:      window.clearInterval(metronomeTimerRef.current)
+src/screens/GameScreen.tsx:83:      metronomeTimerRef.current = null
+src/screens/GameScreen.tsx:99:      stopMetronome()
+src/screens/GameScreen.tsx:102:      const lookaheadSec = LOOKAHEAD_MS / 1000
+src/screens/GameScreen.tsx:105:      metronomeTimerRef.current = window.setInterval(() => {
+src/screens/GameScreen.tsx:126:    startMetronome(ctx)
+src/screens/GameScreen.tsx:153:    stopMetronome()
+src/screens/GameScreen.tsx:284:        stopMetronome()
+src/screens/GameScreen.tsx:302:      stopMetronome()
+src/screens/GameScreen.tsx:307:    const next = Math.round(getManualOffsetMs() + delta)
+src/screens/CalibrationScreen.tsx:4:import { getManualOffsetMs, setManualOffset } from '../audio/clock'
+src/screens/CalibrationScreen.tsx:5:import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
+src/screens/CalibrationScreen.tsx:16:  const metronomeTimerRef = useRef<number | null>(null)
+src/screens/CalibrationScreen.tsx:21:  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
+src/screens/CalibrationScreen.tsx:25:    if (metronomeTimerRef.current !== null) {
+src/screens/CalibrationScreen.tsx:26:      window.clearInterval(metronomeTimerRef.current)
+src/screens/CalibrationScreen.tsx:27:      metronomeTimerRef.current = null
+src/screens/CalibrationScreen.tsx:32:    stopMetronome()
+src/screens/CalibrationScreen.tsx:35:    const lookaheadSec = LOOKAHEAD_MS / 1000
+src/screens/CalibrationScreen.tsx:39:    metronomeTimerRef.current = window.setInterval(() => {
+src/screens/CalibrationScreen.tsx:56:      startMetronome()
+src/screens/CalibrationScreen.tsx:72:      stopMetronome()
+src/screens/CalibrationScreen.tsx:80:        stopMetronome()
+src/screens/CalibrationScreen.tsx:93:      stopMetronome()
+[0m
+[0m→ [0mRead src/screens/GameScreen.tsx[90m [offset=120, limit=140][0m
+[0m
+[0m$ [0mnpx tsc --noEmit -p tsconfig.app.json 2>&1
+src/audio/metronome.ts(1,10): error TS2724: '"./clock"' has no exported member named 'getManualOffsetSec'. Did you mean 'getManualOffset'?
+src/audio/metronome.ts(14,11): error TS6133: 'startAudioTime' is declared but its value is never read.
+src/game/renderer.ts(67,59): error TS6133: 'bpmTimeline' is declared but its value is never read.
+src/screens/CalibrationScreen.tsx(4,10): error TS2724: '"../audio/clock"' has no exported member named 'getManualOffsetMs'. Did you mean 'getManualOffset'?
+src/screens/CalibrationScreen.tsx(5,10): error TS2459: Module '"../audio/metronome"' declares 'LOOKAHEAD_MS' locally, but it is not exported.
+src/screens/GameScreen.tsx(5,10): error TS2724: '"../audio/clock"' has no exported member named 'getManualOffsetMs'. Did you mean 'getManualOffset'?
+src/screens/GameScreen.tsx(8,10): error TS2459: Module '"../audio/metronome"' declares 'LOOKAHEAD_MS' locally, but it is not exported.
+src/screens/GameScreen.tsx(132,34): error TS2554: Expected 0 arguments, but got 1.
+src/screens/GameScreen.tsx(243,32): error TS2554: Expected 0 arguments, but got 1.
+src/screens/GameScreen.tsx(249,87): error TS2554: Expected 3 arguments, but got 4.
+[0m
+[0m→ [0mRead src/game/ringSpawner.ts
+[0m→ [0mRead src/game/renderer.ts[90m [offset=55, limit=30][0m
+[0m→ [0mRead src/screens/CalibrationScreen.tsx
+I'll implement T11 and resolve the related compile errors. Let me check `songNow` usages and the CalibrationScreen fully.
+Now I'll make the fixes. First, `clock.ts` — add the `getManualOffsetMs` export used by the screens (keeping `offsetSeconds` for metronome):
+[0m
+[0m← [0mEdit src/audio/clock.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/clock.ts
+@@ -42,7 +42,11 @@
+ export function getManualOffset(): number {
+   return manualOffsetMs;
+ }
+ 
++export function getManualOffsetMs(): number {
++  return manualOffsetMs;
++}
++
+ export function offsetSeconds(): number {
+   return manualOffsetMs / 1000;
+ }
+
+[0m
+`metronome.ts` — fix the broken import, remove unused field, and export `LOOKAHEAD_MS`:
+[0m← [0mEdit src/audio/metronome.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+@@ -1,7 +1,7 @@
+-import { getManualOffsetSec } from './clock';
++import { offsetSeconds } from './clock';
+ 
+-const LOOKAHEAD_MS = 200;
++export const LOOKAHEAD_MS = 200;
+ const SCHEDULE_INTERVAL_MS = 25;
+ const CLICK_DURATION = 0.04;
+ const STRONG_FREQ = 880;
+ const WEAK_FREQ = 440;
+
+[0m
+[0m← [0mEdit src/audio/metronome.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+@@ -10,9 +10,8 @@
+ private timerId: number | null = null;
+ private nextBeatTime = 0;
+ private nextBeatNumber = 0;
+ private beatMs: number;
+-private startAudioTime: number;
+ private audioCtx: AudioContext;
+ private getBeatMs: (beat: number) => number;
+ 
+ constructor(
+@@ -21,9 +20,8 @@
+   initialBeatMs: number,
+   getBeatMs: (beat: number) => number,
+ ) {
+   this.audioCtx = audioCtx;
+-  this.startAudioTime = startAudioTime;
+   this.beatMs = initialBeatMs;
+   this.getBeatMs = getBeatMs;
+   this.nextBeatTime = startAudioTime;
+   this.nextBeatNumber = 0;
+
+[0m
+[0m← [0mEdit src/audio/metronome.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/audio/metronome.ts
+@@ -57,9 +57,9 @@
+   latency: number,
+ ): void {
+   const isStrong = beat % 4 === 0;
+   const freq = isStrong ? STRONG_FREQ : WEAK_FREQ;
+-  const when = nextBeatTime + getManualOffsetSec() + Math.max(0, latency);
++  const when = nextBeatTime + offsetSeconds() + Math.max(0, latency);
+ 
+   const osc = audioCtx.createOscillator();
+   const gain = audioCtx.createGain();
+   osc.type = 'square';
+
+[0m
+`GameScreen.tsx` — `songNow()` takes no args per the T12 spec (it uses the clock stored by `resetClock`):
+[0m$ [0mgrep -n "songNow(audioMgr.ctx)" src/screens/GameScreen.tsx
+132:      const songTimeMs = songNow(audioMgr.ctx)
+243:          songTimeMs = songNow(audioMgr.ctx)
+[0m
+[0m$ [0msed -i 's/songNow(audioMgr.ctx)/songNow()/g' src/screens/GameScreen.tsx && grep -n "songNow(" src/screens/GameScreen.tsx
+132:      const songTimeMs = songNow()
+243:          songTimeMs = songNow()
+[0m
+[0m← [0mEdit src/game/ringSpawner.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ringSpawner.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ringSpawner.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ringSpawner.ts
+@@ -24,13 +24,24 @@
+ }
+ 
+ update(
+   songTimeMs: number,
++  rings: RingDef[],
+   bpmTimeline: BpmTimeline,
+   waveEngine: WaveEngine,
+ ): RingState[] {
+   const now = Number.isFinite(songTimeMs) ? songTimeMs : 0;
+ 
++  if (rings !== this.lastRingsRef) {
++    this.ringDefs = (rings ?? [])
++      .filter((r): r is RingDef => !!r && Number.isFinite(r.beat))
++      .map((r) => ({ beat: sanitizeBeat(r.beat) }))
++      .sort((a, b) => a.beat - b.beat);
++    this.lastRingsRef = rings;
++    this.spawned.length = 0;
++    this.nextIndex = 0;
++  }
++
+   while (this.nextIndex < this.ringDefs.length) {
+     const def = this.ringDefs[this.nextIndex];
+     const hitTime = bpmTimeline.beatToMs(def.beat);
+     const beatMs = bpmTimeline.beatMsAt(def.beat);
+
+[0m
+`ringSpawner.ts` — align `update` with the T22 spec (accept `rings` as a parameter):
+[0m← [0mEdit src/game/ringSpawner.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ringSpawner.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ringSpawner.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/game/ringSpawner.ts
+@@ -11,11 +11,12 @@
+   return value;
+ }
+ 
+ export class RingSpawner {
+-  private readonly ringDefs: RingDef[];
++  private ringDefs: RingDef[] = [];
+   private readonly spawned: RingState[] = [];
+   private nextIndex = 0;
++  private lastRingsRef: RingDef[] | null = null;
+ 
+   constructor(rings: RingDef[] = []) {
+     this.ringDefs = (rings ?? [])
+       .filter((r): r is RingDef => !!r && Number.isFinite(r.beat))
+
+[0m
+[0m← [0mEdit src/game/renderer.ts
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/game/renderer.ts
+@@ -63,9 +63,9 @@
+ }
+ 
+ export class Renderer {
+   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
+-    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline } = params;
++    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline } = params;
+ 
+     this.drawBackground(ctx);
+     this.drawJudgeLine(ctx);
+     this.drawWave(ctx, waveEngine, songTimeMs);
+
+[0m
+`renderer.ts` — prefix the unused `bpmTimeline` param:
+[0m$ [0mnpx tsc --noEmit -p tsconfig.app.json 2>&1
+src/screens/GameScreen.tsx(130,11): error TS6133: 'audioMgr' is declared but its value is never read.
+src/screens/GameScreen.tsx(239,13): error TS6133: 'audioMgr' is declared but its value is never read.
+[0m
+[0m→ [0mRead src/screens/GameScreen.tsx[90m [offset=129, limit=8][0m
+[0m
+[0m← [0mEdit src/screens/GameScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+@@ -126,9 +126,8 @@
+   startMetronome(ctx)
+ }, [playMusic, startMetronome])
+ 
+ const handleHit = useCallback(() => {
+-  const audioMgr = AudioManager.getInstance()
+   try {
+     const songTimeMs = songNow()
+     const timeline = timelineRef.current
+     if (!timeline) return
+
+[0m
+[0m→ [0mRead src/screens/GameScreen.tsx[90m [offset=237, limit=12][0m
+[0m
+[0m← [0mEdit src/screens/GameScreen.tsx
+Index: /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+===================================================================
+--- /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
++++ /home/p-yoko/Program/TypeScript/rhythm_game/src/screens/GameScreen.tsx
+@@ -234,9 +234,8 @@
+   raf = requestAnimationFrame(tick)
+   return
+ }
+ 
+-const audioMgr = AudioManager.getInstance()
+ let songTimeMs = 0
+ if (startedRef.current) {
+   try {
+     songTimeMs = songNow()
+
+[0m
+[0m$ [0mnpx tsc --noEmit -p tsconfig.app.json 2>&1
+(no output)
+[0m
+[0m$ [0mgrep -A3 '"scripts"' package.json
+"scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+[0m
+Zero errors. Let me verify the project's build script uses the correct config and runs clean:
+[0m$ [0mnpx tsc -b 2>&1 | head; echo "exit: $?"
+exit: 0
+[0m
+T11 implemented: `src/audio/metronome.ts` exports `schedule(audioCtx, nextBeatTime, beat, latency)` with a 200ms lookahead scheduler, strong beat (880Hz) at `beat%4===0` and weak beat (440Hz), short click. Fixed the broken `getManualOffsetSec` import (now `offsetSeconds`), removed unused field, exported `LOOKAHEAD_MS`, and resolved related clock/ringSpawner/renderer/GameScreen signature mismatches so the project compiles clean (`tsc -b` exit 0).
 
 DONE

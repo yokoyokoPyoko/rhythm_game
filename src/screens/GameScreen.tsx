@@ -127,9 +127,8 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
   }, [playMusic, startMetronome])
 
   const handleHit = useCallback(() => {
-    const audioMgr = AudioManager.getInstance()
     try {
-      const songTimeMs = songNow(audioMgr.ctx)
+      const songTimeMs = songNow()
       const timeline = timelineRef.current
       if (!timeline) return
       const beatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
@@ -236,11 +235,10 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         return
       }
 
-      const audioMgr = AudioManager.getInstance()
       let songTimeMs = 0
       if (startedRef.current) {
         try {
-          songTimeMs = songNow(audioMgr.ctx)
+          songTimeMs = songNow()
         } catch {
           songTimeMs = 0
         }

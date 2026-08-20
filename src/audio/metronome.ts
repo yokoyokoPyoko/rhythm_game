@@ -1,6 +1,6 @@
-import { getManualOffsetSec } from './clock';
+import { offsetSeconds } from './clock';
 
-const LOOKAHEAD_MS = 200;
+export const LOOKAHEAD_MS = 200;
 const SCHEDULE_INTERVAL_MS = 25;
 const CLICK_DURATION = 0.04;
 const STRONG_FREQ = 880;
@@ -11,7 +11,6 @@ export class Metronome {
   private nextBeatTime = 0;
   private nextBeatNumber = 0;
   private beatMs: number;
-  private startAudioTime: number;
   private audioCtx: AudioContext;
   private getBeatMs: (beat: number) => number;
 
@@ -22,7 +21,6 @@ export class Metronome {
     getBeatMs: (beat: number) => number,
   ) {
     this.audioCtx = audioCtx;
-    this.startAudioTime = startAudioTime;
     this.beatMs = initialBeatMs;
     this.getBeatMs = getBeatMs;
     this.nextBeatTime = startAudioTime;
@@ -60,7 +58,7 @@ export function schedule(
 ): void {
   const isStrong = beat % 4 === 0;
   const freq = isStrong ? STRONG_FREQ : WEAK_FREQ;
-  const when = nextBeatTime + getManualOffsetSec() + Math.max(0, latency);
+  const when = nextBeatTime + offsetSeconds() + Math.max(0, latency);
 
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();

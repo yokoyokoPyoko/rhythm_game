@@ -64,7 +64,7 @@ function resultColor(result: HitResult): string {
 
 export class Renderer {
   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
-    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline } = params;
+    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline } = params;
 
     this.drawBackground(ctx);
     this.drawJudgeLine(ctx);
