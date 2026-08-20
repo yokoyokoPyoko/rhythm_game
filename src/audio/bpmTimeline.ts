@@ -1,113 +1,103 @@
 import type { BpmChange } from '../types';
 
-const FALLBACK_BPM = 120;
-
 interface BpmSegment {
   startBeat: number;
   endBeat: number;
   bpm: number;
-  startMs: number;
+  beatMs: number;
 }
 
-function beatMs(bpm: number): number {
-  return 60000 / bpm;
-}
+const MIN_BPM = 1;
+const MAX_BPM = 1000;
 
 function sanitizeBpm(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return FALLBACK_BPM;
-  }
-  return Math.min(Math.max(value, 20), 400);
-}
-
-function sanitizeBeat(value: number): number {
-  if (!Number.isFinite(value) || value < 0) {
-    return 0;
-  }
-  return value;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return MIN_BPM;
+  return Math.min(MAX_BPM, n);
 }
 
 export class BpmTimeline {
-  private segments: BpmSegment[];
+  private readonly baseBpm: number;
+  private readonly segments: BpmSegment[];
 
-  constructor(baseBpm: number, bpmChanges: BpmChange[]) {
-    this.segments = this.buildSegments(baseBpm, bpmChanges ?? []);
-  }
+  constructor(baseBpm: number, bpmChanges: BpmChange[] = []) {
+    this.baseBpm = sanitizeBpm(baseBpm);
 
-  private buildSegments(baseBpm: number, bpmChanges: BpmChange[]): BpmSegment[] {
-    const sorted = [...bpmChanges]
-      .map((c) => ({
-        beat: sanitizeBeat(c?.beat),
-        bpm: sanitizeBpm(c?.bpm),
-      }))
-      .filter((c) => c.beat > 0)
+    const changes = (bpmChanges ?? [])
+      .filter((c): c is BpmChange => !!c && Number.isFinite(c.beat) && Number.isFinite(c.bpm))
+      .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm) }))
       .sort((a, b) => a.beat - b.beat);
-    const segments: BpmSegment[] = [];
-    let cursorBeat = 0;
-    let cursorMs = 0;
-    let bpm = sanitizeBpm(baseBpm);
-    for (const change of sorted) {
-      if (change.beat <= cursorBeat) {
-        continue;
-      }
-      segments.push({
-        startBeat: cursorBeat,
+
+    const segs: BpmSegment[] = [];
+    let currentBpm = this.baseBpm;
+    let currentBeat = 0;
+
+    for (const change of changes) {
+      if (change.beat < currentBeat) continue;
+      segs.push({
+        startBeat: currentBeat,
         endBeat: change.beat,
-        bpm,
-        startMs: cursorMs,
+        bpm: currentBpm,
+        beatMs: 60000 / currentBpm,
       });
-      cursorMs += (change.beat - cursorBeat) * beatMs(bpm);
-      cursorBeat = change.beat;
-      bpm = change.bpm;
+      currentBpm = change.bpm;
+      currentBeat = change.beat;
     }
-    segments.push({
-      startBeat: cursorBeat,
-      endBeat: Number.POSITIVE_INFINITY,
-      bpm,
-      startMs: cursorMs,
+
+    segs.push({
+      startBeat: currentBeat,
+      endBeat: Infinity,
+      bpm: currentBpm,
+      beatMs: 60000 / currentBpm,
     });
-    return segments;
+
+    this.segments = segs;
   }
 
-  private segmentAtBeat(beat: number): BpmSegment {
-    let current = this.segments[0];
+  private segmentAt(beat: number): BpmSegment {
+    const b = Number.isFinite(beat) ? beat : 0;
     for (const seg of this.segments) {
-      if (seg.startBeat <= beat) {
-        current = seg;
-      } else {
-        break;
-      }
+      if (b >= seg.startBeat && b < seg.endBeat) return seg;
     }
-    return current;
-  }
-
-  private segmentAtMs(ms: number): BpmSegment {
-    let current = this.segments[0];
-    for (const seg of this.segments) {
-      if (seg.startMs <= ms) {
-        current = seg;
-      } else {
-        break;
-      }
-    }
-    return current;
-  }
-
-  beatToMs(beat: number): number {
-    const seg = this.segmentAtBeat(beat);
-    return seg.startMs + (beat - seg.startBeat) * beatMs(seg.bpm);
-  }
-
-  msToBeat(ms: number): number {
-    const seg = this.segmentAtMs(ms);
-    return seg.startBeat + (ms - seg.startMs) / beatMs(seg.bpm);
+    return this.segments[this.segments.length - 1];
   }
 
   bpmAt(beat: number): number {
-    return this.segmentAtBeat(beat).bpm;
+    return this.segmentAt(beat).bpm;
   }
 
   beatMsAt(beat: number): number {
-    return beatMs(this.segmentAtBeat(beat).bpm);
+    return this.segmentAt(beat).beatMs;
+  }
+
+  beatToMs(beat: number): number {
+    const b = Number.isFinite(beat) ? beat : 0;
+    let ms = 0;
+    for (const seg of this.segments) {
+      if (b <= seg.startBeat) break;
+      const end = Math.min(b, seg.endBeat);
+      ms += (end - seg.startBeat) * seg.beatMs;
+    }
+    return ms;
+  }
+
+  msToBeat(ms: number): number {
+    const m = Number.isFinite(ms) && ms > 0 ? ms : 0;
+    let remaining = m;
+    let beat = 0;
+    for (const seg of this.segments) {
+      if (seg.endBeat === Infinity) {
+        beat += remaining / seg.beatMs;
+        break;
+      }
+      const segMs = (seg.endBeat - seg.startBeat) * seg.beatMs;
+      if (remaining <= segMs) {
+        beat += remaining / seg.beatMs;
+        break;
+      }
+      remaining -= segMs;
+      beat += seg.endBeat - seg.startBeat;
+    }
+    return beat;
   }
 }
