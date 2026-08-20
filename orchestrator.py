@@ -494,8 +494,8 @@ def check_gate_a() -> GateResult:
     tsconfig = ROOT / "tsconfig.json"
     if not tsconfig.exists():
         return GateResult("Gate A (tsc)", True, "No tsconfig.json -> Skip")
-    log.info("Checking TypeScript static types (`tsc --noEmit`)...")
-    code, out, _ = run_cmd_pgid_stream(["npx", "tsc", "--noEmit"], timeout=30, prefix="tsc: ")
+    log.info("Checking TypeScript static types (`tsc -b --noEmit`)...")
+    code, out, _ = run_cmd_pgid_stream(["npx", "tsc", "-b", "--noEmit"], timeout=45, prefix="tsc: ")
     if code != 0:
         return GateResult("Gate A (tsc)", False, out[-2000:])
     return GateResult("Gate A (tsc)", True, "0 errors found")
