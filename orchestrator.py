@@ -229,10 +229,18 @@ def check_model_health(model_id: str, label: str) -> bool:
     cmd = ["opencode", "run", "--auto", "--format", "default", "-m", model_id, "ping"]
     code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=40, prefix="")
 
-    if "insufficient balance" in out or "suspended" in out:
-        print(f"{RED}[FAILED: Insufficient Balance / Suspended]{RESET}")
+    if "insufficient balance" in out or "suspended" in out or "payment required" in out.lower() or "depleted your monthly included credits" in out.lower():
+        print(f"{RED}[FAILED: Credits Depleted / Payment Required]{RESET}")
         print(f"\n{RED}{'!' * 70}{RESET}")
-        print(f"  {RED}{BOLD}ERROR:{RESET} {label} ({model_id}) account is suspended due to insufficient balance.")
+        print(f"  {RED}{BOLD}ERROR:{RESET} {label} ({model_id}) credits depleted or subscription expired.")
+        print(f"  {GRAY}Details: {out.strip()}{RESET}")
+        print(f"{RED}{'!' * 70}{RESET}\n")
+        return False
+
+    if "tokens per minute (TPM)" in out or "Request too large" in out:
+        print(f"{RED}[FAILED: TPM Rate Limit Exceeded]{RESET}")
+        print(f"\n{RED}{'!' * 70}{RESET}")
+        print(f"  {RED}{BOLD}ERROR:{RESET} {label} ({model_id}) hit provider TPM limit.")
         print(f"  {GRAY}Details: {out.strip()}{RESET}")
         print(f"{RED}{'!' * 70}{RESET}\n")
         return False
