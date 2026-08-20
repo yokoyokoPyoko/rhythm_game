@@ -19,9 +19,10 @@ export class RingSpawner {
   ): RingState[] {
     while (this.nextIndex < rings.length) {
       const ring = rings[this.nextIndex];
-      const beat = ring.beat;
+      const beat = Number.isFinite(ring.beat) && ring.beat >= 0 ? ring.beat : 0;
       const hitTime = bpmTimeline.beatToMs(beat);
-      const leadMs = TW_LEAD_BEATS * bpmTimeline.beatMsAt(beat);
+      const beatMs = Number.isFinite(bpmTimeline.beatMsAt(beat)) ? bpmTimeline.beatMsAt(beat) : 500;
+      const leadMs = TW_LEAD_BEATS * beatMs;
       if (songTimeMs < hitTime - leadMs) {
         break;
       }
