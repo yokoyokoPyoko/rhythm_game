@@ -70,7 +70,7 @@ export default function WavePreview({
     geoRef.current = { lastBeat }
 
     // Horizontal grid: top / center / bottom guide lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
     ctx.lineWidth = 1
     for (const gy of [mapY(GAME_CENTER_Y - ampVal), centerY, mapY(GAME_CENTER_Y + ampVal)]) {
       ctx.beginPath()
@@ -79,21 +79,27 @@ export default function WavePreview({
       ctx.stroke()
     }
 
-    // Vertical beat grid
+    // Vertical beat grid + labels every 4 beats
+    ctx.font = '11px Inter, system-ui, sans-serif'
+    ctx.textBaseline = 'top'
     for (let b = 0; b <= lastBeat; b += 1) {
       const gx = (b / lastBeat) * cssW
       const strong = Math.round(b) % 4 === 0
-      ctx.strokeStyle = strong ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.04)'
-      ctx.lineWidth = 1
+      ctx.strokeStyle = strong ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)'
+      ctx.lineWidth = strong ? 1.5 : 1
       ctx.beginPath()
       ctx.moveTo(gx, 0)
       ctx.lineTo(gx, cssH)
       ctx.stroke()
+      if (strong) {
+        ctx.fillStyle = 'rgba(255,255,255,0.35)'
+        ctx.fillText(String(b), gx + 4, 4)
+      }
     }
 
     // Start / judgment line (left edge)
-    ctx.strokeStyle = 'rgba(99,102,241,0.5)'
-    ctx.lineWidth = 2
+    ctx.strokeStyle = 'rgba(99,102,241,0.7)'
+    ctx.lineWidth = 3
     ctx.beginPath()
     ctx.moveTo(2, 0)
     ctx.lineTo(2, cssH)
@@ -132,17 +138,36 @@ export default function WavePreview({
       const rx = (r.beat / lastBeat) * cssW
       const isSelected = i === selectedRing
       const ry = mapY(engine.waveYAt(r.beat))
-      ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.55)'
+      const isHold = r.type === 'hold'
+      ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.6)'
       ctx.lineWidth = isSelected ? 2 : 1
       ctx.beginPath()
       ctx.moveTo(rx, 0)
       ctx.lineTo(rx, cssH)
       ctx.stroke()
 
+      if (isHold && Number.isFinite(r.duration) && r.duration! > 0) {
+        const tailBeat = r.beat + r.duration!
+        const tx = (tailBeat / lastBeat) * cssW
+        ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.45)'
+        ctx.lineWidth = 6
+        ctx.beginPath()
+        ctx.moveTo(rx, ry)
+        ctx.lineTo(tx, ry)
+        ctx.stroke()
+      }
+
       ctx.fillStyle = isSelected ? SELECT_COLOR : STAY_COLOR
       ctx.beginPath()
-      ctx.arc(rx, ry, isSelected ? 7 : 5, 0, Math.PI * 2)
+      ctx.arc(rx, ry, isSelected ? 10 : 7, 0, Math.PI * 2)
       ctx.fill()
+      if (isSelected) {
+        ctx.strokeStyle = ACCENT_COLOR
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(rx, ry, isSelected ? 14 : 10, 0, Math.PI * 2)
+        ctx.stroke()
+      }
     })
   }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing])
 

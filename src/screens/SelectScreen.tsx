@@ -28,6 +28,8 @@ export default function SelectScreen() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'l' || e.key === 'L') {
         navigate('/calibration')
+      } else if (e.key === 'e' || e.key === 'E') {
+        navigate('/editor')
       }
     }
     window.addEventListener('keydown', onKey)
@@ -80,7 +82,12 @@ export default function SelectScreen() {
         </div>
       )}
 
-      <div className="select-hint">L: キャリブレーション</div>
+      <div className="select-nav">
+        <button type="button" className="select-nav-button" onClick={() => navigate('/editor')}>
+          エディタ
+        </button>
+        <span className="select-hint">L: キャリブレーション / E: エディタ</span>
+      </div>
     </div>
   )
 }
