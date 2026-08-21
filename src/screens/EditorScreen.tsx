@@ -36,6 +36,7 @@ export default function EditorScreen() {
   const [segments, setSegments] = useState<Segment[]>([])
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
   const [playtest, setPlaytest] = useState<Chart | null>(null)
+  const [selectedRing, setSelectedRing] = useState<number | null>(null)
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
@@ -198,7 +199,32 @@ export default function EditorScreen() {
 
   const removeRing = (index: number) => {
     setRings((prev) => prev.filter((_, i) => i !== index))
+    setSelectedRing((cur) => (cur === index ? null : cur))
   }
+
+  const addRing = useCallback(
+    (beat: number): number | undefined => {
+      const snapped = Math.round(beat / snap) * snap
+      let index = -1
+      setRings((prev) => {
+        if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) {
+          index = prev.findIndex((r) => Math.abs(r.beat - snapped) < 0.001)
+          return prev
+        }
+        index = prev.length
+        return [...prev, { beat: snapped, type: 'single' }]
+      })
+      return index >= 0 ? index : undefined
+    },
+    [snap]
+  )
+
+  const moveRing = useCallback((index: number, beat: number) => {
+    const snapped = Math.round(beat / snap) * snap
+    setRings((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, beat: snapped } : r))
+    )
+  }, [snap])
 
   const seekTo = (ms: number) => {
     const clamped = Math.max(0, Math.min(ms, durationMs || ms))
@@ -326,11 +352,19 @@ export default function EditorScreen() {
             bpmChanges={bpmChanges}
             rings={rings}
             amplitude={amplitude}
+            snap={snap}
+            selectedRing={selectedRing}
+            onAddRing={addRing}
+            onMoveRing={moveRing}
+            onSelectRing={setSelectedRing}
+            onDeleteRing={removeRing}
           />
           <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
 
-          <section className="editor-pane">
-            <h2>リング録音</h2>
+          <details className="editor-accordion" data-testid="ring-list-details">
+            <summary className="editor-accordion-summary">
+              <span>リング録音 ({rings.length})</span>
+            </summary>
             <div className="editor-field">
               <label className="editor-label" htmlFor="snap">
                 スナップ
@@ -348,14 +382,28 @@ export default function EditorScreen() {
                 ))}
               </select>
             </div>
-            <p className="editor-hint">再生中に Space で現在のbeatをスタンプ</p>
+            <p className="editor-hint">再生中に Space で現在のbeatをスタンプ。プレビュー上で直接クリック・ドラッグ・ダブルクリックも可能</p>
             {rings.length === 0 ? (
               <p className="editor-empty">リングなし</p>
             ) : (
               <ul className="ring-list">
                 {rings.map((ring, i) => (
-                  <li key={`${i}-${ring.beat}`} className="ring-list-item">
-                    <span className="ring-list-beat">beat: {ring.beat.toFixed(2)}</span>
+                  <li
+                    key={`${i}-${ring.beat}`}
+                    className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}`}
+                    data-testid={`ring-list-item-${i}`}
+                  >
+                    <span
+                      className="ring-list-beat"
+                      onClick={() => setSelectedRing(i)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') setSelectedRing(i)
+                      }}
+                    >
+                      beat: {ring.beat.toFixed(2)}
+                    </span>
                     <select
                       className="editor-input ring-type-select"
                       value={ring.type ?? 'single'}
@@ -391,6 +439,7 @@ export default function EditorScreen() {
                       className="ring-list-delete"
                       onClick={() => removeRing(i)}
                       aria-label={`beat ${ring.beat.toFixed(2)} を削除`}
+                      data-testid={`ring-delete-${i}`}
                     >
                       削除
                     </button>
@@ -398,7 +447,7 @@ export default function EditorScreen() {
                 ))}
               </ul>
             )}
-          </section>
+          </details>
         </main>
       </div>
 

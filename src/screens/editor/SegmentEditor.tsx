@@ -33,13 +33,22 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
   }
 
   return (
-    <section className="editor-pane">
-      <div className="segment-editor-head">
-        <h2>セグメント</h2>
-        <button type="button" onClick={addSegment}>
+    <details className="editor-accordion" data-testid="segment-list-details">
+      <summary className="editor-accordion-summary">
+        <span>セグメント ({segments.length})</span>
+        <button
+          type="button"
+          className="editor-accordion-add"
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            addSegment()
+          }}
+          aria-label="セグメントを追加"
+        >
           追加
         </button>
-      </div>
+      </summary>
       <p className="editor-hint">再生中に ↑/↓/→ (W/S/D) でリアルタイムにセグメントをスタンプ録音</p>
       {segments.length === 0 ? (
         <p className="editor-empty">セグメントなし</p>
@@ -53,6 +62,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
                 value={seg.direction}
                 onChange={(e) => updateDirection(i, e.target.value as 'up' | 'down' | 'stay')}
                 aria-label={`セグメント${i + 1}の方向`}
+                data-testid={`segment-direction-${i}`}
               >
                 <option value="up">↑</option>
                 <option value="down">↓</option>
@@ -66,6 +76,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
                 value={seg.beats}
                 onChange={(e) => updateBeats(i, Number(e.target.value))}
                 aria-label={`セグメント${i + 1}の拍数`}
+                data-testid={`segment-beats-${i}`}
               />
               <div className="segment-actions">
                 <button
@@ -91,6 +102,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
                   className="segment-delete"
                   onClick={() => removeSegment(i)}
                   aria-label={`セグメント${i + 1}を削除`}
+                  data-testid={`segment-delete-${i}`}
                 >
                   削除
                 </button>
@@ -99,6 +111,6 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
           ))}
         </ul>
       )}
-    </section>
+    </details>
   )
 }
