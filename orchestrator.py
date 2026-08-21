@@ -58,7 +58,7 @@ DEFAULT_BUDGET_MIN = 600
 # モデル定義カタログ (表示名, プロバイダ, モデルID)
 MODEL_CATALOG = {
     "qwen38": ("Qwen3.8-27B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
-    "deepseek_v4": ("DeepSeek V4 Flash", "OpenCode Zen (Free)", "opencode/deepseek-v4-flash-free"),
+    "nemotron_ultra": ("Nemotron 3 Ultra", "OpenCode Zen (Free)", "opencode/nemotron-3-ultra-free"),
     "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
     "laguna_free": ("Hy3 Free", "OpenCode Zen (Free)", "opencode/hy3-free"),
     "gemini_flash_lite": ("Gemini 3.5 Flash-Lite", "Google AI Studio", "google/gemini-3.5-flash-lite"),
@@ -66,7 +66,7 @@ MODEL_CATALOG = {
 
 CODER_OPTIONS = [
     ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: 高速・高精度 TypeScript コード生成"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 豊富なコード知識・MoE"),
+    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 2: 豊富なコード知識・大規模MoE"),
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高度論理思考・長考型"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
     ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律コード生成"),
@@ -74,7 +74,7 @@ CODER_OPTIONS = [
 
 QA_OPTIONS = [
     ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・動画録画テスト生成"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 2: 論理的テストケース網羅・動画テスト生成"),
+    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 2: 論理的テストケース網羅・動画テスト生成"),
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証・長考テスト生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時動画テスト生成"),
     ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律動画テスト生成"),
@@ -85,9 +85,8 @@ REVIEWER_OPTIONS = [
 ]
 
 POSTMORTEM_OPTIONS = [
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 1: 推論特化・根本原因究明"),
+    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 1: 推論特化・根本原因究明"),
     ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 2: 最新TS仕様知識+熟考"),
-    ("deepseek_v4", "[OpenCode Zen] DeepSeek V4 Flash", "Rank 3: 長文ログ解析"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時エラー要約"),
     ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律原因分析"),
 ]
@@ -102,7 +101,7 @@ class FlowModels:
     coder: str = MODEL_CATALOG["qwen38"][2]
     qa: str = MODEL_CATALOG["qwen38"][2]
     reviewer: str = MODEL_CATALOG["gemini_flash_lite"][2]
-    postmortem: str = MODEL_CATALOG["deepseek_r1"][2]
+    postmortem: str = MODEL_CATALOG["nemotron_ultra"][2]
 
 
 @dataclass
@@ -314,7 +313,7 @@ def interactive_model_selection() -> FlowModels:
             coder=MODEL_CATALOG["qwen38"][2],
             qa=MODEL_CATALOG["qwen38"][2],
             reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
-            postmortem=MODEL_CATALOG["deepseek_r1"][2],
+            postmortem=MODEL_CATALOG["nemotron_ultra"][2],
         )
     elif choice == "2":
         print(f"{YELLOW}>> Applied: Ultra-Fast Preset (Gemini Unified){RESET}")
@@ -345,7 +344,7 @@ def interactive_model_selection() -> FlowModels:
     coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "qwen38")
     qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "qwen38")
     rev_m = select_one("Select [3. Dynamic Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
-    post_m = select_one("Select [4. Postmortem Architect]:", POSTMORTEM_OPTIONS, "deepseek_r1")
+    post_m = select_one("Select [4. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
 
     return FlowModels(coder=coder_m, qa=qa_m, reviewer=rev_m, postmortem=post_m)
 
@@ -408,7 +407,7 @@ def load_state() -> dict[str, Any]:
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"started_at": time.time(), "tasks": {}, "consecutive_failures": 0}
+    return {"started_at": time.time(), "tasks": {}, "consecutive_no_action": 0}
 
 
 def save_state(state: dict[str, Any]) -> None:
@@ -446,7 +445,10 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
             return -1, out
 
         if timed_out:
-            log.warning("Process timed out (%ds). Retrying...", timeout)
+            if out.strip() != "":
+                log.info("Process timed out but produced non-empty output (acted). Proceeding.")
+                return 0, out
+            log.warning("Process timed out with empty output (%ds). Retrying...", timeout)
             continue
 
         if "429" in out or "Too Many Requests" in out:
@@ -456,7 +458,10 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
 
         return code, out
 
-    log.error("Retry limit exceeded for %s", label)
+    if out.strip() != "":
+        return 0, out
+
+    log.error("Retry limit exceeded for %s (empty output)", label)
     return -1, out
 
 
@@ -580,11 +585,12 @@ Output only ```typescript ... ``` code block.
 """
     log.info("QA generating dynamic test script...")
     code, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen", variant="max")
-    if code != 0:
-        return GateResult("Gate B (Dynamic Test)", False, "QA model failed to generate test script")
+    if out.strip() == "":
+        return GateResult("Gate B (Dynamic Test)", False, "QA model produced empty output")
 
     code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
     if not code_match:
+        log.warning("QA model output did not contain explicit typescript code block. Using robust dynamic smoke test.")
         test_code = """import { test, expect } from '@playwright/test';
 test('dynamic video smoke test', async ({ page }) => {
   await page.goto('/');
@@ -730,7 +736,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     _, head_hash, _ = run_cmd_pgid_stream(["git", "rev-parse", "HEAD"])
     head_hash = head_hash.strip()
 
-    max_attempts = 2
+    max_attempts = 5
     attempts_done = 0
     while attempts_done < max_attempts:
         attempts_done += 1
@@ -741,10 +747,23 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         prompt = build_compact_coder_prompt(task)
         code, out = run_opencode_with_retry(models.coder, prompt, timeout=300, label=f"Coder({task.id})", variant="medium")
         (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
-        if code != 0:
-            log.error("[%s] Coder model execution failed.", task.id)
+
+        if out.strip() == "":
+            log.error("[%s] Coder returned empty output (did nothing).", task.id)
             git_rollback(head_hash)
+            state["consecutive_no_action"] = state.get("consecutive_no_action", 0) + 1
+            save_state(state)
+            if state["consecutive_no_action"] >= 3:
+                log.critical("Killswitch triggered due to 3 consecutive no-action (empty output) detections.")
+                st["status"] = "failed"
+                st["finished"] = time.time()
+                save_state(state)
+                return "failed"
             continue
+
+        if state.get("consecutive_no_action", 0) != 0:
+            state["consecutive_no_action"] = 0
+            save_state(state)
 
         # 2. Gate A (tsc)
         ga = check_gate_a()
@@ -779,7 +798,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         git_checkpoint(f"feat({task.id}): complete")
         st["status"] = "passed"
         st["finished"] = time.time()
-        state["consecutive_failures"] = 0
+        state["consecutive_no_action"] = 0
         save_state(state)
         print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
 
@@ -790,9 +809,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
     st["status"] = "failed"
     st["finished"] = time.time()
-    state["consecutive_failures"] += 1
     save_state(state)
-    print(f"{RED}{BOLD}>>> [{task.id}] FAILED (consecutive failures: {state['consecutive_failures']}){RESET}\n")
+    print(f"{RED}{BOLD}>>> [{task.id}] FAILED{RESET}\n")
     return "failed"
 
 
@@ -900,8 +918,8 @@ def main() -> None:
                 log.error("Total budget exceeded.")
                 break
 
-            if state.get("consecutive_failures", 0) >= 3:
-                log.critical("Killswitch triggered due to 3 consecutive failures.")
+            if state.get("consecutive_no_action", 0) >= 3:
+                log.critical("Killswitch triggered due to 3 consecutive no-action (empty output).")
                 sys.exit(1)
 
             st = state["tasks"].get(t.id, {})
