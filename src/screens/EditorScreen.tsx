@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
-import { loadAudio, parseChartText } from '../audio/loader'
+import { loadAudio } from '../audio/loader'
+import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
@@ -259,6 +260,10 @@ export default function EditorScreen() {
     }
   }
 
+  const seekToBeat = (beat: number) => {
+    seekTo(timeline.beatToMs(beat))
+  }
+
   const buildChart = useCallback((): Chart => {
     return {
       title: title.trim() || 'Untitled',
@@ -464,6 +469,15 @@ export default function EditorScreen() {
         </aside>
 
         <main className="editor-main">
+          <div className="editor-legend" data-testid="editor-legend">
+            <span><b>使い方</b></span>
+            <span>① 音楽URLを入力し「読込・再生」</span>
+            <span>② 基本BPM / 振幅などを設定</span>
+            <span>③ 波形上クリックでリング追加・ドラッグで移動・ダブルクリックで削除</span>
+            <span>④ 上端ルーラー(↑)クリックでシーク</span>
+            <span>⑤ 再生中 Space=リング / ↑↓→(W S D)=セグメント をスタンプ</span>
+            <span>⑥ 「エクスポート」でTOML保存、「プレイテスト」で確認</span>
+          </div>
           <WavePreview
             segments={segments}
             bpm={safeBpm}
@@ -477,6 +491,7 @@ export default function EditorScreen() {
             onMoveRing={moveRing}
             onSelectRing={setSelectedRing}
             onDeleteRing={removeRing}
+            onSeek={seekToBeat}
           />
           <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
 

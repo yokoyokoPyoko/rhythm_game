@@ -419,7 +419,9 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
       {status === 'error' && (
         <div className="game-error">
           <p>{error}</p>
-          <button onClick={() => navigate('/')}>曲選択に戻る</button>
+          <button onClick={() => { if (onExitRef.current) onExitRef.current(); else navigate('/') }}>
+            {onExitRef.current ? 'エディタに戻る' : '曲選択に戻る'}
+          </button>
         </div>
       )}
       {status === 'ready' && (
@@ -430,6 +432,15 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
             height={CANVAS_HEIGHT}
             className="game-canvas"
           />
+          {onExitRef.current && (
+            <button
+              type="button"
+              className="game-exit"
+              onClick={() => onExitRef.current?.()}
+            >
+              終了
+            </button>
+          )}
           <div className="game-offset">
             offset: {offsetMs >= 0 ? '+' : ''}
             {offsetMs}ms

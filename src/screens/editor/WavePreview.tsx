@@ -23,6 +23,7 @@ export interface WavePreviewProps {
   onMoveRing?: (index: number, beat: number) => void
   onSelectRing?: (index: number | null) => void
   onDeleteRing?: (index: number) => void
+  onSeek?: (beat: number) => void
 }
 
 export default function WavePreview({
@@ -38,6 +39,7 @@ export default function WavePreview({
   onMoveRing,
   onSelectRing,
   onDeleteRing,
+  onSeek,
 }: WavePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const geoRef = useRef<{ lastBeat: number }>({ lastBeat: 4 })
@@ -248,6 +250,19 @@ export default function WavePreview({
   }
 
   const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const clickY = e.clientY - rect.top
+
+    // Click on the top ruler strip seeks playback instead of placing a ring.
+    if (onSeek && clickY < RULER_H) {
+      const x = e.clientX - rect.left
+      const beat = (x / rect.width) * geoRef.current.lastBeat
+      onSeek(Math.max(0, beat))
+      return
+    }
+
     const hit = nearestRingIndex(e.clientX)
     if (hit >= 0) {
       onSelectRing?.(hit)
@@ -255,9 +270,6 @@ export default function WavePreview({
       e.preventDefault()
       return
     }
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
     const x = e.clientX - rect.left
     const beat = (x / rect.width) * geoRef.current.lastBeat
     const snapped = Math.round(beat / safeSnap) * safeSnap
