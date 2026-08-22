@@ -18,6 +18,7 @@ export interface WavePreviewProps {
   amplitude?: number
   snap?: number
   selectedRing?: number | null
+  positionMs?: number
   onAddRing?: (beat: number) => number | undefined
   onMoveRing?: (index: number, beat: number) => void
   onSelectRing?: (index: number | null) => void
@@ -32,6 +33,7 @@ export default function WavePreview({
   amplitude = 130,
   snap = 0.25,
   selectedRing = null,
+  positionMs,
   onAddRing,
   onMoveRing,
   onSelectRing,
@@ -141,6 +143,25 @@ export default function WavePreview({
       ctx.stroke()
     }
 
+    // Playhead (current playback position)
+    if (Number.isFinite(positionMs) && positionMs! > 0) {
+      const headBeat = timeline.msToBeat(positionMs!)
+      const hx = (headBeat / lastBeat) * cssW
+      if (hx >= 0 && hx <= cssW) {
+        ctx.strokeStyle = 'rgba(74,222,128,0.85)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([4, 4])
+        ctx.beginPath()
+        ctx.moveTo(hx, RULER_H)
+        ctx.lineTo(hx, cssH)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(74,222,128,0.95)'
+        ctx.font = '10px Inter, system-ui, sans-serif'
+        ctx.fillText('PLAY', hx + 4, RULER_H + 4)
+      }
+    }
+
     // Rings (X axis = beat position)
     rings.forEach((r, i) => {
       const rx = (r.beat / lastBeat) * cssW
@@ -184,7 +205,7 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing])
+  }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing, positionMs])
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -194,7 +215,6 @@ export default function WavePreview({
       const rect = canvas.getBoundingClientRect()
       const x = e.clientX - rect.left
       const beat = (x / rect.width) * geoRef.current.lastBeat
-      console.log('[WP] move beat=', beat, 'index=', dragRef.current.index)
       onMoveRing?.(dragRef.current.index, beat)
     }
     const onUp = () => {
@@ -214,13 +234,11 @@ export default function WavePreview({
     const rect = canvas.getBoundingClientRect()
     const clickX = clientX - rect.left
     const lastBeat = geoRef.current.lastBeat
-    console.log('[WP] nearest rings.len=', rings.length, 'clickX=', clickX, 'rectW=', rect.width, 'lastBeat=', lastBeat)
     let nearest = -1
     let nearestDist = Infinity
     rings.forEach((r, i) => {
       const rx = (r.beat / lastBeat) * rect.width
       const d = Math.abs(rx - clickX)
-      console.log('[WP] ring', i, 'beat=', r.beat, 'rx=', rx, 'd=', d)
       if (d < nearestDist) {
         nearestDist = d
         nearest = i
@@ -231,7 +249,6 @@ export default function WavePreview({
 
   const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     const hit = nearestRingIndex(e.clientX)
-    console.log('[WP] mousedown hit=', hit, 'lastBeat=', geoRef.current.lastBeat)
     if (hit >= 0) {
       onSelectRing?.(hit)
       dragRef.current = { index: hit }

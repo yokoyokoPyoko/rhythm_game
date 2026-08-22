@@ -171,6 +171,18 @@ export default function EditorScreen() {
         return
       }
 
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const editable =
+        tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable === true
+      if (!editable && (e.code === 'Delete' || e.code === 'Backspace')) {
+        if (selectedRing != null) {
+          e.preventDefault()
+          removeRing(selectedRing)
+        }
+        return
+      }
+
       if (!isPlayingRef.current) return
 
       let direction: 'up' | 'down' | 'stay' | null = null
@@ -195,7 +207,7 @@ export default function EditorScreen() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [snap, timeline])
+  }, [snap, timeline, selectedRing])
 
   const removeRing = (index: number) => {
     setRings((prev) => prev.filter((_, i) => i !== index))
@@ -354,6 +366,7 @@ export default function EditorScreen() {
             amplitude={amplitude}
             snap={snap}
             selectedRing={selectedRing}
+            positionMs={positionMs}
             onAddRing={addRing}
             onMoveRing={moveRing}
             onSelectRing={setSelectedRing}
