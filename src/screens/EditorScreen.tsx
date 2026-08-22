@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
-import { loadAudio } from '../audio/loader'
+import { loadAudio, parseChartText } from '../audio/loader'
 import { chartToToml } from '../chart/serialize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
@@ -21,6 +21,8 @@ function formatSeconds(ms: number): string {
 }
 
 export default function EditorScreen() {
+  const [title, setTitle] = useState('Reply')
+  const [artist, setArtist] = useState('')
   const [url, setUrl] = useState('/rhythm_game/audio/08.Reply.flac')
   const [bpm, setBpm] = useState(120)
   const [amplitude, setAmplitude] = useState(130)
@@ -37,6 +39,10 @@ export default function EditorScreen() {
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
   const [playtest, setPlaytest] = useState<Chart | null>(null)
   const [selectedRing, setSelectedRing] = useState<number | null>(null)
+  const [exportMsg, setExportMsg] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [loadingAudio, setLoadingAudio] = useState(false)
+  const playtestActiveRef = useRef(false)
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
@@ -97,7 +103,9 @@ export default function EditorScreen() {
     const ctx = mgr.ctx
     let buf = buffer
     if (!buf) {
+      setLoadingAudio(true)
       buf = await loadAudio(url, ctx)
+      setLoadingAudio(false)
       if (!buf) {
         setError('音楽ファイルの読み込みに失敗しました')
         return
@@ -159,6 +167,14 @@ export default function EditorScreen() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (playtestActiveRef.current) return
+
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const editable =
+        tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable === true
+      if (editable) return
+
       if (e.code === 'Space') {
         e.preventDefault()
         if (!isPlayingRef.current) return
@@ -171,10 +187,6 @@ export default function EditorScreen() {
         return
       }
 
-      const target = e.target as HTMLElement | null
-      const tag = target?.tagName
-      const editable =
-        tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable === true
       if (!editable && (e.code === 'Delete' || e.code === 'Backspace')) {
         if (selectedRing != null) {
           e.preventDefault()
@@ -248,10 +260,9 @@ export default function EditorScreen() {
   }
 
   const buildChart = useCallback((): Chart => {
-    // TODO: title / artist の編集UI（現在は固定値）
     return {
-      title: 'Reply',
-      artist: '',
+      title: title.trim() || 'Untitled',
+      artist: artist.trim(),
       bpm: safeBpm,
       audio: url,
       audio_offset: audioOffset,
@@ -271,9 +282,49 @@ export default function EditorScreen() {
     link.download = 'reply.toml'
     link.click()
     URL.revokeObjectURL(link.href)
+    setExportMsg('reply.toml をエクスポートしました')
+    window.setTimeout(() => setExportMsg(null), 3000)
+  }
+
+  const importChart = useCallback((chart: Chart) => {
+    setTitle(chart.title)
+    setArtist(chart.artist)
+    setBpm(chart.bpm)
+    setUrl(chart.audio)
+    setAudioOffset(chart.audio_offset)
+    setScrollSpeed(chart.scroll_speed)
+    setAmplitude(chart.amplitude)
+    setBpmChanges(chart.bpm_changes)
+    setSegments(chart.segments)
+    setRings(chart.rings)
+    setBuffer(null)
+    setDurationMs(0)
+    setPositionMs(0)
+    setSelectedRing(null)
+    setImportError(null)
+  }, [])
+
+  const importFromFile = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? '')
+        const chart = parseChartText(text, file.name)
+        importChart(chart)
+        setExportMsg(`${file.name} を読み込みました`)
+        window.setTimeout(() => setExportMsg(null), 3000)
+      } catch (e) {
+        setImportError(e instanceof Error ? e.message : 'TOMLの読み込みに失敗しました')
+      }
+    }
+    reader.onerror = () => {
+      setImportError('ファイルの読み込みに失敗しました')
+    }
+    reader.readAsText(file)
   }
 
   const closePlaytest = useCallback(() => {
+    playtestActiveRef.current = false
     setPlaytest(null)
   }, [])
 
@@ -284,8 +335,59 @@ export default function EditorScreen() {
         <Link to="/">/ に戻る</Link>
       </header>
 
+      {exportMsg && (
+        <div className="editor-toast" role="status" data-testid="editor-toast">
+          {exportMsg}
+        </div>
+      )}
+
       <div className="editor-body">
         <aside className="editor-sidebar">
+          <section className="editor-pane">
+            <h2>譜面情報</h2>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="chart-title">
+                タイトル
+              </label>
+              <input
+                id="chart-title"
+                className="editor-input"
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="chart-artist">
+                アーティスト
+              </label>
+              <input
+                id="chart-artist"
+                className="editor-input"
+                type="text"
+                value={artist}
+                onChange={(e) => setArtist(e.target.value)}
+              />
+            </div>
+            <div className="editor-controls">
+              <label className="editor-file-label">
+                TOML読込
+                <input
+                  type="file"
+                  accept=".toml,text/toml"
+                  className="editor-file-input"
+                  data-testid="import-toml"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) importFromFile(file)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+            </div>
+            {importError && <div className="editor-error">{importError}</div>}
+          </section>
+
           <section className="editor-pane">
             <h2>音楽制御</h2>
             <div className="editor-field">
@@ -306,8 +408,8 @@ export default function EditorScreen() {
               />
             </div>
             <div className="editor-controls">
-              <button type="button" onClick={toggle}>
-                {isPlaying ? '停止' : '再生'}
+              <button type="button" onClick={toggle} disabled={loadingAudio}>
+                {loadingAudio ? '読込中…' : isPlaying ? '停止' : buffer ? '再生' : '読込・再生'}
               </button>
             </div>
             <input
@@ -346,12 +448,16 @@ export default function EditorScreen() {
           <section className="editor-pane">
             <h2>エクスポート</h2>
             <div className="editor-controls">
-              <button type="button" onClick={exportChart}>
-                エクスポート
-              </button>
-              <button type="button" onClick={() => setPlaytest(buildChart())}>
-                プレイテスト
-              </button>
+            <button type="button" onClick={exportChart}>
+              エクスポート
+            </button>
+            <button type="button" onClick={() => {
+              if (isPlaying) stop()
+              playtestActiveRef.current = true
+              setPlaytest(buildChart())
+            }}>
+              プレイテスト
+            </button>
             </div>
             <p className="editor-hint">現在の状態をTOMLとして reply.toml に書き出し。プレイテストはエクスポートせずその場で確認</p>
           </section>

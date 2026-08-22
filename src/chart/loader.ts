@@ -39,22 +39,25 @@ export async function loadChart(url: string): Promise<Chart> {
     throw new Error(`チャートの読み込みに失敗しました (${res.status}): ${url}`);
   }
   const text = await res.text();
+  return parseChartText(text, url);
+}
 
+export function parseChartText(text: string, source = 'chart'): Chart {
   let raw: Record<string, unknown>;
   try {
     raw = parse(text) as Record<string, unknown>;
   } catch {
-    throw new Error(`チャートのTOMLパースに失敗しました: ${url}`);
+    throw new Error(`チャートのTOMLパースに失敗しました: ${source}`);
   }
 
   if (typeof raw.title !== 'string' || typeof raw.artist !== 'string') {
-    throw new Error(`チャートに title / artist がありません: ${url}`);
+    throw new Error(`チャートに title / artist がありません: ${source}`);
   }
   if (!isFiniteNumber(raw.bpm) || raw.bpm <= 0) {
-    throw new Error(`チャートの bpm が不正です: ${url}`);
+    throw new Error(`チャートの bpm が不正です: ${source}`);
   }
   if (typeof raw.audio !== 'string' || raw.audio.length === 0) {
-    throw new Error(`チャートに audio がありません: ${url}`);
+    throw new Error(`チャートに audio がありません: ${source}`);
   }
 
   return {
