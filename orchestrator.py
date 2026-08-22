@@ -624,7 +624,7 @@ test('dynamic video smoke test', async ({ page }) => {
 
 
 def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int = 90) -> tuple[int, str]:
-    cmd = ["llm", "-m", "gemini-3.5-flash-lite", "-a", str(video_path), prompt]
+    cmd = ["llm", "-m", "gemini-3.5-flash-lite", "-o", "thinking_level", "high", "-a", str(video_path), prompt]
     log.info("Dispatching Video Review via Simon Willison's llm CLI (model=gemini-3.5-flash-lite, video=%s)...", video_path.name)
     print(f"  {GRAY}┌─ Start: llm CLI Video Review ──────────────────────────────{RESET}", flush=True)
     code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
@@ -666,7 +666,7 @@ Output JSON only:
 {{"score": 90, "verdict": "PASS", "comment": "detailed product/UX critique"}} or {{"score": 50, "verdict": "FAIL", "comment": "specific UX/polish flaw observed"}}
 """
     log.info("Reviewer (Gemini Video AI via llm CLI) analyzing video: %s...", latest_video.name)
-    code, out = run_llm_cli_video_review(latest_video, prompt, timeout=90)
+    code, out = run_llm_cli_video_review(latest_video, prompt, timeout=None)
     
     if code != 0:
         log.error("Reviewer model failed/timed out. Rejecting Gate C.")
