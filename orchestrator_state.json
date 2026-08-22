@@ -260,10 +260,22 @@
       "finished": 1787239672.44938
     },
     "T94": {
+      "attempts": 1,
+      "status": "passed",
+      "started": 1787239672.4523263,
+      "finished": 1787240249.4919865
+    },
+    "T95": {
+      "attempts": 2,
+      "status": "passed",
+      "started": 1787240249.4926765,
+      "finished": 1787241535.2224553
+    },
+    "T96": {
       "attempts": 0,
       "status": "running",
-      "started": 1787239672.4523263
+      "started": 1787368477.7545967
     }
   },
-  "consecutive_failures": 0
+  "consecutive_no_action": 0
 }
