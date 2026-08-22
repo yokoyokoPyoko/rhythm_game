@@ -753,13 +753,16 @@ def git_rollback(commit_hash: str) -> None:
 def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argparse.Namespace) -> str:
     st = state["tasks"].setdefault(task.id, {"attempts": 0, "status": "pending"})
     
-    for dep in task.depends_on:
-        dep_st = state["tasks"].get(dep, {}).get("status")
-        if dep_st != "passed":
-            log.warning("[%s] Blocked by incomplete dependency: %s (%s)", task.id, dep, dep_st)
-            st["status"] = "blocked"
-            save_state(state)
-            return "blocked"
+    if args.only:
+        log.info("[%s] --only mode: skipping dependency checks.", task.id)
+    else:
+        for dep in task.depends_on:
+            dep_st = state["tasks"].get(dep, {}).get("status")
+            if dep_st != "passed":
+                log.warning("[%s] Blocked by incomplete dependency: %s (%s)", task.id, dep, dep_st)
+                st["status"] = "blocked"
+                save_state(state)
+                return "blocked"
 
     print("\n" + f"{INDIGO}═══ [{task.id}] {task.desc} ══════════════════════════════════════{RESET}")
     st["status"] = "running"
