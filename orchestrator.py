@@ -833,7 +833,6 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             if not ga.ok:
                 log.error("[%s] Gate A failed: %s", task.id, ga.detail)
                 generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem)
-                git_rollback(head_hash)
                 need_coder = True
                 mark_stage(0)
                 maybe_reset_cycle()
@@ -852,10 +851,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
-                git_rollback(coder_commit)
                 need_coder = False
             else:
-                git_rollback(head_hash)
                 need_coder = True
             mark_stage(1)
             maybe_reset_cycle()
@@ -870,10 +867,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
-                git_rollback(coder_commit)
                 need_coder = False
             else:
-                git_rollback(head_hash)
                 need_coder = True
             mark_stage(2)
             maybe_reset_cycle()
