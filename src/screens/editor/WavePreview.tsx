@@ -4,6 +4,7 @@ import { WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
 const GAME_CENTER_Y = 300
+const RULER_H = 22
 const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
 const STAY_COLOR = '#fbbf24'
@@ -61,49 +62,56 @@ export default function WavePreview({
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
     const engine = new WaveEngine(segments, timeline, ampVal)
 
-    const centerY = cssH / 2
-    const amp = Math.min((cssH - 24) / 2, ampVal)
+    const centerY = RULER_H + (cssH - RULER_H) / 2
+    const fieldH = cssH - RULER_H
+    const amp = Math.min((fieldH - 24) / 2, ampVal)
     const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * amp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
     const lastBeat = Math.max(totalBeats, 4)
     geoRef.current = { lastBeat }
 
-    // Horizontal grid: top / center / bottom guide lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    // Horizontal guide lines: top / center / bottom (high visibility)
     ctx.lineWidth = 1
     for (const gy of [mapY(GAME_CENTER_Y - ampVal), centerY, mapY(GAME_CENTER_Y + ampVal)]) {
+      const isCenter = Math.abs(gy - centerY) < 0.5
+      ctx.strokeStyle = isCenter ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.14)'
       ctx.beginPath()
       ctx.moveTo(0, gy)
       ctx.lineTo(cssW, gy)
       ctx.stroke()
     }
 
-    // Vertical beat grid + labels every 4 beats
+    // Beat ruler + vertical grid lines
+    ctx.fillStyle = 'rgba(255,255,255,0.04)'
+    ctx.fillRect(0, 0, cssW, RULER_H)
     ctx.font = '11px Inter, system-ui, sans-serif'
     ctx.textBaseline = 'top'
     for (let b = 0; b <= lastBeat; b += 1) {
       const gx = (b / lastBeat) * cssW
       const strong = Math.round(b) % 4 === 0
-      ctx.strokeStyle = strong ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)'
+      ctx.strokeStyle = strong ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.07)'
       ctx.lineWidth = strong ? 1.5 : 1
       ctx.beginPath()
-      ctx.moveTo(gx, 0)
+      ctx.moveTo(gx, RULER_H)
       ctx.lineTo(gx, cssH)
       ctx.stroke()
       if (strong) {
-        ctx.fillStyle = 'rgba(255,255,255,0.35)'
+        ctx.fillStyle = 'rgba(255,255,255,0.5)'
         ctx.fillText(String(b), gx + 4, 4)
       }
     }
 
-    // Start / judgment line (left edge)
-    ctx.strokeStyle = 'rgba(99,102,241,0.7)'
-    ctx.lineWidth = 3
+    // Start / judgment line (left edge), thick & labeled
+    ctx.strokeStyle = 'rgba(99,102,241,0.95)'
+    ctx.lineWidth = 4
     ctx.beginPath()
-    ctx.moveTo(2, 0)
+    ctx.moveTo(2, RULER_H)
     ctx.lineTo(2, cssH)
     ctx.stroke()
+    ctx.fillStyle = 'rgba(99,102,241,0.95)'
+    ctx.font = '10px Inter, system-ui, sans-serif'
+    ctx.fillText('START', 6, RULER_H + 4)
 
     // Segment color coding (up = accent, down = sub, stay = warning)
     let currentBeat = 0
@@ -139,34 +147,41 @@ export default function WavePreview({
       const isSelected = i === selectedRing
       const ry = mapY(engine.waveYAt(r.beat))
       const isHold = r.type === 'hold'
-      ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.6)'
+      ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.75)'
       ctx.lineWidth = isSelected ? 2 : 1
       ctx.beginPath()
-      ctx.moveTo(rx, 0)
+      ctx.moveTo(rx, RULER_H)
       ctx.lineTo(rx, cssH)
       ctx.stroke()
 
       if (isHold && Number.isFinite(r.duration) && r.duration! > 0) {
         const tailBeat = r.beat + r.duration!
         const tx = (tailBeat / lastBeat) * cssW
-        ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.45)'
-        ctx.lineWidth = 6
+        ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.6)'
+        ctx.lineWidth = 8
         ctx.beginPath()
         ctx.moveTo(rx, ry)
         ctx.lineTo(tx, ry)
         ctx.stroke()
       }
 
+      // Note marker — clear filled circle, larger when selected
       ctx.fillStyle = isSelected ? SELECT_COLOR : STAY_COLOR
       ctx.beginPath()
-      ctx.arc(rx, ry, isSelected ? 10 : 7, 0, Math.PI * 2)
+      ctx.arc(rx, ry, isSelected ? 12 : 9, 0, Math.PI * 2)
       ctx.fill()
-      if (isSelected) {
-        ctx.strokeStyle = ACCENT_COLOR
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.arc(rx, ry, isSelected ? 14 : 10, 0, Math.PI * 2)
-        ctx.stroke()
+      ctx.lineWidth = isSelected ? 3 : 2
+      ctx.strokeStyle = isSelected ? ACCENT_COLOR : 'rgba(0,0,0,0.55)'
+      ctx.beginPath()
+      ctx.arc(rx, ry, isSelected ? 12 : 9, 0, Math.PI * 2)
+      ctx.stroke()
+      if (isHold) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'
+        ctx.font = '9px Inter, system-ui, sans-serif'
+        ctx.textBaseline = 'middle'
+        ctx.textAlign = 'center'
+        ctx.fillText('H', rx, ry)
+        ctx.textAlign = 'left'
       }
     })
   }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing])
@@ -179,6 +194,7 @@ export default function WavePreview({
       const rect = canvas.getBoundingClientRect()
       const x = e.clientX - rect.left
       const beat = (x / rect.width) * geoRef.current.lastBeat
+      console.log('[WP] move beat=', beat, 'index=', dragRef.current.index)
       onMoveRing?.(dragRef.current.index, beat)
     }
     const onUp = () => {
@@ -198,11 +214,13 @@ export default function WavePreview({
     const rect = canvas.getBoundingClientRect()
     const clickX = clientX - rect.left
     const lastBeat = geoRef.current.lastBeat
+    console.log('[WP] nearest rings.len=', rings.length, 'clickX=', clickX, 'rectW=', rect.width, 'lastBeat=', lastBeat)
     let nearest = -1
     let nearestDist = Infinity
     rings.forEach((r, i) => {
       const rx = (r.beat / lastBeat) * rect.width
       const d = Math.abs(rx - clickX)
+      console.log('[WP] ring', i, 'beat=', r.beat, 'rx=', rx, 'd=', d)
       if (d < nearestDist) {
         nearestDist = d
         nearest = i
@@ -213,6 +231,7 @@ export default function WavePreview({
 
   const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     const hit = nearestRingIndex(e.clientX)
+    console.log('[WP] mousedown hit=', hit, 'lastBeat=', geoRef.current.lastBeat)
     if (hit >= 0) {
       onSelectRing?.(hit)
       dragRef.current = { index: hit }
