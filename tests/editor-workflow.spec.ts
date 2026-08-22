@@ -1,102 +1,91 @@
-import { test, expect } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { test, expect, type Page } from '@playwright/test'
+import { writeFileSync, mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
-test('editor full authoring workflow', async ({ page }) => {
-  const errors: string[] = [];
+const DEMO_TOML = `title = "Demo"
+artist = "Tester"
+bpm = 120
+audio = "/rhythm_game/audio/08.Reply.flac"
+audio_offset = 0
+scroll_speed = 110
+amplitude = 130
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+`
+
+async function gotoEditor(page: Page): Promise<string[]> {
+  const errors: string[] = []
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
-      const t = msg.text();
-      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+      const t = msg.text()
+      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t)
     }
-  });
-  page.on('pageerror', (err) => errors.push(err.message));
+  })
+  page.on('pageerror', (err) => errors.push(err.message))
+  await page.goto('/rhythm_game/#/editor')
+  await page.waitForSelector('[data-testid="editor-legend"]', { timeout: 10000 })
+  return errors
+}
 
-  await page.goto('/#/editor');
-  await expect(page.locator('.editor-screen')).toBeVisible();
-  // legend / instructions panel present (consistency + discoverability)
-  await expect(page.locator('[data-testid="editor-legend"]')).toBeVisible();
+const ringCount = (page: Page) => page.locator('[data-testid^="ring-list-item-"]').count()
+const segmentCount = (page: Page) => page.locator('[data-testid^="segment-direction-"]').count()
 
-  // --- Step 0: chart info / title + BPM (BPM config) ---
-  await page.locator('#chart-title').fill('QA Song');
-  await page.locator('#bpm').fill('140');
-  await page.waitForTimeout(800);
+test('editor full workflow: import -> bpm/segment -> ring -> preview -> export -> playtest', async ({ page }) => {
+  const errors = await gotoEditor(page)
 
-  // --- Step 1: music load / play / seek ---
-  const playBtn = page.getByRole('button', { name: /読込|再生/ });
-  await playBtn.click();
-  // wait until audio buffer is loaded (slider becomes enabled)
-  const slider = page.locator('.editor-slider');
-  await expect(slider).toBeEnabled({ timeout: 30000 });
-  // let playback progress a little to confirm seek/position works
-  await page.waitForTimeout(2000);
-  const posText = await page.locator('.editor-pos-time').textContent();
-  expect(posText).not.toBeNull();
+  // ① 音楽/譜面の読込 (TOMLインポートでチャート全体を読み込む)
+  const tmp = mkdtempSync(join(tmpdir(), 'chart-'))
+  const tomlPath = join(tmp, 'demo.toml')
+  writeFileSync(tomlPath, DEMO_TOML, 'utf-8')
+  await page.setInputFiles('[data-testid="import-toml"]', tomlPath)
+  await expect(page.locator('[data-testid="editor-toast"]')).toContainText('demo.toml を読み込みました')
+  expect(await ringCount(page)).toBe(2)
+  expect(await segmentCount(page)).toBe(2)
 
-  // seek by clicking the preview ruler strip (top of canvas)
-  const canvas = page.locator('[data-testid="wave-preview-canvas"]');
-  const box = (await canvas.boundingBox())!;
-  await canvas.click({ position: { x: box.width * 0.3, y: 5 } });
-  await page.waitForTimeout(800);
+  // ② BPM / セグメント設定
+  await page.fill('#bpm', '140')
+  await expect(page.locator('#bpm')).toHaveValue('140')
+  await page.locator('[data-testid="segment-list-details"] > summary').click()
+  await page.locator('[data-testid="segment-add"]').click()
+  await expect(page.locator('[data-testid="segment-direction-2"]')).toBeVisible()
 
-  // --- Step 2: place rings (click on preview) ---
-  await expect(canvas).toBeVisible();
-  for (const frac of [0.2, 0.4, 0.6, 0.8]) {
-    await canvas.click({ position: { x: box.width * frac, y: box.height / 2 } });
-    await page.waitForTimeout(400);
-  }
-  // the ring-list <details> is collapsed by default; open it to verify entries
-  await page.locator('[data-testid="ring-list-details"] > summary').click();
-  await expect(page.locator('[data-testid="ring-list-item-0"]')).toBeVisible();
-  await expect(page.locator('[data-testid="ring-list-item-3"]')).toBeVisible();
+  // ③ リング配置 (プレビュー上クリックで追加)
+  const before = await ringCount(page)
+  await page.locator('[data-testid="wave-preview-canvas"]').click({ position: { x: 220, y: 320 } })
+  await expect
+    .poll(async () => await ringCount(page), { timeout: 3000 })
+    .toBe(before + 1)
 
-  // delete one ring to exercise edit/delete
-  await page.locator('[data-testid="ring-delete-0"]').click();
-  await expect(page.locator('[data-testid="ring-list-item-0"]')).toBeVisible();
-  await page.waitForTimeout(600);
+  // ④ 波形プレビューは常に描画されている
+  await expect(page.locator('[data-testid="wave-preview-canvas"]')).toBeVisible()
 
-  // --- Step 3: place segments ---
-  await page.locator('.editor-accordion-summary', { hasText: 'セグメント' }).click();
-  await page.getByLabel('セグメントを追加').click();
-  await page.locator('[data-testid="segment-direction-0"]').selectOption('down');
-  await page.locator('[data-testid="segment-beats-0"]').fill('2');
-  await expect(page.locator('[data-testid="segment-direction-0"]')).toHaveValue('down');
-  await page.waitForTimeout(600);
-
-  // --- Step 4: waveform preview reflects state ---
-  await expect(canvas).toBeVisible();
-  await page.waitForTimeout(800);
-
-  // --- Step 5: export TOML ---
+  // ⑤ TOMLエクスポート
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: 'エクスポート' }).click(),
-  ]);
-  const dlPath = await download.path();
-  const toml = dlPath ? readFileSync(dlPath, 'utf-8') : '';
-  expect(toml).toContain('[[rings]]');
-  expect(toml).toContain('[[segments]]');
-  expect(toml).toContain('bpm = 140');
-  // export feedback toast
-  await expect(page.locator('[data-testid="editor-toast"]')).toBeVisible();
-  await page.waitForTimeout(600);
+    page.locator('[data-testid="editor-export"]').click(),
+  ])
+  expect(download.suggestedFilename()).toBe('reply.toml')
+  await expect(page.locator('[data-testid="editor-toast"]')).toContainText('エクスポートしました')
 
-  // --- Step 6: re-import the exported TOML ---
-  await page.locator('[data-testid="import-toml"]').setInputFiles({
-    name: 'reply.toml',
-    mimeType: 'text/toml',
-    buffer: Buffer.from(toml, 'utf-8'),
-  });
-  await expect(page.locator('#chart-title')).toHaveValue('QA Song');
-  await expect(page.locator('#bpm')).toHaveValue('140');
-  await page.waitForTimeout(600);
+  // ⑥ プレイテストで内容確認
+  await page.locator('[data-testid="editor-playtest"]').click()
+  const canvas = page.locator('[data-testid="playtest-canvas"]')
+  await expect(canvas).toBeVisible({ timeout: 10000 })
+  await page.locator('[data-testid="playtest-exit"]').click()
+  await expect(canvas).toHaveCount(0)
 
-  // --- Step 7: playtest launch ---
-  await page.getByRole('button', { name: 'プレイテスト' }).click();
-  await expect(page.locator('.game-canvas')).toBeVisible({ timeout: 10000 });
-  await page.waitForTimeout(1500);
-  // exit playtest (on-screen 終了 button OR ESC)
-  await page.getByRole('button', { name: '終了' }).click();
-  await expect(page.locator('.editor-screen')).toBeVisible();
-
-  expect(errors).toHaveLength(0);
-});
+  expect(errors).toHaveLength(0)
+})

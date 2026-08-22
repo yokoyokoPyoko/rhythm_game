@@ -910,6 +910,36 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     return "failed"
 
 
+def detect_concurrent_orchestrators() -> list[int]:
+    """Return PIDs of other live orchestrator.py processes (excluding self).
+
+    Scans /proc to avoid matching our own process or the transient pgrep
+    command. Used to warn the user before launching a second concurrent run,
+    which would otherwise fight over port 5173.
+    """
+    me = os.getpid()
+    others: list[int] = []
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return others
+    for entry in proc_root.iterdir():
+        name = entry.name
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == me:
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except (OSError, PermissionError):
+            continue
+        if not cmdline:
+            continue
+        if any(b"orchestrator.py" in part for part in cmdline.split(b"\x00")):
+            others.append(pid)
+    return others
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Trace Wave Autonomous Orchestrator (Modern CLI)")
     parser.add_argument("--dry-run", action="store_true", help="Display execution plan only")
@@ -925,6 +955,22 @@ def main() -> None:
 
     setup_logging()
     LOG_DIR.mkdir(exist_ok=True)
+
+    concurrent = detect_concurrent_orchestrators()
+    if concurrent:
+        log.warning(
+            "⚠ 別の orchestrator.py が既に稼働中です (PID: %s)。"
+            "同時実行は port 5173 の奪い合い等を引き起こします。",
+            concurrent,
+        )
+        if not sys.stdin.isatty():
+            log.error("非対話環境のため中止します。")
+            sys.exit(1)
+        ans = input("他の orchestrator が稼働中です。[A]bort / [C]ontinue ? ").strip().lower()
+        if ans != "c":
+            log.info("ユーザーが中止を選択しました。")
+            sys.exit(1)
+        log.info("続行します。")
 
     if args.reset_state and STATE_FILE.exists():
         STATE_FILE.unlink()

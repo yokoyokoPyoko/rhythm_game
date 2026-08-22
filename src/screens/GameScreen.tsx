@@ -431,12 +431,14 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
             width={CANVAS_WIDTH}
             height={CANVAS_HEIGHT}
             className="game-canvas"
+            data-testid="playtest-canvas"
           />
           {onExitRef.current && (
             <button
               type="button"
               className="game-exit"
               onClick={() => onExitRef.current?.()}
+              data-testid="playtest-exit"
             >
               終了
             </button>

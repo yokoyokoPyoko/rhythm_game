@@ -653,6 +653,15 @@ button:focus-visible {
   display: none;
 }
 
+.editor-clear-button {
+  color: var(--danger);
+  background-color: transparent;
+}
+
+.editor-clear-button:hover {
+  border-color: var(--danger);
+}
+
 .calibration-screen {
   display: flex;
   flex-direction: column;

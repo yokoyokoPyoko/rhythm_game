@@ -40,10 +40,17 @@ export default function EditorScreen() {
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
   const [playtest, setPlaytest] = useState<Chart | null>(null)
   const [selectedRing, setSelectedRing] = useState<number | null>(null)
-  const [exportMsg, setExportMsg] = useState<string | null>(null)
+  const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [loadingAudio, setLoadingAudio] = useState(false)
   const playtestActiveRef = useRef(false)
+  const toastTimerRef = useRef<number | null>(null)
+
+  const notify = useCallback((msg: string) => {
+    setToastMsg(msg)
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => setToastMsg(null), 2500)
+  }, [])
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const startCtxTimeRef = useRef(0)
@@ -181,10 +188,13 @@ export default function EditorScreen() {
         if (!isPlayingRef.current) return
         const rawBeat = timeline.msToBeat(positionRef.current)
         const snapped = Math.round(rawBeat / snap) * snap
+        let added = false
         setRings((prev) => {
           if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) return prev
+          added = true
           return [...prev, { beat: snapped, type: 'single' }]
         })
+        if (added) notify(`リング追加 @beat ${snapped.toFixed(2)}`)
         return
       }
 
@@ -211,16 +221,15 @@ export default function EditorScreen() {
       e.preventDefault()
 
       const currentBeat = timeline.msToBeat(positionRef.current)
-      setSegments((prevSegments) => {
-        const lastEndBeat = prevSegments.reduce((sum, s) => sum + s.beats, 0)
-        const rawBeats = currentBeat - lastEndBeat
-        const beats = Math.max(snap, Math.round(rawBeats / snap) * snap)
-        return [...prevSegments, { direction, beats }]
-      })
+      const lastEndBeat = segments.reduce((sum, s) => sum + s.beats, 0)
+      const rawBeats = currentBeat - lastEndBeat
+      const beats = Math.max(snap, Math.round(rawBeats / snap) * snap)
+      setSegments((prevSegments) => [...prevSegments, { direction, beats }])
+      notify(`セグメント追加 (${direction === 'up' ? '↑' : direction === 'down' ? '↓' : '―'}) ${beats.toFixed(2)}拍`)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [snap, timeline, selectedRing])
+  }, [snap, timeline, selectedRing, segments, notify])
 
   const removeRing = (index: number) => {
     setRings((prev) => prev.filter((_, i) => i !== index))
@@ -239,9 +248,10 @@ export default function EditorScreen() {
         index = prev.length
         return [...prev, { beat: snapped, type: 'single' }]
       })
+      notify(`リング追加 @beat ${snapped.toFixed(2)}`)
       return index >= 0 ? index : undefined
     },
-    [snap]
+    [snap, notify]
   )
 
   const moveRing = useCallback((index: number, beat: number) => {
@@ -265,14 +275,17 @@ export default function EditorScreen() {
   }
 
   const buildChart = useCallback((): Chart => {
+    const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 130
+    const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
+    const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
     return {
       title: title.trim() || 'Untitled',
       artist: artist.trim(),
       bpm: safeBpm,
-      audio: url,
-      audio_offset: audioOffset,
-      scroll_speed: scrollSpeed,
-      amplitude,
+      audio: url.trim() || '/rhythm_game/audio/08.Reply.flac',
+      audio_offset: safeOffset,
+      scroll_speed: safeScroll,
+      amplitude: safeAmp,
       bpm_changes: bpmChanges,
       segments,
       rings,
@@ -287,8 +300,7 @@ export default function EditorScreen() {
     link.download = 'reply.toml'
     link.click()
     URL.revokeObjectURL(link.href)
-    setExportMsg('reply.toml をエクスポートしました')
-    window.setTimeout(() => setExportMsg(null), 3000)
+    notify('reply.toml をエクスポートしました')
   }
 
   const importChart = useCallback((chart: Chart) => {
@@ -316,8 +328,7 @@ export default function EditorScreen() {
         const text = String(reader.result ?? '')
         const chart = parseChartText(text, file.name)
         importChart(chart)
-        setExportMsg(`${file.name} を読み込みました`)
-        window.setTimeout(() => setExportMsg(null), 3000)
+        notify(`${file.name} を読み込みました`)
       } catch (e) {
         setImportError(e instanceof Error ? e.message : 'TOMLの読み込みに失敗しました')
       }
@@ -326,6 +337,19 @@ export default function EditorScreen() {
       setImportError('ファイルの読み込みに失敗しました')
     }
     reader.readAsText(file)
+  }
+
+  const clearAll = () => {
+    if (!window.confirm('現在の譜面（リング・セグメント・BPM変更）をすべてクリアします。よろしいですか？')) {
+      return
+    }
+    setRings([])
+    setSegments([])
+    setBpmChanges([])
+    setSelectedRing(null)
+    setPositionMs(0)
+    positionRef.current = 0
+    notify('譜面をクリアしました')
   }
 
   const closePlaytest = useCallback(() => {
@@ -340,9 +364,9 @@ export default function EditorScreen() {
         <Link to="/">/ に戻る</Link>
       </header>
 
-      {exportMsg && (
+      {toastMsg && (
         <div className="editor-toast" role="status" data-testid="editor-toast">
-          {exportMsg}
+          {toastMsg}
         </div>
       )}
 
@@ -389,6 +413,9 @@ export default function EditorScreen() {
                   }}
                 />
               </label>
+              <button type="button" onClick={clearAll} data-testid="editor-clear" className="editor-clear-button">
+                クリア
+              </button>
             </div>
             {importError && <div className="editor-error">{importError}</div>}
           </section>
@@ -413,7 +440,7 @@ export default function EditorScreen() {
               />
             </div>
             <div className="editor-controls">
-              <button type="button" onClick={toggle} disabled={loadingAudio}>
+              <button type="button" onClick={toggle} disabled={loadingAudio} data-testid="editor-play">
                 {loadingAudio ? '読込中…' : isPlaying ? '停止' : buffer ? '再生' : '読込・再生'}
               </button>
             </div>
@@ -453,14 +480,14 @@ export default function EditorScreen() {
           <section className="editor-pane">
             <h2>エクスポート</h2>
             <div className="editor-controls">
-            <button type="button" onClick={exportChart}>
+            <button type="button" onClick={exportChart} data-testid="editor-export">
               エクスポート
             </button>
             <button type="button" onClick={() => {
               if (isPlaying) stop()
               playtestActiveRef.current = true
               setPlaytest(buildChart())
-            }}>
+            }} data-testid="editor-playtest">
               プレイテスト
             </button>
             </div>
@@ -521,7 +548,10 @@ export default function EditorScreen() {
               <p className="editor-empty">リングなし</p>
             ) : (
               <ul className="ring-list">
-                {rings.map((ring, i) => (
+                {[...rings]
+                  .map((ring, i) => ({ ring, i }))
+                  .sort((a, b) => a.ring.beat - b.ring.beat)
+                  .map(({ ring, i }) => (
                   <li
                     key={`${i}-${ring.beat}`}
                     className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}`}
@@ -529,11 +559,18 @@ export default function EditorScreen() {
                   >
                     <span
                       className="ring-list-beat"
-                      onClick={() => setSelectedRing(i)}
+                      onClick={() => {
+                        setSelectedRing(i)
+                        seekToBeat(ring.beat)
+                      }}
                       role="button"
                       tabIndex={0}
+                      title="クリックで選択し、その位置へシーク"
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') setSelectedRing(i)
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          setSelectedRing(i)
+                          seekToBeat(ring.beat)
+                        }
                       }}
                     >
                       beat: {ring.beat.toFixed(2)}

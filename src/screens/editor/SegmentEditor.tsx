@@ -45,6 +45,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
             addSegment()
           }}
           aria-label="セグメントを追加"
+          data-testid="segment-add"
         >
           追加
         </button>
