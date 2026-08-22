@@ -117,6 +117,7 @@ class GateResult:
     name: str
     ok: bool
     detail: str = ""
+    fatal: bool = False
 
 
 class ColoredFormatter(logging.Formatter):
@@ -586,30 +587,35 @@ STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
 
 Investigate as many source files as you need before writing. When you have finished writing `tests/dynamic.spec.ts`, output only: DONE
 """
-    mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
-    log.info("QA generating dynamic test script (direct write mode)...")
-    code, out = run_opencode_with_retry(qa_model, prompt, timeout=None, label="QA-Gen", variant="max")
+    QA_CONTINUE_RETRIES = 5
+    continuation_prompt = (
+        prompt
+        + "\n\n[CONTINUATION] 前回の実行では tests/dynamic.spec.ts を実際に書いていません"
+        "（書き込み完了前に終わりました）。今度は file-write ツールで tests/dynamic.spec.ts を"
+        "「今すぐ直接」書いてください。説明だけでなく実際に書くこと。書き終わったら DONE のみ出力。"
+    )
 
-    wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
-    if not wrote_spec:
-        if out.strip() == "":
-            return GateResult("Gate B (Dynamic Test)", False, "QA model produced empty output and did not write tests/dynamic.spec.ts")
-        log.warning("QA model did not update tests/dynamic.spec.ts. Using robust dynamic smoke test.")
-        test_code = """import { test, expect } from '@playwright/test';
-test('dynamic video smoke test', async ({ page }) => {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-  await page.screenshot({ path: 'screenshots/dyn_home.png' });
-  await page.waitForTimeout(1500);
-  await page.evaluate(() => { window.location.hash = '#/editor'; });
-  await page.waitForTimeout(2500);
-  await page.screenshot({ path: 'screenshots/dyn_editor.png' });
-});
-"""
-        DYNAMIC_SPEC_FILE.parent.mkdir(exist_ok=True)
-        DYNAMIC_SPEC_FILE.write_text(test_code, encoding="utf-8")
+    cont_prompt = prompt
+    for attempt in range(1, QA_CONTINUE_RETRIES + 1):
+        mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
+        if attempt == 1:
+            log.info("QA generating dynamic test script (direct write mode)...")
+        else:
+            log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
+            cont_prompt = continuation_prompt
+        _, out = run_opencode_with_retry(qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max")
+
+        wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
+        if wrote_spec:
+            log.info("QA model wrote tests/dynamic.spec.ts directly.")
+            break
     else:
-        log.info("QA model wrote tests/dynamic.spec.ts directly.")
+        return GateResult(
+            "Gate B (Dynamic Test)",
+            False,
+            "QA model did not write tests/dynamic.spec.ts after 5 continues",
+            fatal=True,
+        )
     log.info("Running Playwright execution with Video Recording...")
 
     code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="playwright: ")
@@ -850,6 +856,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         # 3. Gate B (Playwright)
         gb = generate_and_run_gate_b(task, models.qa)
         if not gb.ok:
+            if gb.fatal:
+                log.error("[%s] Gate B failed (fatal): %s", task.id, gb.detail)
+                st["status"] = "failed"
+                st["finished"] = time.time()
+                save_state(state)
+                return "failed"
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
             pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem)
             if decode_retry_from(pm, coder_commit) == "qa":
