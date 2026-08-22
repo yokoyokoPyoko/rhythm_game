@@ -273,10 +273,15 @@
     },
     "T96": {
       "attempts": 16,
-      "status": "running",
+      "status": "passed",
       "started": 1787385234.9448376,
       "cycles": 4,
-      "finished": 1787380457.0561244
+      "finished": 1787388323.313453
+    },
+    "T97": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1787394860.4095278
     }
   },
   "consecutive_no_action": 0
