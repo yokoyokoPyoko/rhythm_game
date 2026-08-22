@@ -446,7 +446,7 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
 
         if timed_out:
             if out.strip() != "":
-                log.info("Process timed out but produced non-empty output (acted). Proceeding.")
+                log.info("Process timed out but produced non-empty output (acted). Accepting partial output and continuing.")
                 return 0, out
             log.warning("Process timed out with empty output (%ds). Retrying...", timeout)
             continue
@@ -567,7 +567,7 @@ def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
     VIDEO_DIR.mkdir(exist_ok=True)
     spec = extract_compact_spec(task.id)
 
-    prompt = f"""Generate a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}).
+    prompt = f"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
 
 Context:
 This test execution automatically records a video (.webm) of the browser in action. The recorded video is inspected by an uncompromising Product Director / Senior UX/UI Critic (Gate C Reviewer) to evaluate visual polish, fluidity, and interaction craftsmanship.
@@ -577,32 +577,39 @@ Specification from AGENTS.md:
 
 STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
 1. Comprehensive Interaction: Do not just load the page. Actively simulate realistic, thorough user interactions for ALL features mentioned in the specification (e.g., clicking specific buttons, navigating routes, inputting data, testing shortcuts).
+   - This app uses HashRouter under a Vite dev server (Playwright baseURL is pre-configured). Use `page.goto('/')` and navigate routes via `await page.evaluate(() => {{ window.location.hash = '#/editor'; }})` style hash navigation.
 2. Visual Capture Timing: Insert adequate wait times (`page.waitForTimeout(1500-3000)` between critical actions) so that CSS transitions, animations, hover states, and dynamic state updates are clearly and smoothly captured in the recorded video.
 3. Robust Locators & Stability: Use robust locators (e.g., text, roles, specific test IDs or classes). Avoid strict container visibility checks if 0-height.
 4. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
+5. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself.
 
-Output only ```typescript ... ``` code block.
+Investigate as many source files as you need before writing. When you have finished writing `tests/dynamic.spec.ts`, output only: DONE
 """
-    log.info("QA generating dynamic test script...")
+    mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
+    log.info("QA generating dynamic test script (direct write mode)...")
     code, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen", variant="max")
-    if out.strip() == "":
-        return GateResult("Gate B (Dynamic Test)", False, "QA model produced empty output")
 
-    code_match = re.search(r"```(?:typescript|ts)?\s*(import\s+.*?)```", out, re.S)
-    if not code_match:
-        log.warning("QA model output did not contain explicit typescript code block. Using robust dynamic smoke test.")
+    wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
+    if not wrote_spec:
+        if out.strip() == "":
+            return GateResult("Gate B (Dynamic Test)", False, "QA model produced empty output and did not write tests/dynamic.spec.ts")
+        log.warning("QA model did not update tests/dynamic.spec.ts. Using robust dynamic smoke test.")
         test_code = """import { test, expect } from '@playwright/test';
 test('dynamic video smoke test', async ({ page }) => {
   await page.goto('/');
-  await page.waitForTimeout(2000);
+  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+  await page.screenshot({ path: 'screenshots/dyn_home.png' });
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => { window.location.hash = '#/editor'; });
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: 'screenshots/dyn_editor.png' });
 });
 """
+        DYNAMIC_SPEC_FILE.parent.mkdir(exist_ok=True)
+        DYNAMIC_SPEC_FILE.write_text(test_code, encoding="utf-8")
     else:
-        test_code = code_match.group(1)
-
-    DYNAMIC_SPEC_FILE.parent.mkdir(exist_ok=True)
-    DYNAMIC_SPEC_FILE.write_text(test_code, encoding="utf-8")
-    log.info("Generated tests/dynamic.spec.ts -> Running Playwright execution with Video Recording...")
+        log.info("QA model wrote tests/dynamic.spec.ts directly.")
+    log.info("Running Playwright execution with Video Recording...")
 
     code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=90, prefix="playwright: ")
     if code != 0:
@@ -733,15 +740,40 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     st["started"] = time.time()
     save_state(state)
 
+    # タスク開始時に必ずコミットし、ロールバック先（開始時点の完全な状態）を保証する
+    git_checkpoint(f"wip({task.id}): start")
     _, head_hash, _ = run_cmd_pgid_stream(["git", "rev-parse", "HEAD"])
     head_hash = head_hash.strip()
 
-    max_attempts = 5
-    attempts_done = 0
-    while attempts_done < max_attempts:
-        attempts_done += 1
-        st["attempts"] = attempts_done
-        log.info("Starting implementation [%s] (attempt %d/%d)", task.id, attempts_done, max_attempts)
+    MAX_CYCLES = 10
+    NO_PROGRESS_LIMIT = 3
+    cycles = 0
+    no_progress_streak = 0
+    best_stage = 0  # 0:未達 / 1:Gate A通過 / 2:Gate B通過 / 3:全ゲート通過
+
+    def mark_stage(stage: int) -> None:
+        nonlocal best_stage, no_progress_streak
+        if stage > best_stage:
+            log.info("[%s] Progress: stage %d -> %d", task.id, best_stage, stage)
+            best_stage = stage
+            no_progress_streak = 0
+        else:
+            no_progress_streak += 1
+            log.warning("[%s] No progress at stage %d (best=%d, streak %d/%d)", task.id, stage, best_stage, no_progress_streak, NO_PROGRESS_LIMIT)
+
+    def maybe_reset_cycle() -> None:
+        nonlocal cycles, no_progress_streak
+        if no_progress_streak >= NO_PROGRESS_LIMIT:
+            cycles += 1
+            no_progress_streak = 0
+            log.warning("[%s] %d consecutive attempts without progress. Rolling back to task-start commit and restarting cycle (%d/%d).", task.id, NO_PROGRESS_LIMIT, cycles, MAX_CYCLES)
+            git_rollback(head_hash)
+
+    while cycles < MAX_CYCLES:
+        st["attempts"] = st.get("attempts", 0) + 1
+        st["cycles"] = cycles + 1
+        save_state(state)
+        log.info("Starting implementation [%s] (attempt %d, cycle %d/%d)", task.id, st["attempts"], cycles + 1, MAX_CYCLES)
 
         # 1. Coder
         prompt = build_compact_coder_prompt(task)
@@ -750,7 +782,6 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
         if out.strip() == "":
             log.error("[%s] Coder returned empty output (did nothing).", task.id)
-            git_rollback(head_hash)
             state["consecutive_no_action"] = state.get("consecutive_no_action", 0) + 1
             save_state(state)
             if state["consecutive_no_action"] >= 3:
@@ -759,6 +790,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 st["finished"] = time.time()
                 save_state(state)
                 return "failed"
+            mark_stage(0)
+            maybe_reset_cycle()
             continue
 
         if state.get("consecutive_no_action", 0) != 0:
@@ -771,6 +804,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.error("[%s] Gate A failed: %s", task.id, ga.detail)
             generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem)
             git_rollback(head_hash)
+            mark_stage(0)
+            maybe_reset_cycle()
             continue
         log.info("[%s] %sGate A (tsc) PASS%s", task.id, GREEN, RESET)
         git_checkpoint(f"checkpoint({task.id}, gate-a)")
@@ -781,6 +816,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
             generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem)
             git_rollback(head_hash)
+            mark_stage(1)
+            maybe_reset_cycle()
             continue
         log.info("[%s] %sGate B (Dynamic Test) PASS%s", task.id, GREEN, RESET)
         git_checkpoint(f"checkpoint({task.id}, gate-b)")
@@ -791,6 +828,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
             generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem)
             git_rollback(head_hash)
+            mark_stage(2)
+            maybe_reset_cycle()
             continue
         log.info("[%s] %sGate C (Dynamic Review) PASS%s", task.id, GREEN, RESET)
 
@@ -810,7 +849,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     st["status"] = "failed"
     st["finished"] = time.time()
     save_state(state)
-    print(f"{RED}{BOLD}>>> [{task.id}] FAILED{RESET}\n")
+    print(f"{RED}{BOLD}>>> [{task.id}] FAILED after {MAX_CYCLES} rollback cycles{RESET}\n")
     return "failed"
 
 
