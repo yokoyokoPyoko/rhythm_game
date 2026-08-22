@@ -423,7 +423,7 @@ def rate_limit_sleep(model: str) -> None:
         time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: str = "OpenCode", variant: str | None = None, files: list[str] | None = None) -> tuple[int, str]:
+def run_opencode_with_retry(model: str, prompt: str, timeout: int | None = None, label: str = "OpenCode", variant: str | None = None, files: list[str] | None = None) -> tuple[int, str]:
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model]
     if variant:
         cmd.extend(["--variant", variant])
@@ -435,7 +435,8 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int = 300, label: 
     for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
         rate_limit_sleep(model)
         variant_info = f", variant={variant}" if variant else ""
-        log.info("Dispatching %s%s%s (model=%s%s%s%s, attempt=%d/%d, timeout=%ds)", BOLD, label, RESET, GRAY, model, variant_info, RESET, attempt, len(BACKOFF_DELAYS), timeout)
+        timeout_disp = f"{timeout}s" if timeout else "∞"
+        log.info("Dispatching %s%s%s (model=%s%s%s%s, attempt=%d/%d, timeout=%s)", BOLD, label, RESET, GRAY, model, variant_info, RESET, attempt, len(BACKOFF_DELAYS), timeout_disp)
         print(f"  {GRAY}┌─ Start: {label} ──────────────────────────────────────{RESET}", flush=True)
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
         print(f"  {GRAY}└─ End: {label} (exit={code}) ─────────────────────────────────{RESET}", flush=True)
@@ -503,7 +504,7 @@ def check_gate_a() -> GateResult:
     if not tsconfig.exists():
         return GateResult("Gate A (tsc)", True, "No tsconfig.json -> Skip")
     log.info("Checking TypeScript static types (`tsc -b --noEmit`)...")
-    code, out, _ = run_cmd_pgid_stream(["npx", "tsc", "-b", "--noEmit"], timeout=45, prefix="tsc: ")
+    code, out, _ = run_cmd_pgid_stream(["npx", "tsc", "-b", "--noEmit"], timeout=None, prefix="tsc: ")
     if code != 0:
         return GateResult("Gate A (tsc)", False, out[-2000:])
     return GateResult("Gate A (tsc)", True, "0 errors found")
@@ -587,7 +588,7 @@ Investigate as many source files as you need before writing. When you have finis
 """
     mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
     log.info("QA generating dynamic test script (direct write mode)...")
-    code, out = run_opencode_with_retry(qa_model, prompt, timeout=120, label="QA-Gen", variant="max")
+    code, out = run_opencode_with_retry(qa_model, prompt, timeout=None, label="QA-Gen", variant="max")
 
     wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
     if not wrote_spec:
@@ -611,7 +612,7 @@ test('dynamic video smoke test', async ({ page }) => {
         log.info("QA model wrote tests/dynamic.spec.ts directly.")
     log.info("Running Playwright execution with Video Recording...")
 
-    code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=90, prefix="playwright: ")
+    code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="playwright: ")
     if code != 0:
         fatal_lines = [l for l in test_out.splitlines() if re.search(r"Error:|failed|Timed out", l)]
         detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
@@ -623,7 +624,7 @@ test('dynamic video smoke test', async ({ page }) => {
     return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(videos)} video(s) recorded)")
 
 
-def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int = 90) -> tuple[int, str]:
+def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int | None = None) -> tuple[int, str]:
     cmd = ["llm", "-m", "gemini-3.5-flash-lite", "-o", "thinking_level", "high", "-a", str(video_path), prompt]
     log.info("Dispatching Video Review via Simon Willison's llm CLI (model=gemini-3.5-flash-lite, video=%s)...", video_path.name)
     print(f"  {GRAY}┌─ Start: llm CLI Video Review ──────────────────────────────{RESET}", flush=True)
@@ -690,27 +691,52 @@ Output JSON only:
     return GateResult("Gate C (Dynamic Review)", False, "Reviewer output format invalid")
 
 
-def generate_postmortem(task: Task, error_detail: str, postmortem_model: str) -> None:
+def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
+    if isinstance(pm, dict) and pm.get("retry_from") == "qa" and coder_commit:
+        return "qa"
+    return "coder"
+
+
+def generate_postmortem(task: Task, error_detail: str, postmortem_model: str) -> dict:
     POSTMORTEM_DIR.mkdir(exist_ok=True)
     prompt = f"""Analyze the failure for task {task.id}. Determine root cause and generate a strict prohibited rule for next attempt.
 
 Failure Log:
 {error_detail[:1000]}
 
+Decide where the next retry should restart from:
+- "coder": the failure is due to the implementation code (Coder output) and it must be regenerated.
+- "qa": the implementation code is acceptable but the dynamic test / verification approach (QA-Gen test script or how it was exercised) was flawed; reuse the Coder output and regenerate only the test.
+
 Output JSON only:
 {{
   "approach": "approach taken",
   "root_cause": "root cause",
-  "prohibited_rule": "prohibited rule for next run"
+  "prohibited_rule": "prohibited rule for next run",
+  "retry_from": "coder" or "qa"
 }}
 """
     log.info("Postmortem analyzing failure and formulating rules...")
-    _, out = run_opencode_with_retry(postmortem_model, prompt, timeout=180, label="Postmortem", variant="max")
-    
+    _, out = run_opencode_with_retry(postmortem_model, prompt, timeout=None, label="Postmortem", variant="max")
+
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
     with open(POSTMORTEM_FILE, "a", encoding="utf-8") as f:
         f.write(entry)
     log.info("Updated POSTMORTEM.md.")
+
+    match = re.search(r'\{.*"retry_from".*\}', out, re.S)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            return {
+                "approach": data.get("approach", ""),
+                "root_cause": data.get("root_cause", ""),
+                "rule": data.get("prohibited_rule", ""),
+                "retry_from": data.get("retry_from", "coder"),
+            }
+        except Exception:
+            pass
+    return {"approach": "", "root_cause": "", "rule": "", "retry_from": "coder"}
 
 
 def git_checkpoint(message: str) -> None:
@@ -750,6 +776,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     cycles = 0
     no_progress_streak = 0
     best_stage = 0  # 0:未達 / 1:Gate A通過 / 2:Gate B通過 / 3:全ゲート通過
+    need_coder = True
+    coder_commit = None
 
     def mark_stage(stage: int) -> None:
         nonlocal best_stage, no_progress_streak
@@ -762,10 +790,11 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.warning("[%s] No progress at stage %d (best=%d, streak %d/%d)", task.id, stage, best_stage, no_progress_streak, NO_PROGRESS_LIMIT)
 
     def maybe_reset_cycle() -> None:
-        nonlocal cycles, no_progress_streak
+        nonlocal cycles, no_progress_streak, need_coder
         if no_progress_streak >= NO_PROGRESS_LIMIT:
             cycles += 1
             no_progress_streak = 0
+            need_coder = True
             log.warning("[%s] %d consecutive attempts without progress. Rolling back to task-start commit and restarting cycle (%d/%d).", task.id, NO_PROGRESS_LIMIT, cycles, MAX_CYCLES)
             git_rollback(head_hash)
 
@@ -775,47 +804,59 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         save_state(state)
         log.info("Starting implementation [%s] (attempt %d, cycle %d/%d)", task.id, st["attempts"], cycles + 1, MAX_CYCLES)
 
-        # 1. Coder
-        prompt = build_compact_coder_prompt(task)
-        code, out = run_opencode_with_retry(models.coder, prompt, timeout=300, label=f"Coder({task.id})", variant="medium")
-        (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
+        # 1. Coder (+ Gate A) — skipped when retrying from QA-Gen
+        if need_coder:
+            prompt = build_compact_coder_prompt(task)
+            code, out = run_opencode_with_retry(models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium")
+            (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
-        if out.strip() == "":
-            log.error("[%s] Coder returned empty output (did nothing).", task.id)
-            state["consecutive_no_action"] = state.get("consecutive_no_action", 0) + 1
-            save_state(state)
-            if state["consecutive_no_action"] >= 3:
-                log.critical("Killswitch triggered due to 3 consecutive no-action (empty output) detections.")
-                st["status"] = "failed"
-                st["finished"] = time.time()
+            if out.strip() == "":
+                log.error("[%s] Coder returned empty output (did nothing).", task.id)
+                state["consecutive_no_action"] = state.get("consecutive_no_action", 0) + 1
                 save_state(state)
-                return "failed"
-            mark_stage(0)
-            maybe_reset_cycle()
-            continue
+                if state["consecutive_no_action"] >= 3:
+                    log.critical("Killswitch triggered due to 3 consecutive no-action (empty output) detections.")
+                    st["status"] = "failed"
+                    st["finished"] = time.time()
+                    save_state(state)
+                    return "failed"
+                need_coder = True
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
 
-        if state.get("consecutive_no_action", 0) != 0:
-            state["consecutive_no_action"] = 0
-            save_state(state)
+            if state.get("consecutive_no_action", 0) != 0:
+                state["consecutive_no_action"] = 0
+                save_state(state)
 
-        # 2. Gate A (tsc)
-        ga = check_gate_a()
-        if not ga.ok:
-            log.error("[%s] Gate A failed: %s", task.id, ga.detail)
-            generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem)
-            git_rollback(head_hash)
-            mark_stage(0)
-            maybe_reset_cycle()
-            continue
-        log.info("[%s] %sGate A (tsc) PASS%s", task.id, GREEN, RESET)
-        git_checkpoint(f"checkpoint({task.id}, gate-a)")
+            ga = check_gate_a()
+            if not ga.ok:
+                log.error("[%s] Gate A failed: %s", task.id, ga.detail)
+                generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem)
+                git_rollback(head_hash)
+                need_coder = True
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
+            log.info("[%s] %sGate A (tsc) PASS%s", task.id, GREEN, RESET)
+            git_checkpoint(f"checkpoint({task.id}, gate-a)")
+            _, coder_commit, _ = run_cmd_pgid_stream(["git", "rev-parse", "HEAD"])
+            coder_commit = coder_commit.strip()
+        else:
+            log.info("[%s] Reusing Coder output (retry from QA-Gen). Skipping Coder + Gate A.", task.id)
 
         # 3. Gate B (Playwright)
         gb = generate_and_run_gate_b(task, models.qa)
         if not gb.ok:
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
-            generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem)
-            git_rollback(head_hash)
+            pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem)
+            if decode_retry_from(pm, coder_commit) == "qa":
+                log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
+                git_rollback(coder_commit)
+                need_coder = False
+            else:
+                git_rollback(head_hash)
+                need_coder = True
             mark_stage(1)
             maybe_reset_cycle()
             continue
@@ -826,8 +867,14 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         gc = check_gate_c(task, models.reviewer)
         if not gc.ok:
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
-            generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem)
-            git_rollback(head_hash)
+            pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem)
+            if decode_retry_from(pm, coder_commit) == "qa":
+                log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
+                git_rollback(coder_commit)
+                need_coder = False
+            else:
+                git_rollback(head_hash)
+                need_coder = True
             mark_stage(2)
             maybe_reset_cycle()
             continue
