@@ -279,12 +279,14 @@
       "finished": 1787388323.313453
     },
     "T97": {
-      "attempts": 67,
+      "attempts": 68,
       "status": "running",
       "started": 1787496895.541263,
       "cycles": 1,
       "sessions": {
-        "coder": "ses_fd0e1d37effeJ9zpdC8sc6jp3Z"
+        "coder": "ses_fd0d955f5ffeOqUCY5eWUlpWPN",
+        "qa": "ses_fd0db2257ffeRYRIQ4B1iEqHIr",
+        "postmortem": "ses_fd0d9fd94ffegoozwnMD3kCDvH"
       },
       "finished": 1787495762.7332964
     }
