@@ -573,14 +573,18 @@ def extract_compact_spec(task_id: str) -> str:
     return match.group(0).strip() if match else f"Task {task_id} specification"
 
 
-def build_compact_coder_prompt(task: Task) -> str:
-    spec = extract_compact_spec(task.id)
-    recent_rules = ""
+def get_recent_postmortem_rules() -> str:
     if POSTMORTEM_FILE.exists():
         pm_text = POSTMORTEM_FILE.read_text(encoding="utf-8")
         matches = re.findall(r'"prohibited_rule":\s*"([^"]+)"', pm_text)
         if matches:
-            recent_rules = "\n【Prohibited Rules from Past Failures】:\n" + "\n".join(f"- {r}" for r in matches[-3:])
+            return "\n【Prohibited Rules from Past Failures】:\n" + "\n".join(f"- {r}" for r in matches[-3:])
+    return ""
+
+
+def build_compact_coder_prompt(task: Task) -> str:
+    spec = extract_compact_spec(task.id)
+    recent_rules = get_recent_postmortem_rules()
 
     return f"""Implement the following task. No questions allowed.
 
@@ -665,6 +669,10 @@ def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | N
     SCREENSHOT_DIR.mkdir(exist_ok=True)
     VIDEO_DIR.mkdir(exist_ok=True)
     spec = extract_compact_spec(task.id)
+    recent_rules = get_recent_postmortem_rules()
+
+    if state and task.id in state.get("tasks", {}):
+        state["tasks"][task.id].setdefault("sessions", {})["qa"] = None
 
     prompt = f"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
 
@@ -673,6 +681,7 @@ This test execution automatically records a video (.webm) of the browser in acti
 
 Specification from AGENTS.md:
 {spec}
+{recent_rules}
 
 STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
 1. Comprehensive Interaction: Do not just load the page. Actively simulate realistic, thorough user interactions for ALL features mentioned in the specification (e.g., clicking specific buttons, navigating routes, inputting data, testing shortcuts).
@@ -681,6 +690,7 @@ STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
 3. Robust Locators & Stability: Use robust locators (e.g., text, roles, specific test IDs or classes). Avoid strict container visibility checks if 0-height.
 4. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
 5. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself.
+6. Test Timeout Management: Playwright's default test timeout is 30 seconds (30000ms). If total operations, animations, or waitForTimeout delays might exceed 30 seconds, you MUST explicitly set an appropriate test timeout at the start of the test block using `test.setTimeout(60000)` or `test.setTimeout(120000)`.
 
 Investigate as many source files as you need before writing. When you have finished writing `tests/dynamic.spec.ts`, output only: DONE
 """
@@ -805,6 +815,8 @@ def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
 
 def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> dict:
     POSTMORTEM_DIR.mkdir(exist_ok=True)
+    if state and task.id in state.get("tasks", {}):
+        state["tasks"][task.id].setdefault("sessions", {})["postmortem"] = None
     prompt = f"""Analyze the failure for task {task.id}. Determine root cause and generate a strict prohibited rule for next attempt.
 
 Failure Log:
@@ -920,6 +932,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
         # 1. Coder (+ Gate A) — skipped when retrying from QA-Gen
         if need_coder:
+            if state and task.id in state.get("tasks", {}):
+                state["tasks"][task.id].setdefault("sessions", {})["coder"] = None
             prompt = build_compact_coder_prompt(task)
             code, out = run_opencode_with_retry(
                 models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium",
