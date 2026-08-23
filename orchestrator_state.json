@@ -281,12 +281,10 @@
     "T97": {
       "attempts": 37,
       "status": "running",
-      "started": 1787484991.1360142,
+      "started": 1787487834.164047,
       "cycles": 1,
-      "sessions": {
-        "coder": "ses_fd1b4b178ffenfdKhv5UwiPNrO",
-        "qa": "ses_fd19cf53cffegghyjKNF7jqQse"
-      }
+      "sessions": {},
+      "finished": 1787485069.2102664
     }
   },
   "consecutive_no_action": 0

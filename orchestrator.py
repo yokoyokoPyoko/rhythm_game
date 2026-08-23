@@ -217,7 +217,31 @@ def check_model_health(model_id: str, label: str) -> bool:
     print(f"  {CYAN}Checking{RESET} {BOLD}{label}{RESET} ({GRAY}{model_id}{RESET})... ", end="", flush=True)
     # 推論モデル（R1系）は初回レスポンスが遅いためタイムアウトを延長
     timeout = 90 if "r1" in model_id.lower() or "reasoning" in model_id.lower() else 40
-    cmd = ["opencode", "run", "--auto", "--format", "default", "-m", model_id, "Say hello"]
+
+    title = "Preflight Health Check"
+    session_id = None
+    db_path = os.path.expanduser("~/.local/share/opencode/opencode.db")
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM session WHERE title = ? AND directory = ? ORDER BY time_created DESC LIMIT 1",
+            (title, str(ROOT))
+        )
+        row = cursor.fetchone()
+        if row:
+            session_id = row[0]
+        conn.close()
+    except Exception:
+        pass
+
+    cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model_id]
+    if session_id:
+        cmd.extend(["-s", session_id])
+    else:
+        cmd.extend(["--title", title])
+    cmd.extend(["--", "Say hello"])
+
     code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix="")
 
     if "insufficient balance" in out or "suspended" in out or "payment required" in out.lower() or "depleted your monthly included credits" in out.lower():
@@ -435,6 +459,7 @@ def run_opencode_with_retry(
     task_id: str | None = None,
     role: str | None = None,
     state: dict[str, Any] | None = None,
+    fresh_sessions: bool = False,
 ) -> tuple[int, str]:
     session_id = None
     title = None
@@ -456,7 +481,7 @@ def run_opencode_with_retry(
             except Exception:
                 session_id = None
 
-        if not session_id and title:
+        if not session_id and title and not fresh_sessions:
             try:
                 conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
                 cursor = conn.cursor()
@@ -630,7 +655,7 @@ def ensure_dev_server() -> bool:
 VIDEO_DIR = ROOT / "recordings"
 
 
-def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | None = None) -> GateResult:
+def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> GateResult:
     if not task.ui or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
 
@@ -677,7 +702,7 @@ Investigate as many source files as you need before writing. When you have finis
             cont_prompt = continuation_prompt
         _, out = run_opencode_with_retry(
             qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
-            task_id=task.id, role="qa", state=state
+            task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions
         )
 
         wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
@@ -778,7 +803,7 @@ def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
     return "coder"
 
 
-def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, state: dict[str, Any] | None = None) -> dict:
+def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> dict:
     POSTMORTEM_DIR.mkdir(exist_ok=True)
     prompt = f"""Analyze the failure for task {task.id}. Determine root cause and generate a strict prohibited rule for next attempt.
 
@@ -800,7 +825,7 @@ Output JSON only:
     log.info("Postmortem analyzing failure and formulating rules...")
     _, out = run_opencode_with_retry(
         postmortem_model, prompt, timeout=None, label="Postmortem", variant="max",
-        task_id=task.id, role="postmortem", state=state
+        task_id=task.id, role="postmortem", state=state, fresh_sessions=fresh_sessions
     )
 
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
@@ -834,8 +859,10 @@ def git_rollback(commit_hash: str) -> None:
     run_cmd_pgid_stream(["git", "clean", "-fd"])
 
 
-def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argparse.Namespace) -> str:
+def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argparse.Namespace, fresh_sessions: bool = False) -> str:
     st = state["tasks"].setdefault(task.id, {"attempts": 0, "status": "pending"})
+    if fresh_sessions:
+        st["sessions"] = {}
     
     if args.only:
         log.info("[%s] --only mode: skipping dependency checks.", task.id)
@@ -896,7 +923,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             prompt = build_compact_coder_prompt(task)
             code, out = run_opencode_with_retry(
                 models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium",
-                task_id=task.id, role="coder", state=state
+                task_id=task.id, role="coder", state=state, fresh_sessions=fresh_sessions
             )
             (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
@@ -922,7 +949,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             ga = check_gate_a()
             if not ga.ok:
                 log.error("[%s] Gate A failed: %s", task.id, ga.detail)
-                generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem, state=state)
+                generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
                 need_coder = True
                 mark_stage(0)
                 maybe_reset_cycle()
@@ -935,7 +962,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.info("[%s] Reusing Coder output (retry from QA-Gen). Skipping Coder + Gate A.", task.id)
 
         # 3. Gate B (Playwright)
-        gb = generate_and_run_gate_b(task, models.qa, state=state)
+        gb = generate_and_run_gate_b(task, models.qa, state=state, fresh_sessions=fresh_sessions)
         if not gb.ok:
             if gb.fatal:
                 log.error("[%s] Gate B failed (fatal): %s", task.id, gb.detail)
@@ -944,7 +971,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 save_state(state)
                 return "failed"
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
-            pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem, state=state)
+            pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
                 need_coder = False
@@ -960,7 +987,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         gc = check_gate_c(task, models.reviewer)
         if not gc.ok:
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
-            pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem, state=state)
+            pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
                 need_coder = False
@@ -1032,6 +1059,7 @@ def main() -> None:
     parser.add_argument("--reset-state", action="store_true", help="Reset state file")
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="Total budget in minutes")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive model selector")
+    parser.add_argument("--fresh-sessions", action="store_true", help="Always create fresh OpenCode sessions for tasks (ignoring past sessions)")
     args = parser.parse_args()
 
     setup_logging()
@@ -1150,7 +1178,7 @@ def main() -> None:
                 log.info("[%s] Already passed -> Skip (--force to rerun)", t.id)
                 continue
 
-            res = exec_task(t, state, models, args)
+            res = exec_task(t, state, models, args, fresh_sessions=args.fresh_sessions)
             if res != "passed" and not args.force:
                 log.warning("Task %s did not pass (%s). Stopping range.", t.id, res)
                 break
