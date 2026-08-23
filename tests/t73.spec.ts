@@ -36,7 +36,7 @@ test('T73 editor polish test (timeline ring vertical lines & segment color codin
   await page.screenshot({ path: 'screenshots/frame_2.png' });
 
   // Add segments (up and down) for color coding
-  const addSegmentBtn = page.locator('.segment-editor-head button', { hasText: '追加' });
+  const addSegmentBtn = page.locator('[data-testid="segment-add"]');
   await addSegmentBtn.click();
   const dirSelect1 = page.locator('.segment-direction').first();
   await dirSelect1.selectOption('up');

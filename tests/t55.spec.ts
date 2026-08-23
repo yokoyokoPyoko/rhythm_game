@@ -42,7 +42,7 @@ test('T55 TOML export test', async ({ page }) => {
   await bpmInput.fill('140');
   await expect(bpmInput).toHaveValue('140');
 
-  const addSegmentBtn = page.locator('.segment-editor-head button', { hasText: '追加' });
+  const addSegmentBtn = page.locator('[data-testid="segment-add"]');
   await addSegmentBtn.click();
   const segmentItem = page.locator('.segment-list-item');
   await expect(segmentItem).toHaveCount(1);

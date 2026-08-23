@@ -33,7 +33,7 @@ test('T53 segment editor and live waveform preview test', async ({ page }) => {
   // Frame 2: Editor screen loaded (SegmentEditor & WavePreview visible)
   const waveCanvas = page.locator('canvas.wave-preview');
   await expect(waveCanvas).toBeVisible();
-  const addBtn = page.locator('.segment-editor-head button', { hasText: '追加' });
+  const addBtn = page.locator('[data-testid="segment-add"]');
   await expect(addBtn).toBeVisible();
   await page.screenshot({ path: 'screenshots/frame_2.png' });
 
