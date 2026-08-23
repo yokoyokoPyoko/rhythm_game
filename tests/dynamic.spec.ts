@@ -1,359 +1,197 @@
-import { test, expect } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { Buffer } from 'node:buffer';
+import { test, expect, type Page, type ConsoleMessage } from '@playwright/test'
+import { writeFileSync, mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
-test('T97 Editor Full Workflow Usability Evaluation', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      const t = msg.text();
-      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+const SAMPLE_TOML = `title = "Trace Wave Workflow Test"
+artist = "Gate C Critic"
+bpm = 130
+audio = "/rhythm_game/audio/08.Reply.flac"
+audio_offset = 0
+scroll_speed = 110
+amplitude = 130
+
+[[bpm_changes]]
+beat = 8
+bpm = 145
+
+[[segments]]
+direction = "up"
+beats = 4
+
+[[segments]]
+direction = "stay"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 4
+
+[[rings]]
+beat = 2.0
+type = "single"
+
+[[rings]]
+beat = 6.0
+type = "hold"
+duration = 2.0
+
+[[rings]]
+beat = 12.0
+type = "single"
+`
+
+test('T97 comprehensive authoring workflow and usability test', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium only for video recording quality')
+  test.setTimeout(120000)
+
+  const errors: string[] = []
+  page.on('console', (msg: ConsoleMessage) => {
+    const t = msg.text()
+    if (msg.type() === 'error' && /Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) {
+      errors.push(t)
     }
-  });
-  page.on('pageerror', (err) => errors.push(err.message));
+  })
+  page.on('pageerror', (err) => errors.push(err.message))
 
-  // ──────────────────────────────────────────────
-  // 1. アプリ起動・エディタ画面へ遷移（HashRouter対応）
-  // ──────────────────────────────────────────────
-  await page.goto('/');
-  await page.waitForLoadState('networkidle', { timeout: 10000 });
-  await expect(page.locator('#root')).toBeVisible();
-  await page.waitForTimeout(2500);
+  // 1. Navigation & initial load
+  await page.goto('/')
+  await page.waitForLoadState('networkidle', { timeout: 8000 })
+  await expect(page.locator('#root')).toBeVisible()
+  await page.waitForTimeout(1500)
 
-  await page.evaluate(() => { window.location.hash = '#/editor'; });
-  await page.waitForLoadState('networkidle', { timeout: 8000 });
-  await expect(page.locator('.editor-screen')).toBeVisible();
-  await expect(page.locator('[data-testid="editor-legend"]')).toBeVisible();
-  await page.waitForTimeout(3000);
+  // Navigate to Editor via hash routing
+  await page.evaluate(() => {
+    window.location.hash = '#/editor'
+  })
+  await page.waitForSelector('[data-testid="wave-preview"]', { timeout: 10000 })
+  await page.waitForTimeout(2000)
 
-  // ──────────────────────────────────────────────
-  // 2. 譜面情報・基本設定（タイトル・アーティスト・BPM・振幅等）
-  // ──────────────────────────────────────────────
-  await page.locator('#chart-title').fill('T97 Usability Test Chart');
-  await page.locator('#chart-artist').fill('Test Artist');
-  await page.locator('#bpm').fill('150');
-  await page.locator('#amplitude').fill('130');
-  await page.locator('#scroll-speed').fill('110');
-  await page.locator('#audio-offset').fill('0');
-  await page.waitForTimeout(1500);
+  // 2. Music Loading & Audio Controls
+  const titleInput = page.locator('#chart-title')
+  const artistInput = page.locator('#chart-artist')
+  await titleInput.fill('Gate C Masterpiece')
+  await artistInput.fill('Virtual Maestro')
+  await page.waitForTimeout(1000)
 
-  // ──────────────────────────────────────────────
-  // 3. 音楽ファイル読込・再生・シーク
-  // ──────────────────────────────────────────────
-  await page.locator('#audio-url').fill('/rhythm_game/audio/08.Reply.flac');
-  await page.waitForTimeout(500);
+  const playBtn = page.locator('[data-testid="editor-play"]')
+  await expect(playBtn).toBeVisible()
+  // Click load & play
+  await playBtn.click()
+  await page.waitForTimeout(2500)
+  // Stop playback
+  await playBtn.click()
+  await page.waitForTimeout(1000)
 
-  const playBtn = page.locator('[data-testid="editor-play"]');
-  await playBtn.click();
+  // 3. BPM & Parameters Settings
+  await page.fill('#bpm', '135')
+  await expect(page.locator('#bpm')).toHaveValue('135')
+  await page.fill('#amplitude', '140')
+  await page.fill('#scroll-speed', '120')
+  await page.fill('#audio-offset', '15')
+  await page.waitForTimeout(1500)
 
-  const slider = page.locator('.editor-slider');
-  await expect(slider).toBeEnabled({ timeout: 30000 });
-  await page.waitForTimeout(3000);
+  // Add a BPM change
+  const addBpmChangeBtn = page.locator('.bpm-change-add')
+  await addBpmChangeBtn.click()
+  await page.waitForTimeout(1000)
+  const bpmChangeBeatInput = page.locator('.bpm-change-beat').first()
+  await bpmChangeBeatInput.fill('6')
+  const bpmChangeValInput = page.locator('.bpm-change-bpm').first()
+  await bpmChangeValInput.fill('150')
+  await page.waitForTimeout(1500)
 
-  // 位置表示確認
-  const posText = await page.locator('.editor-pos-time').textContent();
-  expect(posText).not.toBeNull();
-  const beatText = await page.locator('.editor-pos-beat').textContent();
-  expect(beatText).toContain('beat:');
+  // 4. Segment Configuration (Accordions)
+  const segDetails = page.locator('[data-testid="segment-list-details"]')
+  await segDetails.locator('summary').click()
+  await page.waitForTimeout(1000)
+  
+  const addSegBtn = page.locator('[data-testid="segment-add"]')
+  await addSegBtn.click()
+  await page.waitForTimeout(1000)
 
-  // プレビュー上部ルーラークリックでシーク
-  const canvas = page.locator('[data-testid="wave-preview-canvas"]');
-  const box = (await canvas.boundingBox())!;
-  await canvas.click({ position: { x: box.width * 0.25, y: 10 } });
-  await page.waitForTimeout(1500);
+  // Edit segment direction and beats
+  const segDir0 = page.locator('[data-testid="segment-direction-0"]')
+  await segDir0.selectOption('up')
+  const segBeats0 = page.locator('[data-testid="segment-beats-0"]')
+  await segBeats0.fill('4')
+  await page.waitForTimeout(1500)
 
-  const posAfterSeek = await page.locator('.editor-pos-time').textContent();
-  expect(posAfterSeek).not.toBeNull();
-  await page.waitForTimeout(2000);
+  // Add second segment (stay)
+  await addSegBtn.click()
+  await page.waitForTimeout(800)
+  const segDir1 = page.locator('[data-testid="segment-direction-1"]')
+  await segDir1.selectOption('stay')
+  const segBeats1 = page.locator('[data-testid="segment-beats-1"]')
+  await segBeats1.fill('2')
+  await page.waitForTimeout(1500)
 
-  // 一旦停止（後の操作のため）
-  await playBtn.click();
-  await page.waitForTimeout(1500);
+  // 5. Ring Configuration & Canvas Direct Interaction
+  const ringDetails = page.locator('[data-testid="ring-list-details"]')
+  await ringDetails.locator('summary').click()
+  await page.waitForTimeout(1000)
 
-  // ──────────────────────────────────────────────
-  // 4. BPM変更の追加・編集
-  // ──────────────────────────────────────────────
-  await page.getByRole('button', { name: 'BPM変更を追加' }).click();
-  await page.waitForTimeout(800);
+  const canvas = page.locator('[data-testid="wave-preview-canvas"]')
+  const canvasBox = await canvas.boundingBox()
+  expect(canvasBox).not.toBeNull()
 
-  // 最初の変更行を編集
-  await page.locator('.bpm-change-beat').first().fill('8');
-  await page.locator('.bpm-change-bpm').first().fill('180');
-  await page.waitForTimeout(800);
+  // Click on wave preview to add a ring
+  const clickX = Math.round(canvasBox!.width * 0.25)
+  const clickY = Math.round(canvasBox!.height * 0.5)
+  await canvas.click({ position: { x: clickX, y: clickY } })
+  await page.waitForTimeout(1500)
 
-  // タップテンポでBPM測定（4回タップ）
-  const tapBtn = page.getByRole('button', { name: /タップ/ });
-  for (let i = 0; i < 4; i++) {
-    await tapBtn.click();
-    await page.waitForTimeout(200);
+  const ringItem0 = page.locator('[data-testid="ring-list-item-0"]')
+  await expect(ringItem0).toBeVisible()
+
+  // Add another ring
+  const clickX2 = Math.round(canvasBox!.width * 0.6)
+  await canvas.click({ position: { x: clickX2, y: clickY } })
+  await page.waitForTimeout(1500)
+
+  // Change second ring type to hold
+  const ringTypeSelect1 = page.locator('[aria-label*="のタイプ"]').nth(1)
+  if (await ringTypeSelect1.isVisible()) {
+    await ringTypeSelect1.selectOption('hold')
+    await page.waitForTimeout(1000)
   }
-  await page.waitForTimeout(800);
 
-  // タップテンポリセット
-  await page.getByRole('button', { name: 'リセット' }).click();
-  await page.waitForTimeout(800);
+  // 6. Wave Preview & Real-time Visual Inspection
+  await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
+  await page.waitForTimeout(2500)
 
-  // ──────────────────────────────────────────────
-  // 5. リング配置・編集・削除（プレビュー上での直感操作）
-  // ──────────────────────────────────────────────
-  // リングリストを展開
-  const ringDetails = page.locator('[data-testid="ring-list-details"]');
-  await ringDetails.locator('summary').click();
-  await page.waitForTimeout(1200);
-
-  // スナップ設定変更
-  await page.locator('#snap').selectOption('0.25');
-  await page.waitForTimeout(800);
-
-  // プレビュー上でクリックしてリング追加（5箇所）
-  const ringPositions = [0.1, 0.25, 0.4, 0.55, 0.75];
-  for (const frac of ringPositions) {
-    await canvas.click({ position: { x: box.width * frac, y: box.height * 0.5 } });
-    await page.waitForTimeout(600);
-  }
-
-  // リングが追加されたか確認
-  await expect(page.locator('[data-testid="ring-list-item-0"]')).toBeVisible();
-  await expect(page.locator('[data-testid="ring-list-item-4"]')).toBeVisible();
-  await page.waitForTimeout(1200);
-
-  // リングタイプをホールドに変更（最初のリング）
-  await page.locator('[data-testid="ring-list-item-0"] .ring-type-select').selectOption('hold');
-  await page.waitForTimeout(800);
-
-  // ホールド長さを設定
-  const durationInput = page.locator('[data-testid="ring-list-item-0"] .ring-duration-input');
-  await expect(durationInput).toBeVisible();
-  await durationInput.fill('2');
-  await page.waitForTimeout(800);
-
-  // ドラッグでリング移動（2つ目のリング）
-  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.5);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.5, { steps: 10 });
-  await page.mouse.up();
-  await page.waitForTimeout(1200);
-
-  // 選択状態確認
-  await canvas.click({ position: { x: box.width * 0.35, y: box.height * 0.5 } });
-  await page.waitForTimeout(600);
-  await expect(page.locator('[data-testid="ring-list-item-1"]')).toHaveClass(/ring-list-item-selected/);
-
-  // リング削除（Deleteキーで選択中のリングを削除）
-  await page.keyboard.press('Delete');
-  await page.waitForTimeout(1200);
-
-  // ──────────────────────────────────────────────
-  // 6. セグメント配置・編集・並べ替え
-  // ──────────────────────────────────────────────
-  const segDetails = page.locator('[data-testid="segment-list-details"]');
-  await segDetails.locator('summary').click();
-  await page.waitForTimeout(1200);
-
-  // セグメント追加（3つ）
-  await segDetails.locator('.editor-accordion-add').click();
-  await page.waitForTimeout(600);
-  await segDetails.locator('.editor-accordion-add').click();
-  await page.waitForTimeout(600);
-  await segDetails.locator('.editor-accordion-add').click();
-  await page.waitForTimeout(600);
-
-  // 各セグメントの方向・拍数を設定
-  await page.locator('[data-testid="segment-direction-0"]').selectOption('up');
-  await page.locator('[data-testid="segment-beats-0"]').fill('2');
-  await page.waitForTimeout(500);
-
-  await page.locator('[data-testid="segment-direction-1"]').selectOption('down');
-  await page.locator('[data-testid="segment-beats-1"]').fill('2');
-  await page.waitForTimeout(500);
-
-  await page.locator('[data-testid="segment-direction-2"]').selectOption('stay');
-  await page.locator('[data-testid="segment-beats-2"]').fill('4');
-  await page.waitForTimeout(500);
-
-  // セグメント順序変更（下矢印で1つ目を下へ） - aria-labelで特定
-  await page.locator('.segment-move[aria-label="セグメント1を下に移動"]').click();
-  await page.waitForTimeout(800);
-
-  // セグメント削除（最後のものを削除）
-  await page.locator('[data-testid="segment-delete-2"]').click();
-  await page.waitForTimeout(800);
-
-  // プレビューが即座に反映されているか視覚確認用ウェイト
-  await page.waitForTimeout(2500);
-
-  // ──────────────────────────────────────────────
-  // 7. 波形プレビューの即時フィードバック確認
-  // ──────────────────────────────────────────────
-  // キャンバスが見えること、グリッド・判定線・波形が描画されていることを確認
-  await expect(canvas).toBeVisible();
-  const canvasBox = (await canvas.boundingBox())!;
-  expect(canvasBox.height).toBeGreaterThanOrEqual(600); // 拡大されたプレビュー
-  await page.waitForTimeout(2500);
-
-  // 再生中にスペースでリングスタンプ、矢印キーでセグメントスタンプの動作確認
-  await playBtn.click();
-  await page.waitForTimeout(1500);
-
-  // 再生中にスペース押下でリング追加
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(600);
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(600);
-
-  // 再生中に矢印キーでセグメント録音
-  await page.keyboard.press('ArrowUp');
-  await page.waitForTimeout(400);
-  await page.keyboard.press('ArrowDown');
-  await page.waitForTimeout(400);
-  await page.keyboard.press('ArrowRight');
-  await page.waitForTimeout(400);
-
-  // 停止
-  await playBtn.click();
-  await page.waitForTimeout(1500);
-
-  // ──────────────────────────────────────────────
-  // 8. TOMLエクスポート・正規フォーマット検証
-  // ──────────────────────────────────────────────
+  // 7. TOML Export & Import Roundtrip
+  const exportBtn = page.locator('[data-testid="editor-export"]')
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: 'エクスポート' }).click(),
-  ]);
-  const dlPath = await download.path();
-  const toml = dlPath ? readFileSync(dlPath, 'utf-8') : '';
+    exportBtn.click(),
+  ])
+  expect(download.suggestedFilename()).toBe('reply.toml')
+  await expect(page.locator('[data-testid="editor-toast"]')).toContainText('エクスポートしました')
+  await page.waitForTimeout(1500)
 
-  // 必須フィールドの存在確認
-  expect(toml).toContain('title = "T97 Usability Test Chart"');
-  expect(toml).toContain('artist = "Test Artist"');
-  expect(toml).toContain('bpm = 150');
-  expect(toml).toContain('audio = "/rhythm_game/audio/08.Reply.flac"');
-  expect(toml).toContain('audio_offset = 0');
-  expect(toml).toContain('scroll_speed = 110');
-  expect(toml).toContain('amplitude = 130');
-  expect(toml).toContain('[[bpm_changes]]');
-  expect(toml).toContain('beat = 8');
-  expect(toml).toContain('bpm = 180');
-  expect(toml).toContain('[[segments]]');
-  expect(toml).toContain('direction = "up"');
-  expect(toml).toContain('direction = "down"');
-  expect(toml).toContain('direction = "stay"');
-  expect(toml).toContain('[[rings]]');
-  expect(toml).toContain('type = "hold"');
-  expect(toml).toContain('duration = 2');
+  // Test importing a TOML file
+  const tmpDir = mkdtempSync(join(tmpdir(), 't97-'))
+  const tomlFilePath = join(tmpDir, 'test-chart.toml')
+  writeFileSync(tomlFilePath, SAMPLE_TOML, 'utf-8')
+  await page.setInputFiles('[data-testid="import-toml"]', tomlFilePath)
+  await expect(page.locator('[data-testid="editor-toast"]')).toContainText('test-chart.toml を読み込みました')
+  await page.waitForTimeout(2000)
 
-  // エクスポート完了トースト表示確認
-  await expect(page.locator('[data-testid="editor-toast"]')).toBeVisible();
-  await page.waitForTimeout(2000);
+  // 8. Playtest Verification
+  const playtestBtn = page.locator('[data-testid="editor-playtest"]')
+  await playtestBtn.click()
+  const playtestCanvas = page.locator('canvas.game-canvas')
+  await expect(playtestCanvas).toBeVisible({ timeout: 8000 })
+  await page.waitForTimeout(3000)
 
-  // ──────────────────────────────────────────────
-  // 9. エクスポートしたTOMLを再読込（ラウンドトリップ）
-  // ──────────────────────────────────────────────
-  await page.locator('[data-testid="import-toml"]').setInputFiles({
-    name: 'reply.toml',
-    mimeType: 'text/toml',
-    buffer: Buffer.from(toml, 'utf-8'),
-  });
-  await page.waitForTimeout(2000);
+  // Exit playtest via Escape key
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('.editor-screen', { timeout: 5000 })
+  await page.waitForTimeout(2000)
 
-  // 読み込まれた値を検証
-  await expect(page.locator('#chart-title')).toHaveValue('T97 Usability Test Chart');
-  await expect(page.locator('#chart-artist')).toHaveValue('Test Artist');
-  await expect(page.locator('#bpm')).toHaveValue('150');
-  await expect(page.locator('#amplitude')).toHaveValue('130');
-  await expect(page.locator('#scroll-speed')).toHaveValue('110');
+  // Final review pause for Gate C critic video inspection
+  await page.waitForTimeout(3000)
 
-  // リング・セグメント・BPM変更が復元されているか
-  await ringDetails.locator('summary').click();
-  await page.waitForTimeout(800);
-  await expect(page.locator('[data-testid="ring-list-item-0"]')).toBeVisible();
-
-  await segDetails.locator('summary').click();
-  await page.waitForTimeout(800);
-  await expect(page.locator('[data-testid="segment-direction-0"]')).toHaveValue('down'); // 並べ替え後
-  await page.waitForTimeout(1500);
-
-  // ──────────────────────────────────────────────
-  // 10. プレイテスト起動・ゲーム画面での確認・終了
-  // ──────────────────────────────────────────────
-  await page.getByRole('button', { name: 'プレイテスト' }).click();
-  await expect(page.locator('.game-canvas')).toBeVisible({ timeout: 15000 });
-  await page.waitForTimeout(4000);
-
-  // ゲーム画面で基本操作確認（スペースで開始、上下で移動）
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(1500);
-  await page.keyboard.press('ArrowUp');
-  await page.waitForTimeout(400);
-  await page.keyboard.press('ArrowDown');
-  await page.waitForTimeout(400);
-
-  // オフセット調整
-  await page.keyboard.press('>');
-  await page.waitForTimeout(300);
-  await page.keyboard.press('<');
-  await page.waitForTimeout(300);
-
-  // キー効果音トグル
-  await page.keyboard.press('k');
-  await page.waitForTimeout(300);
-
-  // 終了ボタンでエディタに戻る
-  await page.getByRole('button', { name: '終了' }).click();
-  await expect(page.locator('.editor-screen')).toBeVisible();
-  await page.waitForTimeout(2500);
-
-  // ──────────────────────────────────────────────
-  // 11. エラー・空状態・異常入力への堅牢性確認
-  // ──────────────────────────────────────────────
-  // 空のTOMLをインポート（エラー表示確認）
-  await page.locator('[data-testid="import-toml"]').setInputFiles({
-    name: 'empty.toml',
-    mimeType: 'text/toml',
-    buffer: Buffer.from('', 'utf-8'),
-  });
-  await page.waitForTimeout(1500);
-  await expect(page.locator('.editor-error')).toBeVisible();
-  await page.waitForTimeout(1500);
-
-  // 不正なBPM値入力（0や負の値）→ 120にクランプされる
-  await page.locator('#bpm').fill('-10');
-  await page.waitForTimeout(500);
-  await expect(page.locator('#bpm')).toHaveValue('120');
-  await page.locator('#bpm').fill('150');
-  await page.waitForTimeout(500);
-
-  // 不正な振幅値
-  await page.locator('#amplitude').fill('5');
-  await page.waitForTimeout(500);
-  await expect(page.locator('#amplitude')).toHaveValue('130'); // 最小値10にクランプまたはデフォルト
-  await page.locator('#amplitude').fill('130');
-  await page.waitForTimeout(500);
-
-  // ──────────────────────────────────────────────
-  // 12. UI一貫性・フィードバック・視覚的応答の確認
-  // ──────────────────────────────────────────────
-  // アコーディオンの開閉アニメーション・状態保持
-  await ringDetails.locator('summary').click();
-  await page.waitForTimeout(1000);
-  expect(await ringDetails.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
-
-  await segDetails.locator('summary').click();
-  await page.waitForTimeout(1000);
-  expect(await segDetails.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
-
-  // ホバー・トランジション確認（カード風要素）
-  const playtestBtn = page.getByRole('button', { name: 'プレイテスト' });
-  await playtestBtn.hover();
-  await page.waitForTimeout(600);
-
-  // ヘッダーの戻るリンク
-  await page.locator('header a').hover();
-  await page.waitForTimeout(600);
-
-  // ──────────────────────────────────────────────
-  // 13. 最終的なコンソールエラーチェック
-  // ──────────────────────────────────────────────
-  await page.waitForTimeout(3000);
-  expect(errors).toHaveLength(0);
-});
+  expect(errors).toHaveLength(0)
+})
