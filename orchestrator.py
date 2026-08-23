@@ -20,6 +20,7 @@ import os
 import queue
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -424,8 +425,58 @@ def rate_limit_sleep(model: str) -> None:
         time.sleep(5)
 
 
-def run_opencode_with_retry(model: str, prompt: str, timeout: int | None = None, label: str = "OpenCode", variant: str | None = None, files: list[str] | None = None) -> tuple[int, str]:
+def run_opencode_with_retry(
+    model: str,
+    prompt: str,
+    timeout: int | None = None,
+    label: str = "OpenCode",
+    variant: str | None = None,
+    files: list[str] | None = None,
+    task_id: str | None = None,
+    role: str | None = None,
+    state: dict[str, Any] | None = None,
+) -> tuple[int, str]:
+    session_id = None
+    title = None
+    if task_id and role and state is not None:
+        title = f"[{task_id}] {role.capitalize()}"
+        task_st = state.setdefault("tasks", {}).setdefault(task_id, {})
+        sessions = task_st.setdefault("sessions", {})
+        session_id = sessions.get(role)
+
+        db_path = os.path.expanduser("~/.local/share/opencode/opencode.db")
+        if session_id:
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM session WHERE id = ?", (session_id,))
+                if not cursor.fetchone():
+                    session_id = None
+                conn.close()
+            except Exception:
+                session_id = None
+
+        if not session_id and title:
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id FROM session WHERE title = ? AND directory = ? ORDER BY time_created DESC LIMIT 1",
+                    (title, str(ROOT))
+                )
+                row = cursor.fetchone()
+                if row:
+                    session_id = row[0]
+                conn.close()
+            except Exception:
+                pass
+
     cmd = ["opencode", "run", "--auto", "--format", "default", "--dir", str(ROOT), "-m", model]
+    if session_id:
+        cmd.extend(["-s", session_id])
+    elif title:
+        cmd.extend(["--title", title])
+
     if variant:
         cmd.extend(["--variant", variant])
     if files:
@@ -437,10 +488,31 @@ def run_opencode_with_retry(model: str, prompt: str, timeout: int | None = None,
         rate_limit_sleep(model)
         variant_info = f", variant={variant}" if variant else ""
         timeout_disp = f"{timeout}s" if timeout else "∞"
-        log.info("Dispatching %s%s%s (model=%s%s%s%s, attempt=%d/%d, timeout=%s)", BOLD, label, RESET, GRAY, model, variant_info, RESET, attempt, len(BACKOFF_DELAYS), timeout_disp)
+        session_info = f" (session={session_id})" if session_id else (f" (title={title})" if title else "")
+        log.info("Dispatching %s%s%s (model=%s%s%s%s, attempt=%d/%d, timeout=%s)%s", BOLD, label, RESET, GRAY, model, variant_info, RESET, attempt, len(BACKOFF_DELAYS), timeout_disp, session_info)
         print(f"  {GRAY}┌─ Start: {label} ──────────────────────────────────────{RESET}", flush=True)
         code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
         print(f"  {GRAY}└─ End: {label} (exit={code}) ─────────────────────────────────{RESET}", flush=True)
+
+        if task_id and role and state is not None and not session_id and title:
+            try:
+                db_path = os.path.expanduser("~/.local/share/opencode/opencode.db")
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id FROM session WHERE title = ? AND directory = ? ORDER BY time_created DESC LIMIT 1",
+                    (title, str(ROOT))
+                )
+                row = cursor.fetchone()
+                if row:
+                    session_id = row[0]
+                    task_st = state.setdefault("tasks", {}).setdefault(task_id, {})
+                    task_st.setdefault("sessions", {})[role] = session_id
+                    save_state(state)
+                    log.info("Persisted session %s for task=%s, role=%s", session_id, task_id, role)
+                conn.close()
+            except Exception as e:
+                log.debug("Failed to fetch newly created session_id: %s", e)
 
         if "insufficient balance" in out or "suspended" in out:
             print(f"\n{RED}{BOLD}[CRITICAL] Account suspended due to insufficient balance on {model}{RESET}\n")
@@ -558,7 +630,7 @@ def ensure_dev_server() -> bool:
 VIDEO_DIR = ROOT / "recordings"
 
 
-def generate_and_run_gate_b(task: Task, qa_model: str) -> GateResult:
+def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | None = None) -> GateResult:
     if not task.ui or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
 
@@ -603,7 +675,10 @@ Investigate as many source files as you need before writing. When you have finis
         else:
             log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
             cont_prompt = continuation_prompt
-        _, out = run_opencode_with_retry(qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max")
+        _, out = run_opencode_with_retry(
+            qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
+            task_id=task.id, role="qa", state=state
+        )
 
         wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
         if wrote_spec:
@@ -703,7 +778,7 @@ def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
     return "coder"
 
 
-def generate_postmortem(task: Task, error_detail: str, postmortem_model: str) -> dict:
+def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, state: dict[str, Any] | None = None) -> dict:
     POSTMORTEM_DIR.mkdir(exist_ok=True)
     prompt = f"""Analyze the failure for task {task.id}. Determine root cause and generate a strict prohibited rule for next attempt.
 
@@ -723,7 +798,10 @@ Output JSON only:
 }}
 """
     log.info("Postmortem analyzing failure and formulating rules...")
-    _, out = run_opencode_with_retry(postmortem_model, prompt, timeout=None, label="Postmortem", variant="max")
+    _, out = run_opencode_with_retry(
+        postmortem_model, prompt, timeout=None, label="Postmortem", variant="max",
+        task_id=task.id, role="postmortem", state=state
+    )
 
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
     with open(POSTMORTEM_FILE, "a", encoding="utf-8") as f:
@@ -816,7 +894,10 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         # 1. Coder (+ Gate A) — skipped when retrying from QA-Gen
         if need_coder:
             prompt = build_compact_coder_prompt(task)
-            code, out = run_opencode_with_retry(models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium")
+            code, out = run_opencode_with_retry(
+                models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium",
+                task_id=task.id, role="coder", state=state
+            )
             (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
             if out.strip() == "":
@@ -841,7 +922,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             ga = check_gate_a()
             if not ga.ok:
                 log.error("[%s] Gate A failed: %s", task.id, ga.detail)
-                generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem)
+                generate_postmortem(task, f"Gate A (tsc) failed:\n{ga.detail}", models.postmortem, state=state)
                 need_coder = True
                 mark_stage(0)
                 maybe_reset_cycle()
@@ -854,7 +935,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.info("[%s] Reusing Coder output (retry from QA-Gen). Skipping Coder + Gate A.", task.id)
 
         # 3. Gate B (Playwright)
-        gb = generate_and_run_gate_b(task, models.qa)
+        gb = generate_and_run_gate_b(task, models.qa, state=state)
         if not gb.ok:
             if gb.fatal:
                 log.error("[%s] Gate B failed (fatal): %s", task.id, gb.detail)
@@ -863,7 +944,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 save_state(state)
                 return "failed"
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
-            pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem)
+            pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem, state=state)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
                 need_coder = False
@@ -879,7 +960,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         gc = check_gate_c(task, models.reviewer)
         if not gc.ok:
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
-            pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem)
+            pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem, state=state)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
                 need_coder = False
