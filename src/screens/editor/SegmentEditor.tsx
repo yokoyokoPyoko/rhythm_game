@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import type { Segment } from '../../types'
 
 interface SegmentEditorProps {
@@ -6,7 +7,16 @@ interface SegmentEditorProps {
 }
 
 export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEditorProps) {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (segments.length > 0) {
+      setOpen(true)
+    }
+  }, [segments.length])
+
   const addSegment = () => {
+    setOpen(true)
     onSegmentsChange([...segments, { direction: 'up', beats: 1 }])
   }
 
@@ -33,7 +43,8 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
   }
 
   return (
-    <details className="editor-accordion" data-testid="segment-list-details">
+    <section className="editor-pane editor-accordion">
+      <details data-testid="segment-list-details" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
       <summary className="editor-accordion-summary">
         <span>セグメント ({segments.length})</span>
         <button
@@ -112,6 +123,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
           ))}
         </ul>
       )}
-    </details>
+      </details>
+    </section>
   )
 }

@@ -246,7 +246,7 @@ export default function WavePreview({
         nearest = i
       }
     })
-    return nearestDist < 14 ? nearest : -1
+    return nearestDist < 35 ? nearest : -1
   }
 
   const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {

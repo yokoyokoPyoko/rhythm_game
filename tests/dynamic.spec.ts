@@ -43,7 +43,7 @@ test('T97 Editor Full Workflow Usability Evaluation', async ({ page }) => {
   await page.locator('#audio-url').fill('/rhythm_game/audio/08.Reply.flac');
   await page.waitForTimeout(500);
 
-  const playBtn = page.getByRole('button', { name: /読込・再生|再生/ });
+  const playBtn = page.locator('[data-testid="editor-play"]');
   await playBtn.click();
 
   const slider = page.locator('.editor-slider');
@@ -122,7 +122,9 @@ test('T97 Editor Full Workflow Usability Evaluation', async ({ page }) => {
   await page.waitForTimeout(800);
 
   // ホールド長さを設定
-  await page.locator('[data-testid="ring-list-item-0"] .ring-duration-input').fill('2');
+  const durationInput = page.locator('[data-testid="ring-list-item-0"] .ring-duration-input');
+  await expect(durationInput).toBeVisible();
+  await durationInput.fill('2');
   await page.waitForTimeout(800);
 
   // ドラッグでリング移動（2つ目のリング）

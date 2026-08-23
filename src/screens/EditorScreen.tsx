@@ -43,6 +43,13 @@ export default function EditorScreen() {
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [loadingAudio, setLoadingAudio] = useState(false)
+  const [ringDetailsOpen, setRingDetailsOpen] = useState(false)
+
+  useEffect(() => {
+    if (rings.length > 0) {
+      setRingDetailsOpen(true)
+    }
+  }, [rings.length])
   const playtestActiveRef = useRef(false)
   const toastTimerRef = useRef<number | null>(null)
 
@@ -522,7 +529,8 @@ export default function EditorScreen() {
           />
           <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
 
-          <details className="editor-accordion" data-testid="ring-list-details">
+          <section className="editor-pane editor-accordion">
+            <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>
             <summary className="editor-accordion-summary">
               <span>リング録音 ({rings.length})</span>
             </summary>
@@ -551,11 +559,11 @@ export default function EditorScreen() {
                 {[...rings]
                   .map((ring, i) => ({ ring, i }))
                   .sort((a, b) => a.ring.beat - b.ring.beat)
-                  .map(({ ring, i }) => (
+                  .map(({ ring, i }, sortedIdx) => (
                   <li
                     key={`${i}-${ring.beat}`}
                     className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}`}
-                    data-testid={`ring-list-item-${i}`}
+                    data-testid={`ring-list-item-${sortedIdx}`}
                   >
                     <span
                       className="ring-list-beat"
@@ -619,6 +627,7 @@ export default function EditorScreen() {
               </ul>
             )}
           </details>
+          </section>
         </main>
       </div>
 
