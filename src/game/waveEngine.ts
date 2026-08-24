@@ -3,6 +3,8 @@ import type { Segment } from '../types';
 
 const TW_CENTER_Y = 600 / 2;
 
+export const WAVELENGTH_BEATS = 4;
+
 interface WavePoint {
   beat: number;
   y: number;
@@ -48,10 +50,11 @@ export class WaveEngine {
       }
       beat += beats;
       const dir = sanitizeDirection(seg.direction);
+      const move = (2 * this.amplitude) * (beats / WAVELENGTH_BEATS);
       if (dir === 'up') {
-        currentY = waveTop;
+        currentY = Math.max(waveTop, currentY - move);
       } else if (dir === 'down') {
-        currentY = waveBottom;
+        currentY = Math.min(waveBottom, currentY + move);
       } else {
         // stay: currentY remains unchanged
       }

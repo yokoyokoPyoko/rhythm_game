@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
@@ -10,6 +10,17 @@ const SUB_COLOR = '#22d3ee'
 const STAY_COLOR = '#fbbf24'
 const SELECT_COLOR = '#ededed'
 
+export interface WaveView {
+  startBeat: number
+  beats: number
+}
+
+export interface RecordingState {
+  beat: number
+  y: number
+  trajectory: { beat: number; y: number }[]
+}
+
 export interface WavePreviewProps {
   segments: Segment[]
   bpm: number
@@ -19,6 +30,9 @@ export interface WavePreviewProps {
   snap?: number
   selectedRing?: number | null
   positionMs?: number
+  view?: WaveView
+  recording?: RecordingState | null
+  onViewChange?: (view: WaveView) => void
   onAddRing?: (beat: number) => number | undefined
   onMoveRing?: (index: number, beat: number) => void
   onSelectRing?: (index: number | null) => void
@@ -35,6 +49,9 @@ export default function WavePreview({
   snap = 0.25,
   selectedRing = null,
   positionMs,
+  view,
+  recording = null,
+  onViewChange,
   onAddRing,
   onMoveRing,
   onSelectRing,
@@ -42,8 +59,13 @@ export default function WavePreview({
   onSeek,
 }: WavePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const geoRef = useRef<{ lastBeat: number }>({ lastBeat: 4 })
+  const geoRef = useRef<{ lastBeat: number; viewStart: number; viewBeats: number }>({
+    lastBeat: 4,
+    viewStart: 0,
+    viewBeats: 16,
+  })
   const dragRef = useRef<{ index: number } | null>(null)
+  const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
 
   const safeSnap = snap > 0 ? snap : 0.25
 
@@ -72,8 +94,17 @@ export default function WavePreview({
     const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * amp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
-    const lastBeat = Math.max(totalBeats, 4)
-    geoRef.current = { lastBeat }
+    const contentBeats = Math.max(
+      totalBeats,
+      rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), 0),
+      4,
+    )
+    const lastBeat = Math.max(contentBeats, 4)
+
+    const viewStart = view && Number.isFinite(view.startBeat) ? view.startBeat : 0
+    const viewBeats = view && view.beats > 0 ? view.beats : lastBeat
+    const beatToX = (b: number) => ((b - viewStart) / viewBeats) * cssW
+    geoRef.current = { lastBeat, viewStart, viewBeats }
 
     // Horizontal guide lines: top / center / bottom (high visibility)
     ctx.lineWidth = 1
@@ -91,9 +122,14 @@ export default function WavePreview({
     ctx.fillRect(0, 0, cssW, RULER_H)
     ctx.font = '11px Inter, system-ui, sans-serif'
     ctx.textBaseline = 'top'
-    for (let b = 0; b <= lastBeat; b += 1) {
-      const gx = (b / lastBeat) * cssW
-      const strong = Math.round(b) % 4 === 0
+    const minorStep = viewBeats <= 8 ? 0.5 : viewBeats <= 32 ? 1 : 4
+    const firstMinor = Math.ceil(viewStart / minorStep - 1e-9) * minorStep
+    for (let i = 0; ; i++) {
+      const b = Number((firstMinor + i * minorStep).toFixed(4))
+      if (b > viewStart + viewBeats + 1e-9) break
+      const gx = beatToX(b)
+      if (gx < -2 || gx > cssW + 2) continue
+      const strong = Math.abs(b % 4) < 1e-6
       ctx.strokeStyle = strong ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.07)'
       ctx.lineWidth = strong ? 1.5 : 1
       ctx.beginPath()
@@ -118,38 +154,71 @@ export default function WavePreview({
     ctx.fillText('START', 6, RULER_H + 4)
 
     // Segment color coding (up = accent, down = sub, stay = warning)
+    const drawRangeEnd = viewStart + viewBeats
+    const subSteps = Math.max(20, Math.round((drawRangeEnd - viewStart) * 8))
     let currentBeat = 0
     for (const seg of segments) {
-      const subSteps = Math.max(10, Math.round((seg.beats / lastBeat) * cssW))
+      const segEnd = currentBeat + seg.beats
+      if (segEnd < viewStart || currentBeat > drawRangeEnd) {
+        currentBeat = segEnd
+        continue
+      }
       ctx.strokeStyle =
         seg.direction === 'up' ? ACCENT_COLOR : seg.direction === 'down' ? SUB_COLOR : STAY_COLOR
       ctx.lineWidth = 2.5
       ctx.beginPath()
       for (let s = 0; s <= subSteps; s++) {
-        const b = currentBeat + (s / subSteps) * seg.beats
-        const x = (b / lastBeat) * cssW
+        const b = viewStart + (s / subSteps) * (drawRangeEnd - viewStart)
+        const x = beatToX(b)
         const y = mapY(engine.waveYAt(b))
         if (s === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
       }
       ctx.stroke()
-      currentBeat += seg.beats
+      currentBeat = segEnd
     }
 
     if (segments.length === 0) {
       ctx.strokeStyle = ACCENT_COLOR
       ctx.lineWidth = 2.5
       ctx.beginPath()
-      ctx.moveTo(0, mapY(GAME_CENTER_Y - ampVal))
-      ctx.lineTo(cssW, mapY(GAME_CENTER_Y - ampVal))
+      ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - ampVal))
+      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - ampVal))
+      ctx.stroke()
+    }
+
+    // Recording trajectory overlay (dashed) + live ball
+    if (recording && recording.trajectory.length > 0) {
+      ctx.strokeStyle = 'rgba(34,211,238,0.9)'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 5])
+      ctx.beginPath()
+      recording.trajectory.forEach((p, i) => {
+        const x = beatToX(p.beat)
+        const y = mapY(p.y)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      })
+      ctx.stroke()
+      ctx.setLineDash([])
+      const liveX = beatToX(recording.beat)
+      const liveY = mapY(recording.y)
+      ctx.fillStyle = '#22d3ee'
+      ctx.beginPath()
+      ctx.arc(liveX, liveY, 9, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.lineWidth = 2
+      ctx.strokeStyle = '#0a0a0a'
+      ctx.beginPath()
+      ctx.arc(liveX, liveY, 9, 0, Math.PI * 2)
       ctx.stroke()
     }
 
     // Playhead (current playback position)
     if (Number.isFinite(positionMs) && positionMs! > 0) {
       const headBeat = timeline.msToBeat(positionMs!)
-      const hx = (headBeat / lastBeat) * cssW
-      if (hx >= 0 && hx <= cssW) {
+      const hx = beatToX(headBeat)
+      if (hx >= -2 && hx <= cssW + 2) {
         ctx.strokeStyle = 'rgba(74,222,128,0.85)'
         ctx.lineWidth = 1.5
         ctx.setLineDash([4, 4])
@@ -166,7 +235,8 @@ export default function WavePreview({
 
     // Rings (X axis = beat position)
     rings.forEach((r, i) => {
-      const rx = (r.beat / lastBeat) * cssW
+      const rx = beatToX(r.beat)
+      if (rx < -40 || rx > cssW + 40) return
       const isSelected = i === selectedRing
       const ry = mapY(engine.waveYAt(r.beat))
       const isHold = r.type === 'hold'
@@ -179,7 +249,7 @@ export default function WavePreview({
 
       if (isHold && Number.isFinite(r.duration) && r.duration! > 0) {
         const tailBeat = r.beat + r.duration!
-        const tx = (tailBeat / lastBeat) * cssW
+        const tx = beatToX(tailBeat)
         ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.6)'
         ctx.lineWidth = 8
         ctx.beginPath()
@@ -207,20 +277,53 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing, positionMs])
+  }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing, positionMs, view, recording])
+
+  const xToBeatLocal = (x: number, width: number): number => {
+    const g = geoRef.current
+    return g.viewStart + (x / width) * g.viewBeats
+  }
+
+  const addRingAt = (beat: number) => {
+    const snapped = Math.round(beat / safeSnap) * safeSnap
+    const added = onAddRing?.(snapped)
+    if (added != null) onSelectRing?.(added)
+  }
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (!dragRef.current) return
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const beat = (x / rect.width) * geoRef.current.lastBeat
-      onMoveRing?.(dragRef.current.index, beat)
+      if (dragRef.current) {
+        const x = e.clientX - rect.left
+        const beat = xToBeatLocal(x, rect.width)
+        onMoveRing?.(dragRef.current.index, beat)
+        return
+      }
+      if (panRef.current) {
+        const dx = e.clientX - panRef.current.startX
+        if (Math.abs(dx) > 3 || Math.abs(e.clientY - panRef.current.startY) > 3) {
+          panRef.current.moved = true
+        }
+        const dxBeat = (dx / rect.width) * panRef.current.viewBeats
+        onViewChange?.({
+          startBeat: Math.max(0, panRef.current.startBeat - dxBeat),
+          beats: panRef.current.viewBeats,
+        })
+      }
     }
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      if (panRef.current && !panRef.current.moved) {
+        const canvas = canvasRef.current
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect()
+          const beat = xToBeatLocal(e.clientX, rect.width)
+          addRingAt(beat)
+        }
+      }
       dragRef.current = null
+      panRef.current = null
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -228,18 +331,18 @@ export default function WavePreview({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [onMoveRing])
+  }, [onMoveRing, onViewChange])
 
   const nearestRingIndex = (clientX: number): number => {
     const canvas = canvasRef.current
     if (!canvas) return -1
     const rect = canvas.getBoundingClientRect()
     const clickX = clientX - rect.left
-    const lastBeat = geoRef.current.lastBeat
+    const g = geoRef.current
     let nearest = -1
     let nearestDist = Infinity
     rings.forEach((r, i) => {
-      const rx = (r.beat / lastBeat) * rect.width
+      const rx = ((r.beat - g.viewStart) / g.viewBeats) * rect.width
       const d = Math.abs(rx - clickX)
       if (d < nearestDist) {
         nearestDist = d
@@ -258,7 +361,7 @@ export default function WavePreview({
     // Click on the top ruler strip seeks playback instead of placing a ring.
     if (onSeek && clickY < RULER_H) {
       const x = e.clientX - rect.left
-      const beat = (x / rect.width) * geoRef.current.lastBeat
+      const beat = xToBeatLocal(x, rect.width)
       onSeek(Math.max(0, beat))
       return
     }
@@ -270,16 +373,34 @@ export default function WavePreview({
       e.preventDefault()
       return
     }
-    const x = e.clientX - rect.left
-    const beat = (x / rect.width) * geoRef.current.lastBeat
-    const snapped = Math.round(beat / safeSnap) * safeSnap
-    const added = onAddRing?.(snapped)
-    if (added != null) onSelectRing?.(added)
+    // empty area: begin a potential pan; if no movement, treat as add on mouseup
+    panRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startBeat: geoRef.current.viewStart,
+      viewBeats: geoRef.current.viewBeats,
+      moved: false,
+    }
+    e.preventDefault()
   }
 
   const handleDoubleClick = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     const hit = nearestRingIndex(e.clientX)
     if (hit >= 0) onDeleteRing?.(hit)
+  }
+
+  const handleWheel = (e: ReactWheelEvent<HTMLCanvasElement>) => {
+    if (!onViewChange) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const g = geoRef.current
+    const bCursor = g.viewStart + (x / rect.width) * g.viewBeats
+    const factor = e.deltaY < 0 ? 0.85 : 1.15
+    const newBeats = Math.max(1, Math.min(200, g.viewBeats * factor))
+    const newStart = bCursor - (x / rect.width) * newBeats
+    onViewChange({ startBeat: Math.max(0, newStart), beats: newBeats })
   }
 
   return (
@@ -290,9 +411,10 @@ export default function WavePreview({
         data-testid="wave-preview-canvas"
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
+        onWheel={handleWheel}
       />
       <p className="editor-hint">
-        クリックでリング追加・ドラッグで移動・ダブルクリックで削除。セグメントは波形に沿って描画
+        クリックでリング追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム
       </p>
     </div>
   )

@@ -5,13 +5,16 @@ import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio } from '../audio/loader'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
+import { Cursor } from '../game/cursor'
+import { WaveEngine } from '../game/waveEngine'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
-import WavePreview from './editor/WavePreview'
+import WavePreview, { type WaveView } from './editor/WavePreview'
 import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
+const GAME_CENTER_Y = 300
 
 function formatSeconds(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -19,6 +22,89 @@ function formatSeconds(ms: number): string {
   const sec = s % 60
   const tenth = Math.floor((ms % 1000) / 100)
   return `${m}:${sec.toString().padStart(2, '0')}.${tenth}`
+}
+
+function interpolateY(traj: { beat: number; y: number }[], beat: number): number {
+  if (traj.length === 0) return GAME_CENTER_Y
+  if (beat <= traj[0].beat) return traj[0].y
+  const last = traj[traj.length - 1]
+  if (beat >= last.beat) return last.y
+  for (let i = 0; i < traj.length - 1; i++) {
+    const a = traj[i]
+    const b = traj[i + 1]
+    if (beat >= a.beat && beat <= b.beat) {
+      if (b.beat <= a.beat) return b.y
+      const t = (beat - a.beat) / (b.beat - a.beat)
+      return a.y + (b.y - a.y) * t
+    }
+  }
+  return last.y
+}
+
+function truncateSegmentsTo(
+  segs: Segment[],
+  beat: number,
+  timeline: BpmTimeline,
+  amplitude: number,
+): { kept: Segment[]; startY: number } {
+  const engine = new WaveEngine(segs, timeline, amplitude)
+  const startY = segs.length > 0 ? engine.waveYAt(beat) : GAME_CENTER_Y
+  if (beat <= 0) return { kept: [], startY }
+  let cum = 0
+  const kept: Segment[] = []
+  for (const seg of segs) {
+    const end = cum + seg.beats
+    if (end <= beat) {
+      kept.push(seg)
+      cum = end
+    } else {
+      const part = beat - cum
+      if (part > 0.0001) {
+        kept.push({ direction: seg.direction, beats: Number(part.toFixed(4)) })
+      }
+      cum = beat
+      break
+    }
+  }
+  return { kept, startY }
+}
+
+function segmentize(
+  traj: { beat: number; y: number }[],
+  snap: number,
+  amplitude: number,
+): Segment[] {
+  if (traj.length < 2) return []
+  const sorted = [...traj].sort((a, b) => a.beat - b.beat)
+  const start = sorted[0].beat
+  const end = sorted[sorted.length - 1].beat
+  const micro: { direction: 'up' | 'down' | 'stay'; beats: number }[] = []
+  const threshold = Math.max((amplitude * snap) / 16, 0.5)
+  for (let b = start; b < end - 1e-6; b += snap) {
+    const y1 = interpolateY(sorted, b)
+    const y2 = interpolateY(sorted, b + snap)
+    const dy = y2 - y1
+    if (Math.abs(dy) <= threshold) {
+      micro.push({ direction: 'stay', beats: snap })
+    } else {
+      const dir: 'up' | 'down' = dy > 0 ? 'down' : 'up'
+      const moveBeats = Math.min(snap, (2 * Math.abs(dy)) / amplitude)
+      micro.push({ direction: dir, beats: Number(moveBeats.toFixed(4)) })
+      if (moveBeats < snap - 1e-6) {
+        micro.push({ direction: 'stay', beats: Number((snap - moveBeats).toFixed(4)) })
+      }
+    }
+  }
+  const merged: Segment[] = []
+  for (const m of micro) {
+    const last = merged[merged.length - 1]
+    if (last && last.direction === m.direction) {
+      last.beats = Number((last.beats + m.beats).toFixed(4))
+    } else {
+      merged.push({ direction: m.direction, beats: Number(m.beats.toFixed(4)) })
+    }
+  }
+  return merged.filter((s) => s.beats > 0.0001)
 }
 
 export default function EditorScreen() {
@@ -44,6 +130,9 @@ export default function EditorScreen() {
   const [importError, setImportError] = useState<string | null>(null)
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [ringDetailsOpen, setRingDetailsOpen] = useState(false)
+  const [mode, setMode] = useState<'play' | 'record'>('play')
+  const [view, setView] = useState<WaveView>({ startBeat: 0, beats: 16 })
+  const [recLive, setRecLive] = useState<{ beat: number; y: number; trajectory: { beat: number; y: number }[] } | null>(null)
 
   useEffect(() => {
     if (rings.length > 0) {
@@ -52,6 +141,13 @@ export default function EditorScreen() {
   }, [rings.length])
   const playtestActiveRef = useRef(false)
   const toastTimerRef = useRef<number | null>(null)
+  const modeRef = useRef<'play' | 'record'>('play')
+  const recCursorRef = useRef<Cursor | null>(null)
+  const recTrajRef = useRef<{ beat: number; y: number }[]>([])
+  const recStartBeatRef = useRef(0)
+  const recStartYRef = useRef(GAME_CENTER_Y)
+  const lastTickRef = useRef(0)
+  const keysRef = useRef({ up: false, down: false, space: false })
 
   const notify = useCallback((msg: string) => {
     setToastMsg(msg)
@@ -73,11 +169,37 @@ export default function EditorScreen() {
   const safeBpm = bpm > 0 ? bpm : 120
   const timeline = useMemo(() => new BpmTimeline(safeBpm, bpmChanges), [safeBpm, bpmChanges])
   const beat = timeline.msToBeat(positionMs)
+  const contentBeats = Math.max(
+    segments.reduce((s, seg) => s + seg.beats, 0),
+    rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), 0),
+    8,
+  )
+
+  const finishRecording = useCallback(() => {
+    if (modeRef.current !== 'record') return
+    modeRef.current = 'play'
+    setMode('play')
+    const traj = recTrajRef.current
+    if (traj.length >= 2) {
+      const startBeat = recStartBeatRef.current
+      const { kept } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
+      const newSegs = segmentize(traj, snap, amplitude)
+      setSegments([...kept, ...newSegs])
+      notify(`波形を記録 (${newSegs.length}セグメント)`)
+    }
+    setRecLive(null)
+    recCursorRef.current = null
+    recTrajRef.current = []
+  }, [segments, snap, amplitude, timeline, notify])
 
   useEffect(() => {
     if (!isPlaying) return
     let raf = 0
+    lastTickRef.current = performance.now()
     const tick = () => {
+      const now = performance.now()
+      const dt = Math.min(0.05, (now - lastTickRef.current) / 1000)
+      lastTickRef.current = now
       const ctx = AudioManager.getInstance().ctx
       const pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
       if (buffer && pos >= buffer.duration * 1000) {
@@ -87,16 +209,28 @@ export default function EditorScreen() {
         }
         setPositionMs(buffer.duration * 1000)
         positionRef.current = buffer.duration * 1000
+        if (modeRef.current === 'record') finishRecording()
         setPlaying(false)
       } else {
         setPositionMs(pos)
         positionRef.current = pos
+        if (modeRef.current === 'record' && recCursorRef.current) {
+          const beat = timeline.msToBeat(pos)
+          const beatMs = timeline.beatMsAt(beat)
+          recCursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, beatMs)
+          recTrajRef.current.push({ beat, y: recCursorRef.current.y })
+          setRecLive({
+            beat,
+            y: recCursorRef.current.y,
+            trajectory: recTrajRef.current.slice(),
+          })
+        }
         raf = requestAnimationFrame(tick)
       }
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [isPlaying, buffer])
+  }, [isPlaying, buffer, timeline, finishRecording])
 
   useEffect(() => {
     return () => {
@@ -154,6 +288,22 @@ export default function EditorScreen() {
     setError(null)
   }
 
+  const startRecording = useCallback(() => {
+    const startBeat = timeline.msToBeat(positionMs)
+    recStartBeatRef.current = startBeat
+    const engine = new WaveEngine(segments, timeline, amplitude)
+    const startY = segments.length > 0 ? engine.waveYAt(startBeat) : GAME_CENTER_Y
+    recStartYRef.current = startY
+    const cursor = new Cursor(amplitude)
+    cursor.y = startY
+    recCursorRef.current = cursor
+    recTrajRef.current = [{ beat: startBeat, y: startY }]
+    modeRef.current = 'record'
+    setMode('record')
+    setRecLive({ beat: startBeat, y: startY, trajectory: recTrajRef.current.slice() })
+    if (!isPlayingRef.current) void playFrom(positionMs)
+  }, [timeline, segments, amplitude, positionMs, playFrom])
+
   const stop = () => {
     const src = sourceRef.current
     if (!src) return
@@ -170,6 +320,7 @@ export default function EditorScreen() {
     src.disconnect()
     sourceRef.current = null
     setPlaying(false)
+    if (modeRef.current === 'record') finishRecording()
   }
 
   const toggle = () => {
@@ -215,6 +366,17 @@ export default function EditorScreen() {
 
       if (!isPlayingRef.current) return
 
+      if (modeRef.current === 'record') {
+        if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') {
+          keysRef.current.up = true
+          e.preventDefault()
+        } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') {
+          keysRef.current.down = true
+          e.preventDefault()
+        }
+        return
+      }
+
       let direction: 'up' | 'down' | 'stay' | null = null
       if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') {
         direction = 'up'
@@ -234,8 +396,19 @@ export default function EditorScreen() {
       setSegments((prevSegments) => [...prevSegments, { direction, beats }])
       notify(`セグメント追加 (${direction === 'up' ? '↑' : direction === 'down' ? '↓' : '―'}) ${beats.toFixed(2)}拍`)
     }
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') keysRef.current.up = false
+      if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') keysRef.current.down = false
+      if (e.code === 'Space') keysRef.current.space = false
+    }
+
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [snap, timeline, selectedRing, segments, notify])
 
   const removeRing = (index: number) => {
@@ -457,6 +630,14 @@ export default function EditorScreen() {
               <button type="button" onClick={toggle} disabled={loadingAudio} data-testid="editor-play">
                 {loadingAudio ? '読込中…' : isPlaying ? '停止' : buffer ? '再生' : '読込・再生'}
               </button>
+              <button
+                type="button"
+                onClick={() => (modeRef.current === 'record' ? finishRecording() : startRecording())}
+                data-testid="editor-record-toggle"
+                className={mode === 'record' ? 'editor-record-active' : ''}
+              >
+                {mode === 'record' ? '録音停止' : '録音モード'}
+              </button>
             </div>
             <input
               className="editor-slider"
@@ -516,9 +697,44 @@ export default function EditorScreen() {
             <span>② 基本BPM / 振幅などを設定</span>
             <span>③ 波形上クリックでリング追加・ドラッグで移動・ダブルクリックで削除</span>
             <span>④ 上端ルーラー(↑)クリックでシーク</span>
-            <span>⑤ 再生中 Space=リング / ↑↓→(W S D)=セグメント をスタンプ</span>
-            <span>⑥ 「エクスポート」でTOML保存、「プレイテスト」で確認</span>
+            <span>⑤ 再生中 Space=リング追加（両モード共通）</span>
+            <span>⑥ 再生モード: ↑↓→(W S D)=セグメントをスタンプ</span>
+            <span>⑦ 録音モード: 再生に同期し↑↓で玉を操作、軌跡を波形に記録（停止でコミット）</span>
+            <span>⑧ 空白ドラッグ=パン / ホイール=ズーム / 「エクスポート」でTOML保存</span>
           </div>
+          <section className="editor-pane editor-view-controls">
+            <h2>表示</h2>
+            <div className="editor-field editor-zoom-field">
+              <label className="editor-label" htmlFor="zoom">
+                ズーム（表示拍数: {view.beats.toFixed(1)}）
+              </label>
+              <input
+                id="zoom"
+                className="editor-slider"
+                type="range"
+                min={1}
+                max={64}
+                step={0.5}
+                value={Math.min(64, Math.max(1, view.beats))}
+                onChange={(e) => setView({ startBeat: view.startBeat, beats: Number(e.target.value) })}
+              />
+            </div>
+            <div className="editor-field editor-scroll-field">
+              <label className="editor-label" htmlFor="scroll">
+                スクロール（開始拍: {view.startBeat.toFixed(1)}）
+              </label>
+              <input
+                id="scroll"
+                className="editor-slider"
+                type="range"
+                min={0}
+                max={Math.max(0, contentBeats - view.beats + 2)}
+                step={0.5}
+                value={Math.min(view.startBeat, Math.max(0, contentBeats - view.beats + 2))}
+                onChange={(e) => setView({ startBeat: Number(e.target.value), beats: view.beats })}
+              />
+            </div>
+          </section>
           <WavePreview
             segments={segments}
             bpm={safeBpm}
@@ -528,6 +744,9 @@ export default function EditorScreen() {
             snap={snap}
             selectedRing={selectedRing}
             positionMs={positionMs}
+            view={view}
+            recording={recLive}
+            onViewChange={setView}
             onAddRing={addRing}
             onMoveRing={moveRing}
             onSelectRing={setSelectedRing}

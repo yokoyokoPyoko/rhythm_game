@@ -265,7 +265,6 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         keysRef.current.up,
         keysRef.current.down,
         currentBeatMs,
-        wave.segmentBeatsAt(currentBeat),
       )
 
       if (startedRef.current) {

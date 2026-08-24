@@ -291,9 +291,15 @@
       "finished": 1787544862.6216302
     },
     "T98": {
-      "attempts": 0,
+      "attempts": 8,
       "status": "running",
-      "started": 1787566796.3879178
+      "started": 1787566796.3879178,
+      "cycles": 3,
+      "sessions": {
+        "coder": null,
+        "qa": null,
+        "postmortem": null
+      }
     }
   },
   "consecutive_no_action": 0
