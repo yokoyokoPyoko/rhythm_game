@@ -291,14 +291,14 @@
       "finished": 1787544862.6216302
     },
     "T98": {
-      "attempts": 10,
+      "attempts": 27,
       "status": "running",
       "started": 1787578686.6803062,
-      "cycles": 1,
+      "cycles": 6,
       "sessions": {
-        "coder": null,
-        "qa": null,
-        "postmortem": null
+        "coder": "ses_fcb0b2860ffeta6cnY46w8QMZD",
+        "qa": "ses_fcb20db24ffe1yHScRUAE7w1RY",
+        "postmortem": "ses_fcb0bf408ffe8SvM3hlycZ3bL8"
       },
       "finished": 1787572355.0387774
     }
