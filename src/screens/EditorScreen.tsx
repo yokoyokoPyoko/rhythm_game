@@ -268,6 +268,13 @@ export default function EditorScreen() {
     )
   }, [snap])
 
+  const setRingBeat = (index: number, beat: number) => {
+    const v = Number.isFinite(beat) && beat >= 0 ? beat : 0
+    setRings((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, beat: v } : r))
+    )
+  }
+
   const seekTo = (ms: number) => {
     const clamped = Math.max(0, Math.min(ms, durationMs || ms))
     setPositionMs(clamped)
@@ -565,24 +572,37 @@ export default function EditorScreen() {
                     className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}`}
                     data-testid={`ring-list-item-${sortedIdx}`}
                   >
-                    <span
-                      className="ring-list-beat"
-                      onClick={() => {
-                        setSelectedRing(i)
-                        seekToBeat(ring.beat)
-                      }}
-                      role="button"
-                      tabIndex={0}
-                      title="クリックで選択し、その位置へシーク"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          setSelectedRing(i)
-                          seekToBeat(ring.beat)
-                        }
-                      }}
-                    >
-                      beat: {ring.beat.toFixed(2)}
-                    </span>
+                     <span
+                       className="ring-list-beat"
+                       onClick={() => {
+                         setSelectedRing(i)
+                         seekToBeat(ring.beat)
+                       }}
+                       role="button"
+                       tabIndex={0}
+                       title="クリックで選択し、その位置へシーク"
+                       onKeyDown={(e) => {
+                         if (e.key === 'Enter' || e.key === ' ') {
+                           setSelectedRing(i)
+                           seekToBeat(ring.beat)
+                         }
+                       }}
+                     >
+                       beat: {ring.beat.toFixed(2)}
+                     </span>
+                     <input
+                       className="editor-input ring-beat-input"
+                       type="number"
+                       min={0}
+                       step={snap}
+                       value={ring.beat}
+                       onChange={(e) => {
+                         setSelectedRing(i)
+                         setRingBeat(i, Number(e.target.value))
+                       }}
+                       aria-label={`beat ${ring.beat.toFixed(2)} の位置`}
+                       title="正確なbeat位置を数値入力"
+                     />
                     <select
                       className="editor-input ring-type-select"
                       value={ring.type ?? 'single'}

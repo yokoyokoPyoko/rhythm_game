@@ -539,6 +539,12 @@ button:focus-visible {
 
 .ring-list-beat {
   color: var(--accent-sub);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ring-beat-input {
+  width: 6rem;
 }
 
 .ring-list-delete {
