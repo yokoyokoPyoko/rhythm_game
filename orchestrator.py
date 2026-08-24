@@ -461,12 +461,12 @@ def run_opencode_with_retry(
     role: str | None = None,
     state: dict[str, Any] | None = None,
     fresh_sessions: bool = False,
-    title_override: str | None = None,
+    title: str | None = None,
 ) -> tuple[int, str]:
     session_id = None
-    title = None
+    title = title or None
     if task_id and role and state is not None:
-        title = title_override or f"[{task_id}] {role.capitalize()}"
+        title = title or f"[{task_id}] {role.capitalize()}"
         task_st = state.setdefault("tasks", {}).setdefault(task_id, {})
         sessions = task_st.setdefault("sessions", {})
         session_id = sessions.get(role)
