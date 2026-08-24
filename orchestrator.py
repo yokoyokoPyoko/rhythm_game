@@ -813,6 +813,31 @@ def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
     return "coder"
 
 
+def _extract_postmortem_json(out: str) -> dict | None:
+    m = re.search(r'\{[^{}]*"retry_from"[^{}]*\}', out, re.S)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    for m in re.findall(r'\{.*?\}', out, re.S):
+        try:
+            d = json.loads(m)
+            if isinstance(d, dict) and "retry_from" in d:
+                return d
+        except Exception:
+            continue
+    idx = out.find('"retry_from"')
+    if idx != -1:
+        s, e = out.rfind('{', 0, idx), out.find('}', idx)
+        if s != -1 and e != -1:
+            try:
+                return json.loads(out[s:e + 1])
+            except Exception:
+                pass
+    return None
+
+
 def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> dict:
     POSTMORTEM_DIR.mkdir(exist_ok=True)
     if state and task.id in state.get("tasks", {}):
@@ -845,18 +870,15 @@ Output JSON only:
         f.write(entry)
     log.info("Updated POSTMORTEM.md.")
 
-    match = re.search(r'\{.*"retry_from".*\}', out, re.S)
-    if match:
-        try:
-            data = json.loads(match.group(0))
-            return {
-                "approach": data.get("approach", ""),
-                "root_cause": data.get("root_cause", ""),
-                "rule": data.get("prohibited_rule", ""),
-                "retry_from": data.get("retry_from", "coder"),
-            }
-        except Exception:
-            pass
+    data = _extract_postmortem_json(out)
+    if data:
+        return {
+            "approach": data.get("approach", ""),
+            "root_cause": data.get("root_cause", ""),
+            "rule": data.get("prohibited_rule", ""),
+            "retry_from": data.get("retry_from", "coder"),
+        }
+    log.warning("Postmortem JSON parse failed; defaulting retry_from=coder. Raw head: %s", out[:400])
     return {"approach": "", "root_cause": "", "rule": "", "retry_from": "coder"}
 
 
