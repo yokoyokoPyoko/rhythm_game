@@ -2777,3 +2777,6 @@
 2026-08-24 12:38:43,485 [INFO] [T97] --only mode: skipping dependency checks.
 2026-08-24 19:19:56,386 [INFO] Orchestrator range execution: 1 tasks (from=T98, to=T98, budget=600m)
 2026-08-24 19:19:56,387 [INFO] [T98] --only mode: skipping dependency checks.
+2026-08-24 21:41:56,534 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-24 21:52:46,687 [INFO] Orchestrator range execution: 1 tasks (from=T98, to=T98, budget=600m)
+2026-08-24 21:52:46,687 [INFO] [T98] --only mode: skipping dependency checks.

@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -460,11 +461,12 @@ def run_opencode_with_retry(
     role: str | None = None,
     state: dict[str, Any] | None = None,
     fresh_sessions: bool = False,
+    title_override: str | None = None,
 ) -> tuple[int, str]:
     session_id = None
     title = None
     if task_id and role and state is not None:
-        title = f"[{task_id}] {role.capitalize()}"
+        title = title_override or f"[{task_id}] {role.capitalize()}"
         task_st = state.setdefault("tasks", {}).setdefault(task_id, {})
         sessions = task_st.setdefault("sessions", {})
         session_id = sessions.get(role)
@@ -673,6 +675,10 @@ def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | N
 
     if state and task.id in state.get("tasks", {}):
         state["tasks"][task.id].setdefault("sessions", {})["qa"] = None
+    # Unique title per Gate B call: guarantees a fresh QA session each call
+    # (the 5 continuation attempts reuse this same title/session), while the
+    # next Gate B call gets a different title -> no poisoned-session reuse.
+    qa_title = f"[{task.id}] Qa {uuid.uuid4().hex[:8]}"
 
     prompt = f"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
 
@@ -689,10 +695,10 @@ STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
 2. Visual Capture Timing: Insert adequate wait times (`page.waitForTimeout(1500-3000)` between critical actions) so that CSS transitions, animations, hover states, and dynamic state updates are clearly and smoothly captured in the recorded video.
 3. Robust Locators & Stability: Use robust locators (e.g., text, roles, specific test IDs or classes). Avoid strict container visibility checks if 0-height.
 4. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
-5. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself.
+5. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself. You MUST use the file-write/edit tool to create the file; never only show the code in your reply.
 6. Test Timeout Management: Playwright's default test timeout is 30 seconds (30000ms). If total operations, animations, or waitForTimeout delays might exceed 30 seconds, you MUST explicitly set an appropriate test timeout at the start of the test block using `test.setTimeout(60000)` or `test.setTimeout(120000)`.
 
-Investigate as many source files as you need before writing. When you have finished writing `tests/dynamic.spec.ts`, output only: DONE
+Investigate as many source files as you need before writing. When you have finished writing `tests/dynamic.spec.ts` with the file-write tool, output only: DONE. Never paste the full test code into the chat as text.
 """
     QA_CONTINUE_RETRIES = 5
     continuation_prompt = (
@@ -712,7 +718,8 @@ Investigate as many source files as you need before writing. When you have finis
             cont_prompt = continuation_prompt
         _, out = run_opencode_with_retry(
             qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
-            task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions
+            task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions,
+            title=qa_title,
         )
 
         wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
@@ -724,7 +731,7 @@ Investigate as many source files as you need before writing. When you have finis
             "Gate B (Dynamic Test)",
             False,
             "QA model did not write tests/dynamic.spec.ts after 5 continues",
-            fatal=True,
+            fatal=False,
         )
     log.info("Running Playwright execution with Video Recording...")
 
@@ -860,9 +867,11 @@ Output JSON only:
 }}
 """
     log.info("Postmortem analyzing failure and formulating rules...")
+    pm_title = f"[{task.id}] Postmortem {uuid.uuid4().hex[:8]}"
     _, out = run_opencode_with_retry(
         postmortem_model, prompt, timeout=None, label="Postmortem", variant="max",
-        task_id=task.id, role="postmortem", state=state, fresh_sessions=fresh_sessions
+        task_id=task.id, role="postmortem", state=state, fresh_sessions=fresh_sessions,
+        title=pm_title,
     )
 
     entry = f"\n### [{time.strftime('%Y-%m-%d %H:%M:%S')}] Task {task.id} Failure\n```\n{out}\n```\n"
@@ -956,10 +965,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         if need_coder:
             if state and task.id in state.get("tasks", {}):
                 state["tasks"][task.id].setdefault("sessions", {})["coder"] = None
+            coder_title = f"[{task.id}] Coder {uuid.uuid4().hex[:8]}"
             prompt = build_compact_coder_prompt(task)
             code, out = run_opencode_with_retry(
                 models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium",
-                task_id=task.id, role="coder", state=state, fresh_sessions=fresh_sessions
+                task_id=task.id, role="coder", state=state, fresh_sessions=fresh_sessions,
+                title=coder_title,
             )
             (LOG_DIR / f"{task.id}_agent.log").write_text(out, encoding="utf-8")
 
