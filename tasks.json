@@ -406,5 +406,16 @@
       "T96"
     ],
     "ui": true
+  },
+  {
+    "id": "T98",
+    "desc": "波形モデル統一 + エディタ録音モード + DAW風ズーム/パン。★波形の高さは自由（現在は up=上端/down=下端/stay=中央の 1/0/-1 固定）。玉の移動速度は振幅×波長で一意決定され、波長=4拍固定（BPMで時間換算）。スクロール速度は波長ではなく水平ノーツ流れ用で別物。適用範囲はゲーム本体も含む。\n(1) src/game/waveEngine.ts: WAVELENGTH_BEATS=4 を export。buildPoints() を端点スナップから「増分移動」に変更（up/down で (2*amp)*(segBeats/4) だけ移動し [top,bottom] にクランプ）。これで任意の高さが表現可能に。\n(2) src/game/cursor.ts: update() の速度計算をセグメントごとの波長ではなくグローバル WAVELENGTH_BEATS=4 に変更（第5引数 segmentBeats は無視）。\n(3) src/screens/GameScreen.tsx: cursor.update() の第5引数（segmentBeatsAt）を削除し、玉と描画波形を一致させる。\n(4) src/screens/EditorScreen.tsx: 再生モード/録音モードのトグルを追加。録音開始時、シーク位置の波形高さを初期値（既存波形がなければ中央）として玉(Cursor)を初期化し、再生に同期して上下キーのみで玉を操作し軌跡を記録。停止/解除時に軌跡をセグメント化してコミット（開始beat以降を上書き、以前は維持）。キー入力を書き換え: 録音モードでは上下キーで keyStateRef をセット（既存の「セグメントスタンプ」ロジックは削除）、Spaceは両モードでリング追加。\n(5) src/screens/editor/WavePreview.tsx: 時間軸のみのズーム/パン。view={startBeat,beats} プロップを受け、全描画(波形/リング/プレイヘッド/グリッド/クリック逆変換)を view 基準にマップ。ホイール=カーソル位置固定ズーム、空白ドラッグ=パン（リング上ドラッグは既存移動、クリックは追加と使い分け）。録音中はライブ玉と軌跡を破線で重畳。垂直ズームは実装しない。\n(6) EditorScreen にズーム/スクロール用スライダーを追加（マウス操作＋スライダーの両方）。レジェンド文案を新仕様に更新。\n(7) Segment 型は {direction,beats} のまま（自由高さは多数の小セグメントで表現）。型追加なし。Linear/Vercel風ミニマルダーク維持。実装後は tsc --noEmit と既存チャートでの玉/波形一致を確認。",
+    "depends_on": [
+      "T97",
+      "T92",
+      "T94",
+      "T95"
+    ],
+    "ui": true
   }
 ]
