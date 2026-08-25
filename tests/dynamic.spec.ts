@@ -85,24 +85,37 @@ async function waitForAudioLoaded(page: Page): Promise<void> {
   await page.waitForTimeout(2000)
 }
 
-async function addRingAtBeat(page: Page, beat: number, viewBeats = 16): Promise<void> {
+async function clickCanvasAtBeat(page: Page, beat: number, viewBeats: number, verticalRatio = 0.5): Promise<void> {
   const canvas = page.locator('[data-testid="wave-preview-canvas"]')
   await canvas.scrollIntoViewIfNeeded()
   const box = await canvas.boundingBox()
   if (!box) throw new Error('Canvas not found')
   const x = Math.round(box.x + (beat / viewBeats) * box.width)
-  const y = Math.round(box.y + box.height * 0.6)
+  const y = Math.round(box.y + box.height * verticalRatio)
   await page.mouse.move(x, y)
-  await page.waitForTimeout(200)
+  await page.waitForTimeout(150)
   await page.mouse.down()
-  await page.waitForTimeout(200)
+  await page.waitForTimeout(150)
   await page.mouse.up()
   await page.waitForTimeout(1500)
 }
 
-async function getNumberInputValue(page: Page, selector: string): Promise<number> {
-  const input = page.locator(selector)
-  return Number(await input.inputValue())
+async function seekToBeat(page: Page, beat: number): Promise<void> {
+  const slider = page.locator('.editor-slider').first()
+  if (await slider.isEnabled()) {
+    await page.evaluate((b) => {
+      const timeline = (window as any).__editorTimeline
+      if (timeline) {
+        const ms = timeline.beatToMs(b)
+        const slider = document.querySelector('.editor-slider') as HTMLInputElement
+        if (slider) {
+          slider.value = String(ms)
+          slider.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+      }
+    }, beat)
+    await page.waitForTimeout(1000)
+  }
 }
 
 test.describe.configure({ retries: 0 })
@@ -139,6 +152,10 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   // Verify offset input is in the Music Control section (not BPM Settings)
   const musicControlSection = page.locator('section.editor-pane:has-text("音楽制御")')
   await expect(musicControlSection.locator('#audio-offset')).toBeVisible()
+
+  // BPM Settings section should NOT have audio offset
+  const bpmSection = page.locator('section.editor-pane:has-text("BPM設定")')
+  await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
 
   // Set audio offset to 50ms
   await offsetInput.fill('50')
@@ -191,9 +208,9 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   // 4. Test Recording with Hold Rings (T99 #2)
   // ============================================================
   // Add some rings manually first
-  await addRingAtBeat(page, 1.0)
-  await addRingAtBeat(page, 4.0)
-  await addRingAtBeat(page, 8.0)
+  await clickCanvasAtBeat(page, 1.0, 16)
+  await clickCanvasAtBeat(page, 4.0, 16)
+  await clickCanvasAtBeat(page, 8.0, 16)
   await page.screenshot({ path: 'recordings/t99_05_rings_added.png' })
   await page.waitForTimeout(2500)
 
@@ -342,7 +359,7 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
 
   const segAddBtn = page.locator('[data-testid="segment-add"]')
 
-  // Add initial segments
+  // Add initial segments: up(4) + down(4) + stay(4) = 12 beats total
   await segAddBtn.click()
   await page.waitForTimeout(500)
   const segDirSelect0 = page.locator('[data-testid="segment-direction-0"]')
@@ -373,16 +390,10 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   const initialSegCount = await page.locator('[data-testid^="segment-beats-"]').count()
   expect(initialSegCount).toBe(3)
 
-  // Start recording at beat 4 (middle of second segment)
-  const seekSlider2 = page.locator('.editor-slider').first()
-  if (await seekSlider2.isEnabled()) {
-    await seekSlider2.fill('8000') // ~8 seconds, should be around beat 4-8 depending on BPM
-    await page.waitForTimeout(1500)
-  }
-
-  // Get current beat position
-  const currentBeatText = await page.locator('.editor-pos-beat').textContent()
-  const currentBeat = parseFloat(currentBeatText?.replace('beat: ', '') || '0')
+  // Seek to middle of second segment (around beat 6)
+  // 120 BPM = 500ms/beat, so beat 6 = 3000ms
+  await seekToBeat(page, 6)
+  await page.waitForTimeout(1500)
 
   // Start recording
   const recordToggleBtn = page.locator('[data-testid="editor-record-toggle"]')
@@ -398,7 +409,7 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   await waitForAudioLoaded(page)
   await page.waitForTimeout(3000)
 
-  // Record trajectory with up/down keys
+  // Record trajectory with up/down keys for about 4 beats worth
   for (let i = 0; i < 8; i++) {
     await page.keyboard.press(i % 2 === 0 ? 'ArrowUp' : 'ArrowDown')
     await page.waitForTimeout(400)
@@ -414,7 +425,7 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   await page.waitForTimeout(2500)
 
   // Verify segments were updated only in the recorded range
-  // Original segments before recording range should remain
+  // Original segments before recording start should remain
   // Original segments after recording range should remain
   // Only the recorded range should be replaced
   const finalSegCount = await page.locator('[data-testid^="segment-beats-"]').count()

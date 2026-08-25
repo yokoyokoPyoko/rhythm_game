@@ -308,10 +308,10 @@
       "status": "running",
       "started": 1787685370.6407833,
       "cycles": 2,
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "sessions": {
         "coder": "ses_fc53e8501ffeI5Q9dDX2aXEIoj",
-        "qa": "ses_fc550c6bdffeUbeQdiZLVkLExw",
+        "qa": "ses_fc53b0c52ffe8iLj5lexEXxLei",
         "postmortem": "ses_fc548bfa2ffew81AriZvVc0dxK"
       },
       "finished": 1787675509.5987048
