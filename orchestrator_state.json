@@ -304,9 +304,14 @@
       "gate_b_golden": true
     },
     "T99": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1787668716.0575297
+      "started": 1787668716.0575297,
+      "cycles": 1,
+      "gate_b_golden": false,
+      "sessions": {
+        "coder": "ses_fc6a40f74ffesWEtT5uD93YjtZ"
+      }
     }
   },
   "consecutive_no_action": 0

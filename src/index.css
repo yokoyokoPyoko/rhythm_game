@@ -734,7 +734,7 @@ button:focus-visible {
 .wave-preview {
   display: block;
   width: 100%;
-  height: 640px;
+  height: 720px;
   background-color: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent } from 'react'
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
@@ -66,6 +66,28 @@ export default function WavePreview({
   })
   const dragRef = useRef<{ index: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
+
+  // Native non-passive wheel listener so preventDefault() actually blocks
+  // page scrolling (React's synthetic onWheel is attached as passive).
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      const g = geoRef.current
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const bCursor = g.viewStart + (x / rect.width) * g.viewBeats
+      const factor = e.deltaY < 0 ? 0.85 : 1.15
+      const newBeats = Math.max(1, Math.min(200, g.viewBeats * factor))
+      const newStart = bCursor - (x / rect.width) * newBeats
+      onViewChangeRef.current?.({ startBeat: Math.max(0, newStart), beats: newBeats })
+    }
+    canvas.addEventListener('wheel', handler, { passive: false })
+    return () => canvas.removeEventListener('wheel', handler)
+  }, [])
 
   const safeSnap = snap > 0 ? snap : 0.25
 
@@ -90,7 +112,9 @@ export default function WavePreview({
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H
-    const amp = Math.min((fieldH - 24) / 2, ampVal)
+    // Expand the wave's vertical display area to use the full available height
+    // rather than clamping to the raw amplitude, so the waveform is clearly visible.
+    const amp = (fieldH - 24) / 2
     const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * amp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
@@ -389,21 +413,6 @@ export default function WavePreview({
     if (hit >= 0) onDeleteRing?.(hit)
   }
 
-  const handleWheel = (e: ReactWheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault()
-    if (!onViewChange) return
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const g = geoRef.current
-    const bCursor = g.viewStart + (x / rect.width) * g.viewBeats
-    const factor = e.deltaY < 0 ? 0.85 : 1.15
-    const newBeats = Math.max(1, Math.min(200, g.viewBeats * factor))
-    const newStart = bCursor - (x / rect.width) * newBeats
-    onViewChange({ startBeat: Math.max(0, newStart), beats: newBeats })
-  }
-
   return (
     <div className="wave-preview-wrap" data-testid="wave-preview">
       <canvas
@@ -412,7 +421,6 @@ export default function WavePreview({
         data-testid="wave-preview-canvas"
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
-        onWheel={handleWheel}
       />
       <p className="editor-hint">
         クリックでリング追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム
