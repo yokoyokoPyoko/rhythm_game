@@ -61,7 +61,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
           追加
         </button>
       </summary>
-      <p className="editor-hint">再生中に ↑/↓/→ (W/S/D) でリアルタイムにセグメントをスタンプ録音</p>
+       <p className="editor-hint">録音モードで再生中に ↑/↓ (W/S/D) を押すとリアルタイムに波形を記録</p>
       {segments.length === 0 ? (
         <p className="editor-empty">セグメントなし</p>
       ) : (

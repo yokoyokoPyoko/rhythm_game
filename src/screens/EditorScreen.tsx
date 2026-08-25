@@ -737,8 +737,7 @@ export default function EditorScreen() {
             <span>③ 波形上クリックでリング追加・ドラッグで移動・ダブルクリックで削除</span>
             <span>④ 上端ルーラー(↑)クリックでシーク</span>
             <span>⑤ 再生中 Space=リング追加（両モード共通）</span>
-            <span>⑥ 再生モード: ↑↓→(W S D)=セグメントをスタンプ</span>
-            <span>⑦ 録音モード: 再生に同期し↑↓で玉を操作、軌跡を波形に記録（停止でコミット）</span>
+            <span>⑥ 録音モード: ↑↓→(W S D) で玉を操作し軌跡を波形に記録（停止でコミット）</span>
             <span>⑧ 空白ドラッグ=パン / ホイール=ズーム / 「エクスポート」でTOML保存</span>
           </div>
           <section className="editor-pane editor-view-controls">

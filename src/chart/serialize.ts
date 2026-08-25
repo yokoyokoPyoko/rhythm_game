@@ -19,8 +19,12 @@ export function chartToToml(chart: Chart): string {
   lines.push(`scroll_speed = ${fmt(chart.scroll_speed)}`)
   lines.push(`amplitude = ${fmt(chart.amplitude)}`)
 
-  for (const change of chart.bpm_changes) {
-    lines.push('', '[[bpm_changes]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`)
+  if (chart.bpm_changes.length === 0) {
+    lines.push(`bpm_changes = []`)
+  } else {
+    for (const change of chart.bpm_changes) {
+      lines.push('', '[[bpm_changes]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`)
+    }
   }
 
   for (const seg of chart.segments) {
