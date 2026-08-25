@@ -297,11 +297,11 @@
       "cycles": 7,
       "sessions": {
         "coder": "ses_fc7a0c0d1ffeAaxTmVzSNMpgt8",
-        "qa": "ses_fc824f657ffeVt73Jl9quj7v85",
+        "qa": "ses_fc79f074dffeivNLLaJdi1ra9q",
         "postmortem": "ses_fc7a118fdffe7eyvhxow9J32Zf"
       },
       "finished": 1787572355.0387774,
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
