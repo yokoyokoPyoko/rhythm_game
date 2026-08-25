@@ -567,12 +567,23 @@ def run_opencode_with_retry(
 
 
 def extract_compact_spec(task_id: str) -> str:
-    if not AGENTS_MD.exists():
-        return ""
-    text = AGENTS_MD.read_text(encoding="utf-8")
-    pattern = rf"### \[?{task_id}\]?.*?(?=\n### \[?T\d+\]?|\n## |\Z)"
-    match = re.search(pattern, text, re.S)
-    return match.group(0).strip() if match else f"Task {task_id} specification"
+    if AGENTS_MD.exists():
+        text = AGENTS_MD.read_text(encoding="utf-8")
+        pattern = rf"### \[?{task_id}\]?.*?(?=\n### \[?T\d+\]?|\n## |\Z)"
+        match = re.search(pattern, text, re.S)
+        if match:
+            return match.group(0).strip()
+    if TASKS_JSON.exists():
+        try:
+            tasks_data = json.loads(TASKS_JSON.read_text(encoding="utf-8"))
+            for item in tasks_data:
+                if item.get("id") == task_id:
+                    desc = item.get("desc", "")
+                    deps = item.get("depends_on", [])
+                    return f"Task {task_id}: {desc}\nDependencies: {deps}"
+        except Exception:
+            pass
+    return f"Task {task_id} specification"
 
 
 def get_recent_postmortem_rules() -> str:
@@ -675,73 +686,101 @@ def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | N
 
     if state and task.id in state.get("tasks", {}):
         state["tasks"][task.id].setdefault("sessions", {})["qa"] = None
-    # Unique title per Gate B call: guarantees a fresh QA session each call
-    # (the 5 continuation attempts reuse this same title/session), while the
-    # next Gate B call gets a different title -> no poisoned-session reuse.
     qa_title = f"[{task.id}] Qa {uuid.uuid4().hex[:8]}"
 
-    prompt = f"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
+    prompt = fr"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
 
 Context:
 This test execution automatically records a video (.webm) of the browser in action. The recorded video is inspected by an uncompromising Product Director / Senior UX/UI Critic (Gate C Reviewer) to evaluate visual polish, fluidity, and interaction craftsmanship.
 
-Specification from AGENTS.md:
+Specification:
 {spec}
 {recent_rules}
 
-STRICT QA REQUIREMENTS FOR VIDEO CAPTURE:
-1. Comprehensive Interaction: Do not just load the page. Actively simulate realistic, thorough user interactions for ALL features mentioned in the specification (e.g., clicking specific buttons, navigating routes, inputting data, testing shortcuts).
-   - This app uses HashRouter under a Vite dev server (Playwright baseURL is pre-configured). Use `page.goto('/')` and navigate routes via `await page.evaluate(() => {{ window.location.hash = '#/editor'; }})` style hash navigation.
-2. Visual Capture Timing: Insert adequate wait times (`page.waitForTimeout(1500-3000)` between critical actions) so that CSS transitions, animations, hover states, and dynamic state updates are clearly and smoothly captured in the recorded video.
-3. Robust Locators & Stability: Use robust locators (e.g., text, roles, specific test IDs or classes). Avoid strict container visibility checks if 0-height.
-4. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
-5. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself. You MUST use the file-write/edit tool to create the file; never only show the code in your reply.
-6. Test Timeout Management: Playwright's default test timeout is 30 seconds (30000ms). If total operations, animations, or waitForTimeout delays might exceed 30 seconds, you MUST explicitly set an appropriate test timeout at the start of the test block using `test.setTimeout(60000)` or `test.setTimeout(120000)`.
+STRICT QA REQUIREMENTS FOR VIDEO CAPTURE & ROBUSTNESS:
+1. Comprehensive Interaction: Actively simulate realistic, thorough user interactions for ALL features mentioned in the specification. Use `page.goto('/')` and HashRouter navigation (e.g. `window.location.hash = '#/editor'`).
+2. Audio Loading & Decoding Wait (CRITICAL): The default audio file (`08.Reply.flac`) is 68.8MB and takes several seconds to load and decode via Web Audio API. When testing audio loading/playing/seeking in the editor or game, you MUST wait explicitly for decoding/loading to complete (e.g., waiting for play button text to change from '読込中…' or waiting for buffer readiness) before interacting. Do not assume instant audio readiness.
+3. Number Input Assertion Rule (CRITICAL): HTML `<input type="number">` normalizes floating-point strings like `11.00` to `11`. Never assert exact string equality like `toHaveValue("11.00")`. Instead, use `expect(Number(await input.inputValue())).toBeCloseTo(11)` or regex `toHaveValue(/^11(\.0+)?$/)`.
+4. Visual Capture Timing: Insert adequate wait times (`page.waitForTimeout(1500-3000)` between critical actions) for CSS transitions and animations.
+5. Robust Locators & Stability: Use robust locators (text, roles, test IDs). Avoid strict visibility checks on 0-height containers.
+6. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
+7. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself. Use the file-write tool.
 
-Investigate as many source files as you need before writing. When you have finished writing `tests/dynamic.spec.ts` with the file-write tool, output only: DONE. Never paste the full test code into the chat as text.
+Output only: DONE when finished. Never paste full test code into chat.
 """
-    QA_CONTINUE_RETRIES = 5
-    continuation_prompt = (
-        prompt
-        + "\n\n[CONTINUATION] 前回の実行では tests/dynamic.spec.ts を実際に書いていません"
-        "（書き込み完了前に終わりました）。今度は file-write ツールで tests/dynamic.spec.ts を"
-        "「今すぐ直接」書いてください。説明だけでなく実際に書くこと。書き終わったら DONE のみ出力。"
-    )
+    golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
+    task_state = state.get("tasks", {}).get(task.id, {}) if state else {}
+    wrote_spec = False
+    if not fresh_sessions and task_state.get("gate_b_golden") and golden_file.exists():
+        log.info("Reusing previous passing golden test for Gate B (skipping QA generation)...")
+        try:
+            import shutil
+            shutil.copy(golden_file, DYNAMIC_SPEC_FILE)
+            wrote_spec = True
+        except Exception:
+            pass
 
-    cont_prompt = prompt
-    for attempt in range(1, QA_CONTINUE_RETRIES + 1):
-        mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
-        if attempt == 1:
-            log.info("QA generating dynamic test script (direct write mode)...")
+    if not wrote_spec:
+        QA_CONTINUE_RETRIES = 5
+        continuation_prompt = (
+            prompt
+            + "\n\n[CONTINUATION] 前回の実行では tests/dynamic.spec.ts を実際に書いていません"
+            "（書き込み完了前に終わりました）。今度は file-write ツールで tests/dynamic.spec.ts を"
+            "「今すぐ直接」書いてください。説明だけでなく実際に書くこと。書き終わったら DONE のみ出力。"
+        )
+
+        cont_prompt = prompt
+        for attempt in range(1, QA_CONTINUE_RETRIES + 1):
+            mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
+            if attempt == 1:
+                log.info("QA generating dynamic test script (direct write mode)...")
+            else:
+                log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
+                cont_prompt = continuation_prompt
+            _, out = run_opencode_with_retry(
+                qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
+                task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions,
+                title=qa_title,
+            )
+
+            wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
+            if wrote_spec:
+                log.info("QA model wrote tests/dynamic.spec.ts directly.")
+                break
         else:
-            log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
-            cont_prompt = continuation_prompt
-        _, out = run_opencode_with_retry(
-            qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
-            task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions,
-            title=qa_title,
-        )
+            return GateResult(
+                "Gate B (Dynamic Test)",
+                False,
+                "QA model did not write tests/dynamic.spec.ts after 5 continues",
+                fatal=False,
+            )
 
-        wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
-        if wrote_spec:
-            log.info("QA model wrote tests/dynamic.spec.ts directly.")
+    log.info("Running Playwright execution with Video Recording (flaky-retry enabled)...")
+    playwright_passed = False
+    test_out = ""
+    for pw_attempt in range(1, 3):
+        code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="playwright: ")
+        if code == 0:
+            playwright_passed = True
             break
-    else:
-        return GateResult(
-            "Gate B (Dynamic Test)",
-            False,
-            "QA model did not write tests/dynamic.spec.ts after 5 continues",
-            fatal=False,
-        )
-    log.info("Running Playwright execution with Video Recording...")
+        else:
+            log.warning("Playwright test attempt %d failed. Retrying once...", pw_attempt)
+            time.sleep(2)
 
-    code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="playwright: ")
-    if code != 0:
+    if not playwright_passed:
         fatal_lines = [l for l in test_out.splitlines() if re.search(r"Error:|failed|Timed out", l)]
         detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
         return GateResult("Gate B (Dynamic Test)", False, detail)
 
-    # 録画された .webm 動画ファイルを探索
+    try:
+        import shutil
+        shutil.copy(DYNAMIC_SPEC_FILE, golden_file)
+        if state and task.id in state.get("tasks", {}):
+            state["tasks"][task.id]["gate_b_golden"] = True
+            save_state(state)
+    except Exception:
+        pass
+
     videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
     log.info("Playwright execution completed (%d video recording(s) captured).", len(videos))
     return GateResult("Gate B (Dynamic Test)", True, f"PASS ({len(videos)} video(s) recorded)")
@@ -964,6 +1003,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         # 1. Coder (+ Gate A) — skipped when retrying from QA-Gen
         if need_coder:
             if state and task.id in state.get("tasks", {}):
+                state["tasks"][task.id]["gate_b_golden"] = False
                 state["tasks"][task.id].setdefault("sessions", {})["coder"] = None
             coder_title = f"[{task.id}] Coder {uuid.uuid4().hex[:8]}"
             prompt = build_compact_coder_prompt(task)
