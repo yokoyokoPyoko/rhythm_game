@@ -304,15 +304,15 @@
       "gate_b_golden": true
     },
     "T99": {
-      "attempts": 3,
+      "attempts": 8,
       "status": "running",
       "started": 1787685370.6407833,
-      "cycles": 1,
-      "gate_b_golden": true,
+      "cycles": 2,
+      "gate_b_golden": false,
       "sessions": {
-        "coder": "ses_fc65b0557ffepc2osGSw4NwZln",
-        "qa": "ses_fc6511711ffeiKVsM99qYrjO79",
-        "postmortem": "ses_fc65b8527ffe3QiCtuB0uUMU9D"
+        "coder": "ses_fc53e8501ffeI5Q9dDX2aXEIoj",
+        "qa": "ses_fc550c6bdffeUbeQdiZLVkLExw",
+        "postmortem": "ses_fc548bfa2ffew81AriZvVc0dxK"
       },
       "finished": 1787675509.5987048
     }

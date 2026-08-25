@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
@@ -91,7 +91,7 @@ export default function WavePreview({
 
   const safeSnap = snap > 0 ? snap : 0.25
 
-  useEffect(() => {
+  const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
@@ -302,6 +302,20 @@ export default function WavePreview({
       }
     })
   }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing, positionMs, view, recording])
+
+  // ResizeObserver guarantees the canvas intrinsic size is set after layout
+  // completes (and on any container resize), so the first paint is never blank.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ro = new ResizeObserver(() => renderCanvas())
+    ro.observe(canvas)
+    return () => ro.disconnect()
+  }, [renderCanvas])
+
+  useEffect(() => {
+    renderCanvas()
+  }, [renderCanvas])
 
   const xToBeatLocal = (x: number, width: number): number => {
     const g = geoRef.current
