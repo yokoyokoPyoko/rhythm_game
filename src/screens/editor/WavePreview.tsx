@@ -342,7 +342,7 @@ export default function WavePreview({
         const canvas = canvasRef.current
         if (canvas) {
           const rect = canvas.getBoundingClientRect()
-          const beat = xToBeatLocal(e.clientX, rect.width)
+          const beat = xToBeatLocal(e.clientX - rect.left, rect.width)
           addRingAt(beat)
         }
       }

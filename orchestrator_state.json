@@ -306,14 +306,15 @@
     "T99": {
       "attempts": 3,
       "status": "running",
-      "started": 1787668716.0575297,
+      "started": 1787685370.6407833,
       "cycles": 1,
       "gate_b_golden": true,
       "sessions": {
         "coder": "ses_fc65b0557ffepc2osGSw4NwZln",
         "qa": "ses_fc6511711ffeiKVsM99qYrjO79",
         "postmortem": "ses_fc65b8527ffe3QiCtuB0uUMU9D"
-      }
+      },
+      "finished": 1787675509.5987048
     }
   },
   "consecutive_no_action": 0
