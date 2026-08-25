@@ -291,16 +291,17 @@
       "finished": 1787544862.6216302
     },
     "T98": {
-      "attempts": 28,
+      "attempts": 48,
       "status": "running",
       "started": 1787629982.2136443,
-      "cycles": 6,
+      "cycles": 7,
       "sessions": {
-        "coder": "ses_fcb0b2860ffeta6cnY46w8QMZD",
-        "qa": "ses_fcae12b51ffepwFSeC1Sy3EDuz",
-        "postmortem": null
+        "coder": "ses_fc7a0c0d1ffeAaxTmVzSNMpgt8",
+        "qa": "ses_fc824f657ffeVt73Jl9quj7v85",
+        "postmortem": "ses_fc7a118fdffe7eyvhxow9J32Zf"
       },
-      "finished": 1787572355.0387774
+      "finished": 1787572355.0387774,
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
