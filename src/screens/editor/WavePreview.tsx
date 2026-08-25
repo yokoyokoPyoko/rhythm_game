@@ -390,6 +390,7 @@ export default function WavePreview({
   }
 
   const handleWheel = (e: ReactWheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
     if (!onViewChange) return
     const canvas = canvasRef.current
     if (!canvas) return

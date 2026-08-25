@@ -148,6 +148,7 @@ export default function EditorScreen() {
   const recStartYRef = useRef(GAME_CENTER_Y)
   const lastTickRef = useRef(0)
   const keysRef = useRef({ up: false, down: false, space: false })
+  const spacePressBeatRef = useRef(0)
 
   const notify = useCallback((msg: string) => {
     setToastMsg(msg)
@@ -182,9 +183,32 @@ export default function EditorScreen() {
     const traj = recTrajRef.current
     if (traj.length >= 2) {
       const startBeat = recStartBeatRef.current
-      const { kept } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
+      const sorted = [...traj].sort((a, b) => a.beat - b.beat)
+      const endBeat = sorted[sorted.length - 1].beat
+
+      const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
       const newSegs = segmentize(traj, snap, amplitude)
-      setSegments([...kept, ...newSegs])
+
+      let cum = 0
+      const keptAfter: Segment[] = []
+      for (const seg of segments) {
+        const segEnd = cum + seg.beats
+        if (segEnd <= endBeat) {
+          cum = segEnd
+          continue
+        }
+        if (cum >= endBeat) {
+          keptAfter.push(seg)
+        } else {
+          const part = segEnd - endBeat
+          if (part > 0.0001) {
+            keptAfter.push({ direction: seg.direction, beats: Number(part.toFixed(4)) })
+          }
+        }
+        cum = segEnd
+      }
+
+      setSegments([...keptBefore, ...newSegs, ...keptAfter])
       notify(`波形を記録 (${newSegs.length}セグメント)`)
     }
     setRecLive(null)
@@ -274,7 +298,13 @@ export default function EditorScreen() {
     const src = ctx.createBufferSource()
     src.buffer = buf
     src.connect(ctx.destination)
-    src.start(0, fromMs / 1000)
+    const offsetSec = audioOffset / 1000
+    const audioTime = Math.max(0, fromMs / 1000)
+    if (offsetSec >= 0) {
+      src.start(ctx.currentTime + offsetSec, audioTime)
+    } else {
+      src.start(ctx.currentTime, Math.max(0, audioTime - offsetSec))
+    }
     src.onended = () => {
       if (sourceRef.current === src) {
         sourceRef.current = null
@@ -344,15 +374,11 @@ export default function EditorScreen() {
       if (e.code === 'Space') {
         e.preventDefault()
         if (!isPlayingRef.current) return
+        if (keysRef.current.space) return
         const rawBeat = timeline.msToBeat(positionRef.current)
         const snapped = Math.round(rawBeat / snap) * snap
-        let added = false
-        setRings((prev) => {
-          if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) return prev
-          added = true
-          return [...prev, { beat: snapped, type: 'single' }]
-        })
-        if (added) notify(`リング追加 @beat ${snapped.toFixed(2)}`)
+        spacePressBeatRef.current = snapped
+        keysRef.current.space = true
         return
       }
 
@@ -376,31 +402,33 @@ export default function EditorScreen() {
         }
         return
       }
-
-      let direction: 'up' | 'down' | 'stay' | null = null
-      if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') {
-        direction = 'up'
-      } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') {
-        direction = 'down'
-      } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight' || e.code === 'KeyD' || e.code === 'KeyE') {
-        direction = 'stay'
-      }
-
-      if (!direction) return
-      e.preventDefault()
-
-      const currentBeat = timeline.msToBeat(positionRef.current)
-      const lastEndBeat = segments.reduce((sum, s) => sum + s.beats, 0)
-      const rawBeats = currentBeat - lastEndBeat
-      const beats = Math.max(snap, Math.round(rawBeats / snap) * snap)
-      setSegments((prevSegments) => [...prevSegments, { direction, beats }])
-      notify(`セグメント追加 (${direction === 'up' ? '↑' : direction === 'down' ? '↓' : '―'}) ${beats.toFixed(2)}拍`)
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') keysRef.current.up = false
       if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') keysRef.current.down = false
-      if (e.code === 'Space') keysRef.current.space = false
+      if (e.code === 'Space') {
+        if (!isPlayingRef.current || !keysRef.current.space) {
+          keysRef.current.space = false
+          return
+        }
+        const rawBeat = timeline.msToBeat(positionRef.current)
+        const snapped = Math.round(rawBeat / snap) * snap
+        const startBeat = spacePressBeatRef.current ?? snapped
+        const duration = Number((snapped - startBeat).toFixed(2))
+        let added = false
+        setRings((prev) => {
+          if (prev.some((r) => Math.abs(r.beat - startBeat) < 0.001)) return prev
+          added = true
+          if (duration > 0.3) {
+            return [...prev, { beat: startBeat, type: 'hold', duration }]
+          } else {
+            return [...prev, { beat: startBeat, type: 'single' }]
+          }
+        })
+        if (added) notify(`リング追加 @beat ${startBeat.toFixed(2)}${duration > 0.3 ? ` (hold ${duration}拍)` : ''}`)
+        keysRef.current.space = false
+      }
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -653,6 +681,19 @@ export default function EditorScreen() {
               <span className="editor-pos-time">{formatSeconds(positionMs)}</span>
               <span className="editor-pos-beat">beat: {beat.toFixed(2)}</span>
             </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="audio-offset">
+                オーディオオフセット (Audio Offset ms)
+              </label>
+              <input
+                id="audio-offset"
+                className="editor-input"
+                type="number"
+                step={10}
+                value={Number.isFinite(audioOffset) ? audioOffset : 0}
+                onChange={(e) => setAudioOffset(Number(e.target.value))}
+              />
+            </div>
             {error && <div className="editor-error">{error}</div>}
           </section>
 
@@ -667,8 +708,6 @@ export default function EditorScreen() {
               onAmplitudeChange={setAmplitude}
               scrollSpeed={scrollSpeed}
               onScrollSpeedChange={setScrollSpeed}
-              audioOffset={audioOffset}
-              onAudioOffsetChange={setAudioOffset}
             />
           </section>
 
@@ -762,7 +801,7 @@ export default function EditorScreen() {
             </summary>
             <div className="editor-field">
               <label className="editor-label" htmlFor="snap">
-                スナップ
+                クオンタイズ / スナップ
               </label>
               <select
                 id="snap"
