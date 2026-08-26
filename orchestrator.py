@@ -1226,8 +1226,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Trace Wave Autonomous Orchestrator (Modern CLI)")
     parser.add_argument("--dry-run", action="store_true", help="Display execution plan only")
     parser.add_argument("--only", metavar="TID", help="Execute specific task ID")
-    parser.add_argument("--from", dest="start_from", metavar="TID", help="区間の開始タスクID")
-    parser.add_argument("--to", dest="end_at", metavar="TID", help="区間の終了タスクID (このタスク完了後に自動停止)")
+    parser.add_argument("--range", nargs=2, metavar=("FROM", "TO"), help="Execute tasks from FROM to TO inclusive (by DAG order), e.g. --range T99 T105")
     parser.add_argument("--force", action="store_true", help="Force re-execution of passed tasks")
     parser.add_argument("--step", action="store_true", help="1タスク完了ごとにEnterキー確認を挟む（ステップ実行モード）")
     parser.add_argument("--reset-state", action="store_true", help="Reset state file")
@@ -1268,22 +1267,22 @@ def main() -> None:
     else:
         start_idx = 0
         end_idx = len(all_tasks)
-        if args.start_from:
-            idx = next((i for i, t in enumerate(all_tasks) if t.id == args.start_from), None)
-            if idx is None:
-                log.error("Start task '%s' not found in DAG.", args.start_from)
+        if args.range:
+            start_id, end_id = args.range
+            sidx = next((i for i, t in enumerate(all_tasks) if t.id == start_id), None)
+            if sidx is None:
+                log.error("Start task '%s' not found in DAG.", start_id)
                 sys.exit(1)
-            start_idx = idx
+            start_idx = sidx
 
-        if args.end_at:
-            idx = next((i for i, t in enumerate(all_tasks) if t.id == args.end_at), None)
-            if idx is None:
-                log.error("End task '%s' not found in DAG.", args.end_at)
+            eidx = next((i for i, t in enumerate(all_tasks) if t.id == end_id), None)
+            if eidx is None:
+                log.error("End task '%s' not found in DAG.", end_id)
                 sys.exit(1)
-            end_idx = idx + 1
+            end_idx = eidx + 1
 
         if start_idx >= end_idx:
-            log.error("Invalid range: --from '%s' comes after --to '%s' in DAG.", args.start_from, args.end_at)
+            log.error("Invalid range: --range '%s' comes after '%s' in DAG.", args.range[0], args.range[1])
             sys.exit(1)
 
         target_tasks = all_tasks[start_idx:end_idx]
@@ -1325,8 +1324,8 @@ def main() -> None:
 
     log.info("Orchestrator range execution: %d tasks (from=%s, to=%s, budget=%dm)", 
              len(target_tasks), 
-             args.start_from or target_tasks[0].id, 
-             args.end_at or target_tasks[-1].id, 
+             (args.range[0] if args.range else target_tasks[0].id), 
+             (args.range[1] if args.range else target_tasks[-1].id), 
              args.budget_min)
 
     if args.dry_run:
