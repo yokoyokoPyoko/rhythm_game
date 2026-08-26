@@ -2,21 +2,6 @@ import { test, expect, type ConsoleMessage, type Page } from '@playwright/test'
 import * as fs from 'fs'
 import { parse } from 'smol-toml'
 
-async function waitForServerReady(page: Page, baseURL: string): Promise<void> {
-  let retries = 0
-  while (retries < 30) {
-    try {
-      const resp = await page.goto(baseURL, { waitUntil: 'networkidle', timeout: 5000 })
-      if (resp?.ok()) return
-    } catch {
-      // ignore
-    }
-    await page.waitForTimeout(1000)
-    retries++
-  }
-  throw new Error('Dev server not ready after 30s')
-}
-
 async function collectErrors(page: Page): Promise<string[]> {
   const errors: string[] = []
   page.on('console', (msg: ConsoleMessage) => {
@@ -55,135 +40,200 @@ async function waitForAudioLoaded(page: Page): Promise<void> {
   await page.waitForTimeout(2000)
 }
 
-async function getAudioOffsetFromState(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    return (window as any).__editorAudioOffset ?? 0
-  })
+async function getRingsFromState(page: Page): Promise<Array<{ beat: number; type?: string; duration?: number }>> {
+  return page.evaluate(() => (window as any).__editorRings ?? [])
 }
 
-async function getPlayFromAudioOffset(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    return (window as any).__editorPlayFromOffset ?? 0
-  })
+async function getSegmentsFromState(page: Page): Promise<Array<{ direction: string; beats: number }>> {
+  return page.evaluate(() => (window as any).__editorSegments ?? [])
+}
+
+async function getSnapFromState(page: Page): Promise<number> {
+  return page.evaluate(() => (window as any).__editorSnap ?? 0.25)
+}
+
+async function getBeatFromState(page: Page): Promise<number> {
+  return page.evaluate(() => (window as any).__editorBeat ?? 0)
+}
+
+// Ensure playback is running. If already playing, do nothing (do NOT stop,
+// because stopping would auto-commit any active recording and flip the mode).
+async function startPlayback(page: Page, playBtn: any): Promise<void> {
+  const txt = await playBtn.textContent()
+  if (txt?.includes('停止')) return
+  await playBtn.click()
+  await waitForAudioLoaded(page)
+}
+
+async function stopPlayback(page: Page, playBtn: any): Promise<void> {
+  const txt = await playBtn.textContent()
+  if (txt?.includes('停止')) {
+    await playBtn.click()
+    await page.waitForTimeout(800)
+  }
 }
 
 test.describe.configure({ retries: 0 })
 
-test('T99 Audio Offset: Music Control pane placement & playFrom reflection', async ({ page, browserName }) => {
+test('T100 Editor Recording: hold ring creation on Space press/release and trajectory-based hold generation', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'chromium only')
   test.setTimeout(300000)
 
   const baseURL = process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/'
   const allErrors = await collectErrors(page)
 
-  // ============================================================
-  // 0. Wait for dev server to be ready
-  // ============================================================
-  await waitForServerReady(page, baseURL)
-  await page.goto(baseURL, { waitUntil: 'networkidle' })
+  // 0. Wait for dev server
+  let retries = 0
+  while (retries < 30) {
+    try {
+      const resp = await page.goto(baseURL, { waitUntil: 'networkidle', timeout: 5000 })
+      if (resp?.ok()) break
+    } catch {
+      // ignore
+    }
+    await page.waitForTimeout(1000)
+    retries++
+  }
   await expect(page.locator('#root')).toBeVisible()
   await page.waitForTimeout(2500)
 
-  // ============================================================
   // 1. Open Editor
-  // ============================================================
   await openEditor(page)
   await page.waitForTimeout(3000)
 
-  // ============================================================
-  // 2. Verify Audio Offset input is in Music Control pane (NOT BPM Settings)
-  // ============================================================
-  const offsetInput = page.locator('#audio-offset')
-  await expect(offsetInput).toBeVisible()
-
-  // Verify offset input exists in Music Control section
-  const musicControlSection = page.locator('section.editor-pane:has-text("音楽制御")')
-  await expect(musicControlSection).toBeVisible()
-  await expect(musicControlSection.locator('#audio-offset')).toBeVisible()
-
-  // BPM Settings section should NOT contain audio offset
-  const bpmSection = page.locator('section.editor-pane:has-text("BPM設定")')
-  await expect(bpmSection).toBeVisible()
-  await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
-
-  // ============================================================
-  // 3. Set audio offset and verify internal state reflects it
-  // ============================================================
-  const testOffset = 150 // ms
-  await offsetInput.fill(String(testOffset))
-  await expect(Number(await offsetInput.inputValue())).toBeCloseTo(testOffset)
-
-  // Verify internal state has the offset
-  const stateOffset = await getAudioOffsetFromState(page)
-  expect(stateOffset).toBe(testOffset)
-
-  // ============================================================
-  // 4. Test playFrom reflection: load audio, play from position, verify offset used
-  // ============================================================
   const playBtn = page.locator('[data-testid="editor-play"]')
+  const recordBtn = page.locator('[data-testid="editor-record-toggle"]')
+
+  // 2. Load audio
   await expect(playBtn).toBeVisible()
   await playBtn.click()
-
-  // Wait for 68.8MB FLAC to load and decode
   await waitForAudioLoaded(page)
   await page.waitForTimeout(3000)
 
-  // Verify audio offset is passed to playFrom by checking internal flag
-  // (The implementation should set __editorPlayFromOffset when playFrom is called)
-  const playFromOffset = await getPlayFromAudioOffset(page)
-  expect(playFromOffset).toBe(testOffset)
+  // 3. Initial state
+  let rings = await getRingsFromState(page)
+  expect(rings.length).toBe(0)
 
-  // Stop audio
-  await playBtn.click()
-  await page.waitForTimeout(2000)
+  const snap = await getSnapFromState(page)
 
-  // ============================================================
-  // 5. Test seek + playFrom with offset
-  // ============================================================
-  const seekSlider = page.locator('.editor-slider').first()
-  if (await seekSlider.isEnabled()) {
-    await seekSlider.fill('5000')
-    await page.waitForTimeout(2000)
-
-    // Play again from seeked position
-    await playBtn.click()
-    await waitForAudioLoaded(page)
-    await page.waitForTimeout(3000)
-
-    // Verify playFrom still uses the same audio offset
-    const playFromOffsetAfterSeek = await getPlayFromAudioOffset(page)
-    expect(playFromOffsetAfterSeek).toBe(testOffset)
-
-    await playBtn.click()
-    await page.waitForTimeout(2000)
+  // helper to seek by beat (120 BPM => 500ms/beat)
+  const seekToBeat = async (beat: number) => {
+    const slider = page.locator('.editor-slider').first()
+    await slider.fill(String(beat * 500))
+    // Blur the slider so Space keydown is not swallowed by the editable guard.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await page.waitForTimeout(1200)
   }
 
   // ============================================================
-  // 6. Test negative audio offset
+  // 4. Trajectory-based segment generation (up/down).
+  //    Done first while the waveform is empty so the recording starts
+  //    from the center and both up and down movement are possible.
   // ============================================================
-  const negativeOffset = -100
-  await offsetInput.fill(String(negativeOffset))
-  await expect(Number(await offsetInput.inputValue())).toBeCloseTo(negativeOffset)
-
-  const stateNegativeOffset = await getAudioOffsetFromState(page)
-  expect(stateNegativeOffset).toBe(negativeOffset)
-
-  await playBtn.click()
-  await waitForAudioLoaded(page)
-  await page.waitForTimeout(3000)
-
-  const playFromNegativeOffset = await getPlayFromAudioOffset(page)
-  expect(playFromNegativeOffset).toBe(negativeOffset)
-
-  await playBtn.click()
+  await recordBtn.click()
+  await page.waitForTimeout(1000)
+  await expect(recordBtn).toHaveClass(/editor-record-active/)
+  await startPlayback(page, playBtn)
   await page.waitForTimeout(2000)
 
+  await page.keyboard.down('ArrowUp')
+  await page.waitForTimeout(2000)
+  await page.keyboard.up('ArrowUp')
+  await page.waitForTimeout(1000)
+  await page.keyboard.down('ArrowDown')
+  await page.waitForTimeout(2000)
+  await page.keyboard.up('ArrowDown')
+  await page.waitForTimeout(1000)
+
+  await recordBtn.click()
+  await page.waitForTimeout(2000)
+
+  const segments = await getSegmentsFromState(page)
+  expect(segments.length).toBeGreaterThan(0)
+  const directions = segments.map((s) => s.direction)
+  expect(directions).toContain('up')
+  expect(directions).toContain('down')
+
   // ============================================================
-  // 7. Test TOML Export includes audio_offset
+  // 5. Hold ring via Space hold (~4 beats).
+  // ============================================================
+  await recordBtn.click()
+  await page.waitForTimeout(1000)
+  await startPlayback(page, playBtn)
+  await page.waitForTimeout(2000)
+
+  const holdStartBeat = 4.0
+  await seekToBeat(holdStartBeat)
+  const holdLiveBeat = await getBeatFromState(page)
+  await page.keyboard.down('Space')
+  await page.waitForTimeout(2000)
+  await page.keyboard.up('Space')
+  await page.waitForTimeout(2000)
+
+  await recordBtn.click()
+  await page.waitForTimeout(2000)
+
+  rings = await getRingsFromState(page)
+  expect(rings.length).toBeGreaterThanOrEqual(1)
+  const holdRing = rings.find((r) => r.type === 'hold')
+  expect(holdRing).toBeDefined()
+  expect(holdRing!.type).toBe('hold')
+  expect(Number.isFinite(holdRing!.duration)).toBe(true)
+  expect(holdRing!.duration).toBeGreaterThan(0.3)
+  expect(holdRing!.beat).toBeCloseTo(Math.round(holdLiveBeat / snap) * snap, 2)
+  expect(holdRing!.duration).toBeCloseTo(Math.round(holdRing!.duration! / snap) * snap, 2)
+
+  // ============================================================
+  // 6. Single ring via quick Space press.
+  // ============================================================
+  await recordBtn.click()
+  await page.waitForTimeout(1000)
+  await startPlayback(page, playBtn)
+  await page.waitForTimeout(2000)
+
+  const singleBeat = 8.0
+  await seekToBeat(singleBeat)
+  const singleLiveBeat = await getBeatFromState(page)
+  await page.keyboard.down('Space')
+  await page.waitForTimeout(100)
+  await page.keyboard.up('Space')
+  await page.waitForTimeout(1500)
+
+  await recordBtn.click()
+  await page.waitForTimeout(2000)
+
+  rings = await getRingsFromState(page)
+  const singleRing = rings.find((r) => r.type === 'single' || r.type === undefined)
+  expect(singleRing).toBeDefined()
+  expect(singleRing!.type !== 'hold').toBe(true)
+  expect(Math.abs(singleRing!.beat - Math.round(singleLiveBeat / snap) * snap)).toBeLessThanOrEqual(snap)
+
+  // ============================================================
+  // 7. Ring list UI reflects hold ring.
+  // ============================================================
+  const ringDetails = page.locator('[data-testid="ring-list-details"]')
+  await expect(ringDetails).toBeVisible()
+  const isOpen = await ringDetails.evaluate((el) => (el as HTMLDetailsElement).open)
+  if (!isOpen) {
+    await ringDetails.locator('summary').click()
+    await page.waitForTimeout(1000)
+  }
+  const holdRingItems = ringDetails.locator('.ring-duration-input')
+  expect(await holdRingItems.count()).toBeGreaterThanOrEqual(1)
+  const durationInput = ringDetails.locator('.ring-duration-input')
+  await expect(durationInput).toBeVisible()
+
+  // ============================================================
+  // 8. Canvas renders hold ring.
+  // ============================================================
+  const canvas = page.locator('[data-testid="wave-preview-canvas"]')
+  await expect(canvas).toBeVisible()
+
+  // ============================================================
+  // 9. TOML export includes hold ring.
   // ============================================================
   const exportBtn = page.locator('[data-testid="editor-export"]')
   await expect(exportBtn).toBeVisible()
-
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     exportBtn.click(),
@@ -193,27 +243,13 @@ test('T99 Audio Offset: Music Control pane placement & playFrom reflection', asy
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8')
     const parsed = parse(fileContent) as any
-    expect(parsed).toBeDefined()
-    expect(parsed.audio_offset).toBe(negativeOffset) // Last set value
+    expect(Array.isArray(parsed.rings)).toBe(true)
+    expect(parsed.rings.some((r: any) => r.type === 'hold' && Number.isFinite(r.duration) && r.duration > 0.3)).toBe(true)
   }
+  await page.waitForTimeout(1000)
 
-  // ============================================================
-  // 8. Test TOML Import restores audio_offset in Music Control pane
-  // ============================================================
-  const importInput = page.locator('[data-testid="import-toml"]')
-  const filePathForImport = filePath!
-  await importInput.setInputFiles(filePathForImport)
+  await stopPlayback(page, playBtn)
   await page.waitForTimeout(2000)
 
-  // Verify imported audio_offset appears in Music Control pane
-  const importedOffset = Number(await page.locator('#audio-offset').inputValue())
-  expect(importedOffset).toBeCloseTo(negativeOffset)
-
-  // Verify BPM Settings still doesn't have audio offset
-  await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
-
-  // ============================================================
-  // 9. Final assertions
-  // ============================================================
   expect(allErrors).toHaveLength(0)
 })

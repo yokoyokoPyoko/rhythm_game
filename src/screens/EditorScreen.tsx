@@ -148,6 +148,8 @@ export default function EditorScreen() {
     w.__editorAudioOffset = audioOffset
     w.__editorView = view
     w.__editorTimeline = timeline
+    w.__editorBeat = beat
+    w.__editorRecTraj = recTrajRef.current
   })
 
   const playtestActiveRef = useRef(false)
@@ -440,7 +442,8 @@ export default function EditorScreen() {
         const rawBeat = timeline.msToBeat(positionRef.current)
         const snapped = Math.round(rawBeat / snap) * snap
         const startBeat = spacePressBeatRef.current ?? snapped
-        const duration = Number((snapped - startBeat).toFixed(2))
+        const rawDuration = snapped - startBeat
+        const duration = Number((Math.round(rawDuration / snap) * snap).toFixed(2))
         let added = false
         setRings((prev) => {
           if (prev.some((r) => Math.abs(r.beat - startBeat) < 0.001)) return prev
