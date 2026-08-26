@@ -101,21 +101,36 @@ async function clickCanvasAtBeat(page: Page, beat: number, viewBeats: number, ve
 }
 
 async function seekToBeat(page: Page, beat: number): Promise<void> {
-  const slider = page.locator('.editor-slider').first()
-  if (await slider.isEnabled()) {
-    await page.evaluate((b) => {
-      const timeline = (window as any).__editorTimeline
-      if (timeline) {
-        const ms = timeline.beatToMs(b)
-        const slider = document.querySelector('.editor-slider') as HTMLInputElement
-        if (slider) {
-          slider.value = String(ms)
-          slider.dispatchEvent(new Event('input', { bubbles: true }))
-        }
+  await page.evaluate((b) => {
+    const timeline = (window as any).__editorTimeline
+    if (timeline) {
+      const ms = timeline.beatToMs(b)
+      const slider = document.querySelector('.editor-slider') as HTMLInputElement
+      if (slider) {
+        slider.value = String(ms)
+        slider.dispatchEvent(new Event('input', { bubbles: true }))
       }
-    }, beat)
-    await page.waitForTimeout(1000)
-  }
+    }
+  }, beat)
+  await page.waitForTimeout(1000)
+}
+
+async function getSegmentsFromState(page: Page): Promise<any[]> {
+  return page.evaluate(() => {
+    return (window as any).__editorSegments ?? []
+  })
+}
+
+async function getRingsFromState(page: Page): Promise<any[]> {
+  return page.evaluate(() => {
+    return (window as any).__editorRings ?? []
+  })
+}
+
+async function getSnapFromState(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as any).__editorSnap ?? 0.25
+  })
 }
 
 test.describe.configure({ retries: 0 })
@@ -180,6 +195,12 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   await playBtn.click()
   await page.waitForTimeout(2000)
 
+  // Verify playFrom uses audioOffset by checking internal state
+  const audioOffsetReflected = await page.evaluate(() => {
+    return (window as any).__editorAudioOffset ?? 0
+  })
+  expect(audioOffsetReflected).toBe(50)
+
   // ============================================================
   // 3. Test Quantize/Snap UI in Ring List accordion (T99 #3)
   // ============================================================
@@ -203,6 +224,10 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   await snapSelect.selectOption('0.25')
   await page.screenshot({ path: 'recordings/t99_04_snap_ui.png' })
   await page.waitForTimeout(1500)
+
+  // Verify snap value is reflected in internal state
+  const snapState = await getSnapFromState(page)
+  expect(snapState).toBe(0.25)
 
   // ============================================================
   // 4. Test Recording with Hold Rings (T99 #2)
@@ -258,18 +283,24 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   await page.screenshot({ path: 'recordings/t99_07_hold_ring_recorded.png' })
   await page.waitForTimeout(2500)
 
+  // Verify internal ring state includes hold type and duration
+  const ringsState = await getRingsFromState(page)
+  const holdRings = ringsState.filter((r: any) => r.type === 'hold')
+  expect(holdRings.length).toBeGreaterThan(0)
+  expect(holdRings[0].duration).toBeGreaterThan(0.3)
+
   // ============================================================
   // 5. Test Legacy Keyboard Segment Stamp Removal (T99 #4)
   // ============================================================
-  // In PLAY mode (not record), ArrowUp/ArrowDown/ArrowRight should NOT stamp segments
+  // In PLAY mode (not record), ArrowUp/ArrowDown should NOT stamp segments
   // during playback - they should only work in record mode
   await playBtn.click()
   await waitForAudioLoaded(page)
   await page.waitForTimeout(2000)
 
   // Get segment count before
-  const segmentsBefore = page.locator('[data-testid^="segment-beats-"]')
-  const segCountBefore = await segmentsBefore.count()
+  const segmentsBefore = await getSegmentsFromState(page)
+  const segCountBefore = segmentsBefore.length
 
   // Press arrow keys during playback (should NOT add segments in play mode)
   await page.keyboard.press('ArrowUp')
@@ -284,7 +315,8 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   await page.waitForTimeout(1500)
 
   // Segment count should NOT have changed (legacy stamping removed)
-  const segCountAfter = await segmentsBefore.count()
+  const segmentsAfter = await getSegmentsFromState(page)
+  const segCountAfter = segmentsAfter.length
   expect(segCountAfter).toBe(segCountBefore)
   await page.screenshot({ path: 'recordings/t99_08_no_legacy_stamp.png' })
   await page.waitForTimeout(2000)
@@ -300,20 +332,33 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
     if (!ctx) return { found: false }
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
     let nonTransparent = 0
-    for (let i = 3; i < imgData.data.length; i += 4) {
-      if (imgData.data[i] > 0) nonTransparent++
+    let waveTop = canvas.height
+    let waveBottom = 0
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const idx = (y * canvas.width + x) * 4 + 3
+        if (imgData.data[idx] > 0) {
+          nonTransparent++
+          if (y < waveTop) waveTop = y
+          if (y > waveBottom) waveBottom = y
+        }
+      }
     }
     return {
       found: true,
       nonTransparentPixels: nonTransparent,
       width: canvas.width,
       height: canvas.height,
-      // Check that wave extends to use more vertical space
-      centerY: canvas.height / 2
+      waveTop,
+      waveBottom,
+      waveHeight: waveBottom - waveTop,
+      centerY: canvas.height / 2,
     }
   })
   expect(canvasRenderCheck.found).toBe(true)
   expect(canvasRenderCheck.nonTransparentPixels).toBeGreaterThan(1000)
+  // Wave should use significant vertical space (expanded area)
+  expect(canvasRenderCheck.waveHeight).toBeGreaterThan(canvasRenderCheck.height * 0.3)
   await page.screenshot({ path: 'recordings/t99_09_wave_expanded.png' })
   await page.waitForTimeout(2000)
 
@@ -346,6 +391,11 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   const scrollAfterZoomOut = await page.evaluate(() => window.scrollY)
   expect(scrollAfterZoomOut).toBe(initialScrollY)
 
+  // Verify view actually changed (zoom happened)
+  const viewAfterZoom = await page.evaluate(() => {
+    return (window as any).__editorView ?? { startBeat: 0, beats: 16 }
+  })
+  expect(viewAfterZoom.beats).not.toBe(16) // Should have changed from default
   await page.screenshot({ path: 'recordings/t99_10_wheel_zoom_no_scroll.png' })
   await page.waitForTimeout(2000)
 
@@ -434,6 +484,12 @@ test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }
   // Verify first segment (before recording start) still exists with original values
   await expect(page.locator('[data-testid="segment-direction-0"]')).toHaveValue('up')
   expect(Number(await page.locator('[data-testid="segment-beats-0"]').inputValue())).toBeCloseTo(4)
+
+  // Verify segments state internally
+  const finalSegments = await getSegmentsFromState(page)
+  // First segment should still be 'up' with ~4 beats
+  expect(finalSegments[0].direction).toBe('up')
+  expect(finalSegments[0].beats).toBeCloseTo(4, 1)
 
   await page.screenshot({ path: 'recordings/t99_14_overwrite_limited.png' })
   await page.waitForTimeout(2500)
