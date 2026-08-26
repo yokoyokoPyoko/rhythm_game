@@ -326,7 +326,7 @@
         "postmortem": "ses_fc081e710ffelKn2bU0S7Qvwjk",
         "coder": "ses_fc07ba885ffeZlJiRzVtM0215Y"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
