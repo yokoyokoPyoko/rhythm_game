@@ -807,19 +807,13 @@ def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int | None 
     return code, out
 
 
-def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
-    if not task.ui or not has_dev_script():
-        return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic review")
+REVIEWER_QUORUM = 3  # Independent Gate C review sessions; UNANIMOUS PASS required.
 
-    videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
-    if not videos:
-        log.error("No gameplay video recording (.webm) found for Gate C.")
-        return GateResult("Gate C (Dynamic Review)", False, "No gameplay video recorded")
 
-    latest_video = videos[-1]
-    spec = extract_compact_spec(task.id)
+def _build_reviewer_prompt(task: Task, spec: str, run_index: int) -> str:
+    return f"""You are an Uncompromising Product Director and Senior UX/UI Critic inspecting the browser execution video recording for task {task.id} ({task.desc}).
 
-    prompt = f"""You are an Uncompromising Product Director and Senior UX/UI Critic inspecting the browser execution video recording for task {task.id} ({task.desc}).
+You are INDEPENDENT reviewer #{run_index + 1} of {REVIEWER_QUORUM}. Be especially skeptical — most submissions are superficial. Only PASS if you can cite concrete proof for EVERY requirement.
 
 Specification & Intent (each bullet is a REQUIREMENT that must be evaluated individually):
 {spec}
@@ -844,43 +838,70 @@ Output JSON only, with this exact schema:
 If something fails, output e.g.:
 {{"score": 50, "verdict": "FAIL", "evidence": [{{"requirement": "<req text>", "status": "UNMET", "proof": "no observable evidence of the feature in the video"}}], "comment": "specific flaw observed"}}
 """
-    log.info("Reviewer (Gemini Video AI via llm CLI) analyzing video: %s...", latest_video.name)
-    code, out = run_llm_cli_video_review(latest_video, prompt, timeout=None)
 
-    if code != 0:
-        log.error("Reviewer model failed/timed out. Rejecting Gate C.")
-        return GateResult("Gate C (Dynamic Review)", False, f"Reviewer model execution failed (exit={code})")
 
+def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
     match = re.search(r'\{.*"score".*"verdict".*\}', out, re.S)
-    if match:
-        try:
-            res = json.loads(match.group(0))
-            score = res.get("score", 0)
-            verdict = res.get("verdict", "FAIL")
-            comment = res.get("comment", "")
-            evidence = res.get("evidence", [])
-            ok = score >= 80 and verdict == "PASS"
-            if ok:
-                # Evidence protocol: every requirement must be MET with a concrete proof.
-                if not isinstance(evidence, list) or len(evidence) == 0:
-                    ok = False
-                    comment = f"Reviewer provided no per-requirement evidence array. {comment}"
-                else:
-                    for ev in evidence:
-                        status = str(ev.get("status", "")).upper()
-                        proof = str(ev.get("proof", "")).strip()
-                        if status != "MET" or len(proof) < 8:
-                            ok = False
-                            comment = f"Evidence gap for requirement '{ev.get('requirement', '?')}' (status={status}). {comment}"
-                            break
-            score_color = GREEN if ok else RED
-            log.info("Review Verdict: %s%s (%d/100)%s | Reason: %s", score_color, verdict, score, RESET, comment)
-            return GateResult("Gate C (Dynamic Review)", ok, f"Score={score}, Verdict={verdict}: {comment}")
-        except Exception:
-            pass
+    if not match:
+        return False, "Reviewer output did not contain valid evaluation JSON."
+    try:
+        res = json.loads(match.group(0))
+        score = res.get("score", 0)
+        verdict = res.get("verdict", "FAIL")
+        comment = res.get("comment", "")
+        evidence = res.get("evidence", [])
+        ok = score >= 80 and verdict == "PASS"
+        if ok:
+            # Evidence protocol: every requirement must be MET with a concrete proof.
+            if not isinstance(evidence, list) or len(evidence) == 0:
+                ok = False
+                comment = f"Reviewer provided no per-requirement evidence array. {comment}"
+            else:
+                for ev in evidence:
+                    status = str(ev.get("status", "")).upper()
+                    proof = str(ev.get("proof", "")).strip()
+                    if status != "MET" or len(proof) < 8:
+                        ok = False
+                        comment = f"Evidence gap for requirement '{ev.get('requirement', '?')}' (status={status}). {comment}"
+                        break
+        return ok, f"Score={score}, Verdict={verdict}: {comment}"
+    except Exception:
+        return False, "Reviewer output JSON parse failed."
 
-    log.error("Reviewer response did not contain valid evaluation JSON.")
-    return GateResult("Gate C (Dynamic Review)", False, "Reviewer output format invalid")
+
+def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
+    if not task.ui or not has_dev_script():
+        return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic review")
+
+    videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
+    if not videos:
+        log.error("No gameplay video recording (.webm) found for Gate C.")
+        return GateResult("Gate C (Dynamic Review)", False, "No gameplay video recorded")
+
+    latest_video = videos[-1]
+    spec = extract_compact_spec(task.id)
+
+    results: list[tuple[bool, str]] = []
+    for i in range(REVIEWER_QUORUM):
+        prompt = _build_reviewer_prompt(task, spec, i)
+        log.info("Reviewer session %d/%d (independent) analyzing video: %s...", i + 1, REVIEWER_QUORUM, latest_video.name)
+        code, out = run_llm_cli_video_review(latest_video, prompt, timeout=None)
+        if code != 0:
+            results.append((False, f"session {i+1}: model execution failed (exit={code})"))
+            continue
+        ok, reason = _parse_review_verdict(out, task.id)
+        score_color = GREEN if ok else RED
+        log.info("Review %d/%d Verdict: %s%s%s | Reason: %s", i + 1, REVIEWER_QUORUM, score_color, "PASS" if ok else "FAIL", RESET, reason)
+        results.append((ok, f"session {i+1}: {reason}"))
+
+    passed = sum(1 for ok, _ in results if ok)
+    if passed == REVIEWER_QUORUM:
+        return GateResult("Gate C (Dynamic Review)", True, f"Unanimous PASS ({passed}/{REVIEWER_QUORUM} independent reviews)")
+
+    fails = [reason for ok, reason in results if not ok]
+    detail = "; ".join(fails)
+    log.error("[%s] Gate C quorum FAILED: %d/%d independent reviews passed.", task.id, passed, REVIEWER_QUORUM)
+    return GateResult("Gate C (Dynamic Review)", False, f"Quorum FAIL ({passed}/{REVIEWER_QUORUM} passed): {detail}")
 
 
 def decode_retry_from(pm: Any, coder_commit: str | None) -> str:

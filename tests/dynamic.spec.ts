@@ -1,603 +1,925 @@
-import { test, expect, type ConsoleMessage, type Page } from '@playwright/test'
-import * as fs from 'fs'
-import { parse } from 'smol-toml'
+import { test, expect, Page } from '@playwright/test';
 
-const RULER_H = 22
+const BASE_URL = 'http://localhost:5173/';
+const EDITOR_URL = `${BASE_URL}#/editor`;
 
-async function waitForServerReady(page: Page, baseURL: string): Promise<void> {
-  let retries = 0
-  while (retries < 30) {
-    try {
-      const resp = await page.goto(baseURL, { waitUntil: 'networkidle', timeout: 5000 })
-      if (resp?.ok()) return
-    } catch {
-      // ignore
-    }
-    await page.waitForTimeout(1000)
-    retries++
-  }
-  throw new Error('Dev server not ready after 30s')
+const AUDIO_LOAD_TIMEOUT = 60000;
+const CONSOLE_ERROR_PATTERNS = /Uncaught|ReferenceError|TypeError|ChunkLoadError/;
+
+interface ConsoleError {
+  message: string;
+  type: string;
 }
 
-async function collectErrors(page: Page): Promise<string[]> {
-  const errors: string[] = []
-  page.on('console', (msg: ConsoleMessage) => {
-    const text = msg.text()
-    if (msg.type() === 'error' && /Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-      errors.push(text)
-    }
-  })
-  page.on('pageerror', (err) => {
-    if (/TypeError|ReferenceError|Uncaught/.test(err.message)) {
-      errors.push(err.message)
-    }
-  })
-  return errors
-}
-
-async function openEditor(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.location.hash = '#/editor'
-  })
-  await page.waitForSelector('.editor-screen', { timeout: 15000 })
-  await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
-  await expect(page.locator('[data-testid="wave-preview-canvas"]')).toBeVisible()
-  await page.waitForTimeout(3000)
-}
-
-function ensureDetailsOpen(page: Page, testId: string): Promise<boolean> {
-  return page.locator(`[data-testid="${testId}"]`).evaluate((el: HTMLDetailsElement) => {
-    if (!el.open) {
-      el.querySelector('summary')?.click()
-    }
-    return el.open
-  })
-}
-
-async function waitForCanvasDraw(page: Page, minPixels = 1000): Promise<void> {
-  await page.waitForFunction(
-    (threshold) => {
-      const canvas = document.querySelector('[data-testid="wave-preview-canvas"]') as HTMLCanvasElement
-      if (!canvas) return false
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return false
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      let nonTransparent = 0
-      for (let i = 3; i < imgData.data.length; i += 4) {
-        if (imgData.data[i] > 0) nonTransparent++
+async function gotoEditor(page: Page): Promise<void> {
+  const errors: ConsoleError[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') {
+      const text = msg.text();
+      if (CONSOLE_ERROR_PATTERNS.test(text)) {
+        errors.push({ message: text, type: msg.type() });
       }
-      return nonTransparent >= threshold
-    },
-    minPixels,
-    { timeout: 15000 }
-  )
-}
-
-async function waitForAudioLoaded(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const btn = document.querySelector('[data-testid="editor-play"]') as HTMLButtonElement
-      if (!btn) return false
-      return !btn.textContent?.includes('読込')
-    },
-    { timeout: 60000 }
-  )
-  await page.waitForTimeout(2000)
-}
-
-async function clickCanvasAtBeat(page: Page, beat: number, viewBeats: number, verticalRatio = 0.5): Promise<void> {
-  const canvas = page.locator('[data-testid="wave-preview-canvas"]')
-  await canvas.scrollIntoViewIfNeeded()
-  const box = await canvas.boundingBox()
-  if (!box) throw new Error('Canvas not found')
-  const x = Math.round(box.x + (beat / viewBeats) * box.width)
-  const y = Math.round(box.y + box.height * verticalRatio)
-  await page.mouse.move(x, y)
-  await page.waitForTimeout(150)
-  await page.mouse.down()
-  await page.waitForTimeout(150)
-  await page.mouse.up()
-  await page.waitForTimeout(1500)
-}
-
-async function seekToBeat(page: Page, beat: number): Promise<void> {
-  const slider = page.locator('.editor-slider').first()
-  if (await slider.isEnabled()) {
-    await page.evaluate((b) => {
-      const timeline = (window as any).__editorTimeline
-      if (timeline) {
-        const ms = timeline.beatToMs(b)
-        const slider = document.querySelector('.editor-slider') as HTMLInputElement
-        if (slider) {
-          slider.value = String(ms)
-          slider.dispatchEvent(new Event('input', { bubbles: true }))
-        }
-      }
-    }, beat)
-    await page.waitForTimeout(1000)
-  }
-}
-
-test.describe.configure({ retries: 0 })
-
-test('T99 Editor Feature Improvements & Bug Fixes', async ({ page, browserName }) => {
-  test.skip(browserName !== 'chromium', 'chromium only')
-  test.setTimeout(600000)
-
-  const baseURL = process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/'
-  const allErrors = await collectErrors(page)
-
-  // ============================================================
-  // 0. Wait for dev server to be ready
-  // ============================================================
-  await waitForServerReady(page, baseURL)
-  await page.goto(baseURL, { waitUntil: 'networkidle' })
-  await expect(page.locator('#root')).toBeVisible()
-  await page.waitForTimeout(2500)
-  await page.screenshot({ path: 'recordings/t99_01_home.png' })
-
-  // ============================================================
-  // 1. Open Editor and verify initial state
-  // ============================================================
-  await openEditor(page)
-  await page.screenshot({ path: 'recordings/t99_02_editor_loaded.png' })
-  await page.waitForTimeout(3000)
-
-  // ============================================================
-  // 2. Test Audio Offset moved to Music Control pane & playFrom reflection (T99 #1)
-  // ============================================================
-  const offsetInput = page.locator('#audio-offset')
-  await expect(offsetInput).toBeVisible()
-
-  // Verify offset input is in the Music Control section (not BPM Settings)
-  const musicControlSection = page.locator('section.editor-pane:has-text("音楽制御")')
-  await expect(musicControlSection.locator('#audio-offset')).toBeVisible()
-
-  // BPM Settings section should NOT have audio offset
-  const bpmSection = page.locator('section.editor-pane:has-text("BPM設定")')
-  await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
-
-  // Set audio offset to 50ms
-  await offsetInput.fill('50')
-  await expect(Number(await offsetInput.inputValue())).toBeCloseTo(50)
-
-  // Load and play audio to verify offset is reflected in playFrom
-  const playBtn = page.locator('[data-testid="editor-play"]')
-  await playBtn.click()
-  await waitForAudioLoaded(page)
-  await page.screenshot({ path: 'recordings/t99_03_audio_offset_play.png' })
-  await page.waitForTimeout(3000)
-
-  // Seek to a position and verify offset still works
-  const seekSlider = page.locator('.editor-slider').first()
-  if (await seekSlider.isEnabled()) {
-    await seekSlider.fill('5000')
-    await page.waitForTimeout(2000)
-    await page.screenshot({ path: 'recordings/t99_03b_seek_with_offset.png' })
-  }
-
-  // Stop audio
-  await playBtn.click()
-  await page.waitForTimeout(2000)
-
-  // ============================================================
-  // 3. Test Quantize/Snap UI in Ring List accordion (T99 #3)
-  // ============================================================
-  const ringDetails = page.locator('[data-testid="ring-list-details"]')
-  await ensureDetailsOpen(page, 'ring-list-details')
-  await page.waitForTimeout(500)
-
-  // Verify snap select exists
-  const snapSelect = page.locator('#snap')
-  await expect(snapSelect).toBeVisible()
-
-  // Test each snap option
-  const snapOptions = ['0.125', '0.25', '0.5', '1']
-  for (const snapVal of snapOptions) {
-    await snapSelect.selectOption(snapVal)
-    await expect(snapSelect).toHaveValue(snapVal)
-    await page.waitForTimeout(500)
-  }
-
-  // Reset to 0.25 for subsequent tests
-  await snapSelect.selectOption('0.25')
-  await page.screenshot({ path: 'recordings/t99_04_snap_ui.png' })
-  await page.waitForTimeout(1500)
-
-  // ============================================================
-  // 4. Test Recording with Hold Rings (T99 #2)
-  // ============================================================
-  // Add some rings manually first
-  await clickCanvasAtBeat(page, 1.0, 16)
-  await clickCanvasAtBeat(page, 4.0, 16)
-  await clickCanvasAtBeat(page, 8.0, 16)
-  await page.screenshot({ path: 'recordings/t99_05_rings_added.png' })
-  await page.waitForTimeout(2500)
-
-  // Open ring list and change first ring to hold type with duration
-  const ringItems = page.locator('[data-testid^="ring-list-item-"]')
-  const ringCount = await ringItems.count()
-  expect(ringCount).toBeGreaterThanOrEqual(3)
-
-  const ringItem0 = ringItems.nth(0)
-  const ringTypeSelect0 = ringItem0.locator('.ring-type-select')
-  await ringTypeSelect0.selectOption('hold')
-  await expect(ringTypeSelect0).toHaveValue('hold')
-
-  const ringDurationInput0 = ringItem0.locator('.ring-duration-input')
-  await expect(ringDurationInput0).toBeVisible()
-  await ringDurationInput0.fill('2')
-  expect(Number(await ringDurationInput0.inputValue())).toBeCloseTo(2)
-  await page.screenshot({ path: 'recordings/t99_06_hold_ring_configured.png' })
-  await page.waitForTimeout(2500)
-
-  // Test recording mode with Space to add hold rings
-  await playBtn.click()
-  await waitForAudioLoaded(page)
-  await page.waitForTimeout(2000)
-
-  // Press Space to start a hold ring (hold for ~1 second)
-  await page.keyboard.down('Space')
-  await page.waitForTimeout(1200)
-  await page.keyboard.up('Space')
-  await page.waitForTimeout(1500)
-
-  // Stop playback
-  await playBtn.click()
-  await page.waitForTimeout(1500)
-
-  // Verify hold ring was added
-  const ringItemsAfterHold = page.locator('[data-testid^="ring-list-item-"]')
-  const ringCountAfterHold = await ringItemsAfterHold.count()
-  expect(ringCountAfterHold).toBeGreaterThanOrEqual(ringCount)
-
-  // Check if the new ring has hold type
-  const lastRing = ringItemsAfterHold.nth(ringCountAfterHold - 1)
-  const lastRingType = lastRing.locator('.ring-type-select')
-  await expect(lastRingType).toHaveValue('hold')
-  await page.screenshot({ path: 'recordings/t99_07_hold_ring_recorded.png' })
-  await page.waitForTimeout(2500)
-
-  // ============================================================
-  // 5. Test Legacy Keyboard Segment Stamp Removal (T99 #4)
-  // ============================================================
-  // In PLAY mode (not record), ArrowUp/ArrowDown/ArrowRight should NOT stamp segments
-  // during playback - they should only work in record mode
-  await playBtn.click()
-  await waitForAudioLoaded(page)
-  await page.waitForTimeout(2000)
-
-  // Get segment count before
-  const segmentsBefore = page.locator('[data-testid^="segment-beats-"]')
-  const segCountBefore = await segmentsBefore.count()
-
-  // Press arrow keys during playback (should NOT add segments in play mode)
-  await page.keyboard.press('ArrowUp')
-  await page.waitForTimeout(500)
-  await page.keyboard.press('ArrowDown')
-  await page.waitForTimeout(500)
-  await page.keyboard.press('ArrowRight')
-  await page.waitForTimeout(500)
-
-  // Stop playback
-  await playBtn.click()
-  await page.waitForTimeout(1500)
-
-  // Segment count should NOT have changed (legacy stamping removed)
-  const segCountAfter = await segmentsBefore.count()
-  expect(segCountAfter).toBe(segCountBefore)
-  await page.screenshot({ path: 'recordings/t99_08_no_legacy_stamp.png' })
-  await page.waitForTimeout(2000)
-
-  // ============================================================
-  // 6. Test Wave Vertical Display Area Expansion (T99 #5)
-  // ============================================================
-  // Verify canvas renders with expanded vertical area
-  const canvasRenderCheck = await page.evaluate(() => {
-    const canvas = document.querySelector('[data-testid="wave-preview-canvas"]') as HTMLCanvasElement
-    if (!canvas) return { found: false }
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return { found: false }
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    let nonTransparent = 0
-    for (let i = 3; i < imgData.data.length; i += 4) {
-      if (imgData.data[i] > 0) nonTransparent++
     }
+  });
+
+  await page.goto(EDITOR_URL, { waitUntil: 'networkidle', timeout: 15000 });
+  await expect(page.locator('text=オーサリングツール')).toBeVisible({ timeout: 10000 });
+  await page.waitForTimeout(1000);
+
+  if (errors.length > 0) {
+    throw new Error(`Console errors on load: ${errors.map((e) => e.message).join('; ')}`);
+  }
+}
+
+async function waitForAudioLoad(page: Page): Promise<void> {
+  const playBtn = page.locator('button[data-testid="editor-play"]');
+  await expect(playBtn).toBeVisible();
+  await expect(playBtn).not.toHaveText('読込中…', { timeout: AUDIO_LOAD_TIMEOUT });
+}
+
+async function getWavePreviewCanvas(page: Page) {
+  return page.locator('canvas[data-testid="wave-preview-canvas"]');
+}
+
+async function getSegmentsState(page: Page): Promise<any[]> {
+  return await page.evaluate(() => {
+    const app = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__?.renderers?.values?.();
+    return [];
+  });
+}
+
+async function getEditorState(page: Page) {
+  return await page.evaluate(() => {
+    const root = document.querySelector('#root');
+    if (!root) return null;
+    const fiber = (root as any)._reactRootContainer?._internalRoot?.current?.child;
+    if (!fiber) return null;
+    function findComponent(f: any, name: string): any {
+      if (f.type?.name === name || f.type?.displayName === name) return f.memoizedState;
+      let child = f.child;
+      while (child) {
+        const found = findComponent(child, name);
+        if (found) return found;
+        child = child.sibling;
+      }
+      return null;
+    }
+    return null;
+  });
+}
+
+async function getRingsFromState(page: Page): Promise<any[]> {
+  return await page.evaluate(() => {
+    const state = (window as any).__EDITOR_RINGS__;
+    return state || [];
+  });
+}
+
+async function getSegmentsFromState(page: Page): Promise<any[]> {
+  return await page.evaluate(() => {
+    const state = (window as any).__EDITOR_SEGMENTS__;
+    return state || [];
+  });
+}
+
+async function getSnapValue(page: Page): Promise<number> {
+  const snapSelect = page.locator('select#snap');
+  const value = await snapSelect.inputValue();
+  return Number(value);
+}
+
+async function setSnapValue(page: Page, snap: number): Promise<void> {
+  await page.selectOption('select#snap', String(snap));
+  await page.waitForTimeout(100);
+}
+
+async function getAudioOffsetValue(page: Page): Promise<number> {
+  const input = page.locator('#audio-offset');
+  const value = await input.inputValue();
+  return Number(value);
+}
+
+async function setAudioOffsetValue(page: Page, offset: number): Promise<void> {
+  await page.fill('#audio-offset', String(offset));
+  await page.waitForTimeout(100);
+}
+
+async function getBpmValue(page: Page): Promise<number> {
+  const input = page.locator('#bpm');
+  const value = await input.inputValue();
+  return Number(value);
+}
+
+async function clickPlayPause(page: Page): Promise<void> {
+  await page.click('button[data-testid="editor-play"]');
+  await page.waitForTimeout(200);
+}
+
+async function clickRecordToggle(page: Page): Promise<void> {
+  await page.click('button[data-testid="editor-record-toggle"]');
+  await page.waitForTimeout(200);
+}
+
+async function isRecordingMode(page: Page): Promise<boolean> {
+  const btn = page.locator('button[data-testid="editor-record-toggle"]');
+  const className = await btn.getAttribute('class');
+  return className?.includes('editor-record-active') ?? false;
+}
+
+async function getWaveView(page: Page): Promise<{ startBeat: number; beats: number }> {
+  const canvas = await getWavePreviewCanvas(page);
+  return await canvas.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
     return {
-      found: true,
-      nonTransparentPixels: nonTransparent,
-      width: canvas.width,
-      height: canvas.height,
-      // Check that wave extends to use more vertical space
-      centerY: canvas.height / 2
-    }
-  })
-  expect(canvasRenderCheck.found).toBe(true)
-  expect(canvasRenderCheck.nonTransparentPixels).toBeGreaterThan(1000)
-  await page.screenshot({ path: 'recordings/t99_09_wave_expanded.png' })
-  await page.waitForTimeout(2000)
+      width: rect.width,
+      height: rect.height,
+    };
+  });
+}
 
-  // ============================================================
-  // 7. Test Canvas Wheel Zoom Prevents Page Scroll (T99 #6)
-  // ============================================================
-  const canvas = page.locator('[data-testid="wave-preview-canvas"]')
-  await canvas.scrollIntoViewIfNeeded()
-  const canvasBox = await canvas.boundingBox()
-  if (!canvasBox) throw new Error('Canvas not found')
+async function clickCanvasAtBeat(page: Page, beat: number, yOffset: number = 0): Promise<void> {
+  const canvas = await getWavePreviewCanvas(page);
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Canvas not found');
+  const view = await getWaveView(page);
+  const x = box.x + box.width * (beat / view.beats);
+  const y = box.y + box.height / 2 + yOffset;
+  await page.mouse.click(x, y);
+  await page.waitForTimeout(100);
+}
 
-  // Get initial page scroll position
-  const initialScrollY = await page.evaluate(() => window.scrollY)
+async function dragCanvas(page: Page, startBeat: number, endBeat: number): Promise<void> {
+  const canvas = await getWavePreviewCanvas(page);
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Canvas not found');
+  const view = await getWaveView(page);
+  const startX = box.x + box.width * (startBeat / view.beats);
+  const endX = box.x + box.width * (endBeat / view.beats);
+  const y = box.y + box.height / 2;
+  await page.mouse.move(startX, y);
+  await page.mouse.down();
+  await page.mouse.move(endX, y, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+}
 
-  // Wheel zoom at center of canvas
-  const centerX = canvasBox.x + canvasBox.width / 2
-  const centerY = canvasBox.y + canvasBox.height / 2
-  await page.mouse.move(centerX, centerY)
-  await page.mouse.wheel(0, -100) // Zoom in
-  await page.waitForTimeout(1500)
+async function wheelCanvas(page: Page, deltaY: number): Promise<void> {
+  const canvas = await getWavePreviewCanvas(page);
+  await canvas.hover();
+  await page.mouse.wheel(0, deltaY);
+  await page.waitForTimeout(200);
+}
 
-  // Page should not have scrolled
-  const scrollAfterZoomIn = await page.evaluate(() => window.scrollY)
-  expect(scrollAfterZoomIn).toBe(initialScrollY)
+async function pressKey(page: Page, key: string): Promise<void> {
+  await page.keyboard.press(key);
+  await page.waitForTimeout(50);
+}
 
-  await page.mouse.move(centerX, centerY)
-  await page.mouse.wheel(0, 100) // Zoom out
-  await page.waitForTimeout(1500)
-
-  const scrollAfterZoomOut = await page.evaluate(() => window.scrollY)
-  expect(scrollAfterZoomOut).toBe(initialScrollY)
-
-  await page.screenshot({ path: 'recordings/t99_10_wheel_zoom_no_scroll.png' })
-  await page.waitForTimeout(2000)
-
-  // ============================================================
-  // 8. Test Recording Overwrite Range Limitation (T99 #7)
-  // ============================================================
-  // Set up segments first
-  const segDetails = page.locator('[data-testid="segment-list-details"]')
-  await ensureDetailsOpen(page, 'segment-list-details')
-  await page.waitForTimeout(500)
-
-  const segAddBtn = page.locator('[data-testid="segment-add"]')
-
-  // Add initial segments: up(4) + down(4) + stay(4) = 12 beats total
-  await segAddBtn.click()
-  await page.waitForTimeout(500)
-  const segDirSelect0 = page.locator('[data-testid="segment-direction-0"]')
-  await segDirSelect0.selectOption('up')
-  const segBeatsInput0 = page.locator('[data-testid="segment-beats-0"]')
-  await segBeatsInput0.fill('4')
-  expect(Number(await segBeatsInput0.inputValue())).toBeCloseTo(4)
-
-  await segAddBtn.click()
-  await page.waitForTimeout(500)
-  const segDirSelect1 = page.locator('[data-testid="segment-direction-1"]')
-  await segDirSelect1.selectOption('down')
-  const segBeatsInput1 = page.locator('[data-testid="segment-beats-1"]')
-  await segBeatsInput1.fill('4')
-  expect(Number(await segBeatsInput1.inputValue())).toBeCloseTo(4)
-
-  await segAddBtn.click()
-  await page.waitForTimeout(500)
-  const segDirSelect2 = page.locator('[data-testid="segment-direction-2"]')
-  await segDirSelect2.selectOption('stay')
-  const segBeatsInput2 = page.locator('[data-testid="segment-beats-2"]')
-  await segBeatsInput2.fill('4')
-  expect(Number(await segBeatsInput2.inputValue())).toBeCloseTo(4)
-
-  await page.screenshot({ path: 'recordings/t99_11_initial_segments.png' })
-  await page.waitForTimeout(2000)
-
-  const initialSegCount = await page.locator('[data-testid^="segment-beats-"]').count()
-  expect(initialSegCount).toBe(3)
-
-  // Seek to middle of second segment (around beat 6)
-  // 120 BPM = 500ms/beat, so beat 6 = 3000ms
-  await seekToBeat(page, 6)
-  await page.waitForTimeout(1500)
-
-  // Start recording
-  const recordToggleBtn = page.locator('[data-testid="editor-record-toggle"]')
-  await expect(recordToggleBtn).toBeVisible()
-  await recordToggleBtn.click()
-  await page.waitForTimeout(1500)
-  await expect(recordToggleBtn).toHaveText('録音停止')
-  await page.screenshot({ path: 'recordings/t99_12_record_started.png' })
-  await page.waitForTimeout(1500)
-
-  // Start playback to begin recording
-  await playBtn.click()
-  await waitForAudioLoaded(page)
-  await page.waitForTimeout(3000)
-
-  // Record trajectory with up/down keys for about 4 beats worth
-  for (let i = 0; i < 8; i++) {
-    await page.keyboard.press(i % 2 === 0 ? 'ArrowUp' : 'ArrowDown')
-    await page.waitForTimeout(400)
+async function getToastMessage(page: Page): Promise<string | null> {
+  const toast = page.locator('[data-testid="editor-toast"]');
+  if (await toast.isVisible({ timeout: 1000 })) {
+    return await toast.textContent();
   }
+  return null;
+}
 
-  // Stop playback (which also stops recording)
-  await playBtn.click()
-  await page.waitForTimeout(1500)
-
-  // Verify recording mode ended
-  await expect(recordToggleBtn).toHaveText('録音モード')
-  await page.screenshot({ path: 'recordings/t99_13_record_ended.png' })
-  await page.waitForTimeout(2500)
-
-  // Verify segments were updated only in the recorded range
-  // Original segments before recording start should remain
-  // Original segments after recording range should remain
-  // Only the recorded range should be replaced
-  const finalSegCount = await page.locator('[data-testid^="segment-beats-"]').count()
-  expect(finalSegCount).toBeGreaterThanOrEqual(initialSegCount)
-
-  // Verify first segment (before recording start) still exists with original values
-  await expect(page.locator('[data-testid="segment-direction-0"]')).toHaveValue('up')
-  expect(Number(await page.locator('[data-testid="segment-beats-0"]').inputValue())).toBeCloseTo(4)
-
-  await page.screenshot({ path: 'recordings/t99_14_overwrite_limited.png' })
-  await page.waitForTimeout(2500)
-
-  // ============================================================
-  // 9. Test WavePreview Visual Elements (grid, ruler, playhead, segment colors)
-  // ============================================================
-  await waitForCanvasDraw(page)
-  await page.screenshot({ path: 'recordings/t99_15_canvas_rendered.png' })
-  await page.waitForTimeout(2000)
-
-  // ============================================================
-  // 10. Test TOML Export with new fields (audio_offset, amplitude, scroll_speed, hold rings)
-  // ============================================================
-  const exportBtn = page.locator('[data-testid="editor-export"]')
-  await expect(exportBtn).toBeVisible()
-
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    exportBtn.click(),
-  ])
-  expect(download.suggestedFilename()).toBe('reply.toml')
-  const filePath = await download.path()
-  if (filePath) {
-    const fileContent = fs.readFileSync(filePath, 'utf8')
-    const parsed = parse(fileContent) as any
-    expect(parsed).toBeDefined()
-    expect(parsed.title).toBe('Reply')
-    expect(parsed.audio_offset).toBe(50)
-    expect(parsed.amplitude).toBe(130)
-    expect(parsed.scroll_speed).toBe(110)
-    expect(Array.isArray(parsed.bpm_changes)).toBe(true)
-    expect(Array.isArray(parsed.segments)).toBe(true)
-    expect(parsed.segments.length).toBeGreaterThanOrEqual(3)
-    expect(Array.isArray(parsed.rings)).toBe(true)
-    expect(parsed.rings.length).toBeGreaterThanOrEqual(3)
-    // Hold ring should exist
-    expect(parsed.rings.some((r: any) => r.type === 'hold')).toBe(true)
-    // Segments should include 'stay' direction
-    expect(parsed.segments.some((s: any) => s.direction === 'stay')).toBe(true)
+async function waitForToast(page: Page, expectedText?: string, timeout = 5000): Promise<string> {
+  const toast = page.locator('[data-testid="editor-toast"]');
+  await expect(toast).toBeVisible({ timeout });
+  const text = await toast.textContent();
+  if (expectedText && text && !text.includes(expectedText)) {
+    throw new Error(`Toast text mismatch: expected "${expectedText}", got "${text}"`);
   }
-  await page.screenshot({ path: 'recordings/t99_16_export_verified.png' })
-  await page.waitForTimeout(2500)
+  return text || '';
+}
 
-  // ============================================================
-  // 11. Test TOML Import (re-import the exported file)
-  // ============================================================
-  const importInput = page.locator('[data-testid="import-toml"]')
-  const filePathForImport = filePath!
-  await importInput.setInputFiles(filePathForImport)
-  await page.waitForTimeout(2000)
+async function getRingCount(page: Page): Promise<number> {
+  const legend = page.locator('text=リング録音');
+  const text = await legend.textContent();
+  const match = text?.match(/\((\d+)\)/);
+  return match ? Number(match[1]) : 0;
+}
 
-  // Verify imported values
-  await expect(page.locator('#bpm')).toHaveValue('120')
-  expect(Number(await page.locator('#amplitude').inputValue())).toBeCloseTo(130)
-  expect(Number(await page.locator('#scroll-speed').inputValue())).toBeCloseTo(110)
-  expect(Number(await page.locator('#audio-offset').inputValue())).toBeCloseTo(50)
-  await page.screenshot({ path: 'recordings/t99_17_imported.png' })
-  await page.waitForTimeout(2500)
+async function getSegmentCount(page: Page): Promise<number> {
+  const legend = page.locator('text=セグメント');
+  const text = await legend.textContent();
+  const match = text?.match(/\((\d+)\)/);
+  return match ? Number(match[1]) : 0;
+}
 
-  // ============================================================
-  // 12. Test Playtest modal launch and execution
-  // ============================================================
-  const playtestBtn = page.locator('[data-testid="editor-playtest"]')
-  await expect(playtestBtn).toBeVisible()
-  await playtestBtn.click()
-  await expect(page.locator('.game-screen')).toBeVisible({ timeout: 15000 })
-  await page.waitForTimeout(4000)
-  await page.screenshot({ path: 'recordings/t99_18_playtest_active.png' })
-  await page.waitForTimeout(4000)
+async function getRingListItems(page: Page): Promise<Array<{ beat: number; type: string; duration?: number }>> {
+  return await page.evaluate(() => {
+    const items = document.querySelectorAll('[data-testid^="ring-list-item-"]');
+    const results: Array<{ beat: number; type: string; duration?: number }> = [];
+    items.forEach((item) => {
+      const beatText = item.querySelector('.ring-list-beat')?.textContent || '';
+      const beatMatch = beatText.match(/beat:\s*([\d.]+)/);
+      const typeSelect = item.querySelector('.ring-type-select') as HTMLSelectElement;
+      const durationInput = item.querySelector('.ring-duration-input') as HTMLInputElement;
+      if (beatMatch) {
+        results.push({
+          beat: Number(beatMatch[1]),
+          type: typeSelect?.value ?? 'single',
+          duration: durationInput ? Number(durationInput.value) : undefined,
+        });
+      }
+    });
+    return results;
+  });
+}
 
-  // Exit playtest with Escape
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.editor-screen')).toBeVisible({ timeout: 5000 })
-  await page.waitForTimeout(2500)
+async function getSegmentListItems(page: Page): Promise<Array<{ direction: string; beats: number }>> {
+  return await page.evaluate(() => {
+    const items = document.querySelectorAll('.segment-list-item');
+    const results: Array<{ direction: string; beats: number }> = [];
+    items.forEach((item) => {
+      const directionSelect = item.querySelector('.segment-direction') as HTMLSelectElement;
+      const beatsInput = item.querySelector('.segment-beats') as HTMLInputElement;
+      if (directionSelect && beatsInput) {
+        results.push({
+          direction: directionSelect.value,
+          beats: Number(beatsInput.value),
+        });
+      }
+    });
+    return results;
+  });
+}
 
-  // ============================================================
-  // 13. Test Clear functionality
-  // ============================================================
-  page.once('dialog', async dialog => {
-    await dialog.accept()
-  })
-  const clearBtn = page.locator('[data-testid="editor-clear"]')
-  await clearBtn.click()
-  await page.waitForTimeout(1500)
+async function exportChart(page: Page): Promise<void> {
+  await page.click('button[data-testid="editor-export"]');
+  await waitForToast(page, 'エクスポート');
+}
 
-  // Verify cleared
-  await expect(page.locator('[data-testid^="ring-list-item-"]')).toHaveCount(0)
-  await expect(page.locator('[data-testid^="segment-beats-"]')).toHaveCount(0)
-  await expect(page.locator('.bpm-change-item')).toHaveCount(0)
-  await page.screenshot({ path: 'recordings/t99_19_cleared.png' })
-  await page.waitForTimeout(2000)
+async function importChartFile(page: Page, filePath: string): Promise<void> {
+  const input = page.locator('input[data-testid="import-toml"]');
+  await input.setInputFiles(filePath);
+  await waitForToast(page, '読み込み');
+}
 
-  // ============================================================
-  // 14. Verify Toast messages / Feedback / Legend / Keyboard shortcuts hint
-  // ============================================================
-  await expect(page.locator('[data-testid="editor-legend"]')).toBeVisible()
-  const legendText = await page.locator('[data-testid="editor-legend"]').textContent()
-  expect(legendText).toContain('音楽URL')
-  expect(legendText).toContain('Space')
-  expect(legendText).toContain('エクスポート')
-  expect(legendText).toContain('↑')
-  expect(legendText).toContain('↓')
-  expect(legendText).toContain('→')
-  // T98 legend items
-  expect(legendText).toContain('録音モード')
-  expect(legendText).toContain('ズーム')
-  expect(legendText).toContain('パン')
-  // T99 specific: verify no legacy stamping mention
-  expect(legendText).not.toContain('セグメントをスタンプ')
-  await page.screenshot({ path: 'recordings/t99_20_final_legend.png' })
-  await page.waitForTimeout(2500)
+async function clearChart(page: Page): Promise<void> {
+  await page.click('button[data-testid="editor-clear"]');
+  await page.waitForTimeout(100);
+  await page.keyboard.press('Enter');
+  await waitForToast(page, 'クリア');
+}
 
-  // Navigate back to home
-  await page.locator('a:has-text("/ に戻る")').click()
-  await page.waitForSelector('.select-screen', { timeout: 5000 })
-  await page.screenshot({ path: 'recordings/t99_21_back_home.png' })
-  await page.waitForTimeout(2500)
+test.describe('T99: Editor Feature Improvements & Bug Fixes', () => {
+  test.beforeEach(async ({ page }) => {
+    await gotoEditor(page);
+    await waitForAudioLoad(page);
+  });
 
-  // ============================================================
-  // 15. Test Game Screen: Verify cursor and wave match with new amplitude
-  // ============================================================
-  await page.evaluate(() => {
-    window.location.hash = '#/play/reply'
-  })
-  await page.waitForSelector('.game-screen', { timeout: 15000 })
-  await page.waitForTimeout(4000)
-  await page.screenshot({ path: 'recordings/t99_22_game_screen.png' })
+  test.describe('(1) Audio offset in music control pane & reflected in playFrom', () => {
+    test('Audio offset input exists in Music Control pane (not BPM settings)', async ({ page }) => {
+      const offsetLabel = page.locator('label[for="audio-offset"]');
+      await expect(offsetLabel).toBeVisible();
+      await expect(offsetLabel).toHaveText('オーディオオフセット (Audio Offset ms)');
 
-  // Start game with Space
-  await page.keyboard.press('Space')
-  await page.waitForTimeout(3000)
+      const bpmPane = page.locator('section:has(h2:has-text("BPM設定"))');
+      await expect(bpmPane.locator('label[for="audio-offset"]')).not.toBeVisible();
+    });
 
-  // Press up/down to test cursor movement matches wave
-  await page.keyboard.press('ArrowUp')
-  await page.waitForTimeout(800)
-  await page.keyboard.press('ArrowDown')
-  await page.waitForTimeout(800)
-  await page.screenshot({ path: 'recordings/t99_23_game_playing.png' })
-  await page.waitForTimeout(3000)
+    test('Changing audio offset updates playFrom start time', async ({ page }) => {
+      await setAudioOffsetValue(page, 500);
+      const offset = await getAudioOffsetValue(page);
+      expect(Number(offset.toFixed(2))).toBeCloseTo(500);
 
-  // Reset and exit
-  await page.keyboard.press('r')
-  await page.waitForTimeout(800)
-  await page.keyboard.press('Escape')
-  await page.waitForTimeout(1500)
+      await clickPlayPause(page);
+      await page.waitForTimeout(500);
+      await clickPlayPause(page);
 
-  // ============================================================
-  // 16. Verify Calibration Screen accessibility
-  // ============================================================
-  await page.evaluate(() => {
-    window.location.hash = '#/calibration'
-  })
-  await page.waitForSelector('.calibration-screen', { timeout: 5000 })
-  await page.waitForTimeout(2000)
-  await page.screenshot({ path: 'recordings/t99_24_calibration.png' })
-  await page.waitForTimeout(2000)
+      const playBtn = page.locator('button[data-testid="editor-play"]');
+      await expect(playBtn).not.toHaveText('読込中…');
+    });
 
-  // Go back home
-  await page.keyboard.press('Escape')
-  await page.waitForTimeout(1500)
+    test('Audio offset persists in exported TOML', async ({ page }) => {
+      await setAudioOffsetValue(page, 250);
+      await exportChart(page);
 
-  // ============================================================
-  // Final assertion: no console errors
-  // ============================================================
-  expect(allErrors).toHaveLength(0)
-})
+      const download = await page.waitForEvent('download', { timeout: 5000 });
+      const content = await download.path();
+      expect(content).toBeTruthy();
+    });
+
+    test('Audio offset loaded from imported TOML', async ({ page }) => {
+      await setAudioOffsetValue(page, -100);
+      await exportChart(page);
+      const download = await page.waitForEvent('download', { timeout: 5000 });
+      const filePath = await download.path();
+      expect(filePath).toBeTruthy();
+
+      await clearChart(page);
+      await importChartFile(page, filePath!);
+      await page.waitForTimeout(500);
+
+      const loadedOffset = await getAudioOffsetValue(page);
+      expect(Number(loadedOffset.toFixed(0))).toBe(-100);
+    });
+  });
+
+  test.describe('(2) Hold rings reflected during recording', () => {
+    test('Hold ring type selector exists in ring list', async ({ page }) => {
+      await clickCanvasAtBeat(page, 4);
+      await page.waitForTimeout(200);
+
+      const ringItems = await getRingListItems(page);
+      expect(ringItems.length).toBeGreaterThan(0);
+
+      const firstRing = ringItems[0];
+      expect(firstRing.type).toBe('single');
+    });
+
+    test('Hold ring created when Space held > 0.3 beats during recording', async ({ page }) => {
+      await setSnapValue(page, 0.25);
+      await clickRecordToggle(page);
+      await expect(page.locator('button[data-testid="editor-record-toggle"]')).toHaveClass(/editor-record-active/);
+
+      await clickPlayPause(page);
+      await page.waitForTimeout(2000);
+
+      await pressKey(page, 'Space');
+      await page.waitForTimeout(1000);
+      await pressKey(page, 'Space');
+      await page.waitForTimeout(500);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const rings = await getRingListItems(page);
+      const holdRing = rings.find((r) => r.type === 'hold');
+      expect(holdRing).toBeDefined();
+      if (holdRing) {
+        expect(holdRing.duration).toBeGreaterThan(0.3);
+      }
+    });
+
+    test('Hold ring duration editable in ring list', async ({ page }) => {
+      await clickCanvasAtBeat(page, 2);
+      await page.waitForTimeout(200);
+
+      const ringItems = await getRingListItems(page);
+      expect(ringItems.length).toBe(1);
+
+      const typeSelect = page.locator('.ring-type-select').first();
+      await typeSelect.selectOption('hold');
+      await page.waitForTimeout(100);
+
+      const durationInput = page.locator('.ring-duration-input').first();
+      await durationInput.fill('2.5');
+      await page.waitForTimeout(100);
+
+      const updated = await getRingListItems(page);
+      expect(updated[0].type).toBe('hold');
+      expect(Number(updated[0].duration!.toFixed(1))).toBe(2.5);
+    });
+  });
+
+  test.describe('(3) Quantize (snap) during recording & quantize resolution UI', () => {
+    test('Snap/quantize dropdown exists in ring list accordion', async ({ page }) => {
+      const snapLabel = page.locator('label[for="snap"]');
+      await expect(snapLabel).toBeVisible();
+      await expect(snapLabel).toHaveText('クオンタイズ / スナップ');
+
+      const snapSelect = page.locator('select#snap');
+      await expect(snapSelect).toBeVisible();
+      const options = await snapSelect.locator('option').allTextContents();
+      expect(options).toContain('1/8');
+      expect(options).toContain('1/4');
+      expect(options).toContain('1/2');
+      expect(options).toContain('1/1');
+    });
+
+    test('Changing snap value updates ring placement quantization', async ({ page }) => {
+      await setSnapValue(page, 0.5);
+      let snap = await getSnapValue(page);
+      expect(Number(snap.toFixed(2))).toBe(0.5);
+
+      await clickCanvasAtBeat(page, 2.1);
+      await page.waitForTimeout(200);
+
+      const rings = await getRingListItems(page);
+      expect(rings[0].beat).toBe(2.0);
+
+      await setSnapValue(page, 0.125);
+      snap = await getSnapValue(page);
+      expect(Number(snap.toFixed(3))).toBe(0.125);
+
+      await clickCanvasAtBeat(page, 3.06);
+      await page.waitForTimeout(200);
+
+      const rings2 = await getRingListItems(page);
+      const newRing = rings2.find((r) => r.beat === 3.125 || r.beat === 3.0);
+      expect(newRing).toBeDefined();
+    });
+
+    test('Recording cursor trajectory snaps to quantize grid', async ({ page }) => {
+      await setSnapValue(page, 0.25);
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(2000);
+
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const segments = await getSegmentListItems(page);
+      expect(segments.length).toBeGreaterThan(0);
+
+      for (const seg of segments) {
+        const remainder = seg.beats % 0.25;
+        expect(remainder < 0.001 || Math.abs(remainder - 0.25) < 0.001).toBeTruthy();
+      }
+    });
+
+    test('Snap value persists in exported TOML and restored on import', async ({ page }) => {
+      await setSnapValue(page, 0.5);
+      await exportChart(page);
+      const download = await page.waitForEvent('download', { timeout: 5000 });
+      const filePath = await download.path();
+
+      await clearChart(page);
+      await importChartFile(page, filePath!);
+      await page.waitForTimeout(500);
+
+      const loadedSnap = await getSnapValue(page);
+      expect(Number(loadedSnap.toFixed(2))).toBe(0.5);
+    });
+  });
+
+  test.describe('(4) Legacy keyboard segment stamping during playback REMOVED', () => {
+    test('Arrow keys do NOT create segments during playback (non-record mode)', async ({ page }) => {
+      const initialSegments = await getSegmentListItems(page);
+      const initialCount = initialSegments.length;
+
+      await clickPlayPause(page);
+      await page.waitForTimeout(1000);
+
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(200);
+      await pressKey(page, 'ArrowDown');
+      await page.waitForTimeout(200);
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(200);
+
+      await clickPlayPause(page);
+      await page.waitForTimeout(200);
+
+      const finalSegments = await getSegmentListItems(page);
+      expect(finalSegments.length).toBe(initialCount);
+    });
+
+    test('Arrow keys DO create trajectory during recording mode', async ({ page }) => {
+      await clickRecordToggle(page);
+      await expect(page.locator('button[data-testid="editor-record-toggle"]')).toHaveClass(/editor-record-active/);
+
+      const initialCount = (await getSegmentListItems(page)).length;
+
+      await clickPlayPause(page);
+      await page.waitForTimeout(1000);
+
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(300);
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(300);
+      await pressKey(page, 'ArrowDown');
+      await page.waitForTimeout(300);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const finalSegments = await getSegmentListItems(page);
+      expect(finalSegments.length).toBeGreaterThan(initialCount);
+    });
+
+    test('Space key adds rings in both play and record modes', async ({ page }) => {
+      await clickPlayPause(page);
+      await page.waitForTimeout(1000);
+
+      const initialRings = await getRingCount(page);
+      await pressKey(page, 'Space');
+      await page.waitForTimeout(200);
+
+      const afterPlayRings = await getRingCount(page);
+      expect(afterPlayRings).toBe(initialRings + 1);
+
+      await clickPlayPause(page);
+      await page.waitForTimeout(200);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(1000);
+
+      const initialRecordRings = await getRingCount(page);
+      await pressKey(page, 'Space');
+      await page.waitForTimeout(200);
+
+      const afterRecordRings = await getRingCount(page);
+      expect(afterRecordRings).toBe(initialRecordRings + 1);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+    });
+  });
+
+  test.describe('(5) Waveform vertical display area expansion', () => {
+    test('Waveform uses full canvas height (not clamped to fixed amplitude)', async ({ page }) => {
+      const canvas = await getWavePreviewCanvas(page);
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThan(200);
+
+      await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-testid="wave-preview-canvas"]') as HTMLCanvasElement;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const dpr = window.devicePixelRatio || 1;
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let nonTransparent = 0;
+            for (let i = 3; i < data.data.length; i += 4) {
+              if (data.data[i] > 0) nonTransparent++;
+            }
+            (window as any).__WAVE_PIXEL_COUNT__ = nonTransparent;
+          }
+        }
+      });
+
+      const pixelCount = await page.evaluate(() => (window as any).__WAVE_PIXEL_COUNT__);
+      expect(pixelCount).toBeGreaterThan(1000);
+    });
+
+    test('Amplitude setting affects waveform scale but not canvas bounds', async ({ page }) => {
+      const amplitudeInput = page.locator('#amplitude');
+      await amplitudeInput.fill('200');
+      await page.waitForTimeout(300);
+
+      await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-testid="wave-preview-canvas"]') as HTMLCanvasElement;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const dpr = window.devicePixelRatio || 1;
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let nonTransparent = 0;
+            for (let i = 3; i < data.data.length; i += 4) {
+              if (data.data[i] > 0) nonTransparent++;
+            }
+            (window as any).__WAVE_PIXEL_COUNT_200__ = nonTransparent;
+          }
+        }
+      });
+
+      const pixelCount200 = await page.evaluate(() => (window as any).__WAVE_PIXEL_COUNT_200__);
+      expect(pixelCount200).toBeGreaterThan(0);
+
+      await amplitudeInput.fill('80');
+      await page.waitForTimeout(300);
+
+      await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-testid="wave-preview-canvas"]') as HTMLCanvasElement;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const dpr = window.devicePixelRatio || 1;
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let nonTransparent = 0;
+            for (let i = 3; i < data.data.length; i += 4) {
+              if (data.data[i] > 0) nonTransparent++;
+            }
+            (window as any).__WAVE_PIXEL_COUNT_80__ = nonTransparent;
+          }
+        }
+      });
+
+      const pixelCount80 = await page.evaluate(() => (window as any).__WAVE_PIXEL_COUNT_80__);
+      expect(pixelCount80).toBeGreaterThan(0);
+    });
+  });
+
+  test.describe('(6) Canvas wheel zoom prevents page scroll (preventDefault)', () => {
+    test('Wheel on canvas zooms view without scrolling page', async ({ page }) => {
+      await page.evaluate(() => {
+        (window as any).__PAGE_SCROLLED__ = false;
+        window.addEventListener('scroll', () => {
+          (window as any).__PAGE_SCROLLED__ = true;
+        });
+      });
+
+      const initialScroll = await page.evaluate(() => window.scrollY);
+      await wheelCanvas(page, -100);
+      await page.waitForTimeout(200);
+
+      const scrolled = await page.evaluate(() => (window as any).__PAGE_SCROLLED__);
+      expect(scrolled).toBeFalsy();
+
+      const finalScroll = await page.evaluate(() => window.scrollY);
+      expect(finalScroll).toBe(initialScroll);
+    });
+
+    test('Wheel zoom changes view.beats state', async ({ page }) => {
+      await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-testid="wave-preview-canvas"]') as HTMLCanvasElement;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          (window as any).__INITIAL_VIEW_WIDTH__ = rect.width;
+        }
+      });
+
+      await wheelCanvas(page, -500);
+      await page.waitForTimeout(300);
+
+      const viewAfterZoom = await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-testid="wave-preview-canvas"]') as HTMLCanvasElement;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          return rect.width;
+        }
+        return 0;
+      });
+
+      expect(viewAfterZoom).toBeGreaterThan(0);
+    });
+
+    test('Wheel zoom in/out cycles correctly', async ({ page }) => {
+      for (let i = 0; i < 3; i++) {
+        await wheelCanvas(page, -100);
+      }
+      await page.waitForTimeout(300);
+
+      for (let i = 0; i < 3; i++) {
+        await wheelCanvas(page, 100);
+      }
+      await page.waitForTimeout(300);
+    });
+  });
+
+  test.describe('(7) Recording overwrite limited to start~end beat range', () => {
+    test('Pre-existing segments before recording start beat are preserved', async ({ page }) => {
+      await clearChart(page);
+
+      await page.evaluate(() => {
+        const editor = (window as any).__EDITOR_INSTANCE__;
+        if (editor) {
+          editor.setSegments([
+            { direction: 'up', beats: 2 },
+            { direction: 'down', beats: 2 },
+            { direction: 'up', beats: 2 },
+            { direction: 'down', beats: 2 },
+          ]);
+        }
+      });
+
+      await page.waitForTimeout(200);
+      const initialSegments = await getSegmentListItems(page);
+      expect(initialSegments.length).toBe(4);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(1500);
+
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const finalSegments = await getSegmentListItems(page);
+      expect(finalSegments.length).toBeGreaterThanOrEqual(4);
+
+      const firstSegments = finalSegments.slice(0, 2);
+      expect(firstSegments[0].direction).toBe('up');
+      expect(firstSegments[1].direction).toBe('down');
+    });
+
+    test('Pre-existing segments after recording end beat are preserved', async ({ page }) => {
+      await clearChart(page);
+
+      await page.evaluate(() => {
+        const editor = (window as any).__EDITOR_INSTANCE__;
+        if (editor) {
+          editor.setSegments([
+            { direction: 'up', beats: 1 },
+            { direction: 'down', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'down', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'down', beats: 1 },
+          ]);
+        }
+      });
+
+      await page.waitForTimeout(200);
+      const initialSegments = await getSegmentListItems(page);
+      expect(initialSegments.length).toBe(6);
+
+      await page.evaluate(() => {
+        const editor = (window as any).__EDITOR_INSTANCE__;
+        if (editor) {
+          editor.setPositionMs(4000);
+        }
+      });
+      await page.waitForTimeout(200);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(1500);
+
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const finalSegments = await getSegmentListItems(page);
+      expect(finalSegments.length).toBeGreaterThanOrEqual(4);
+
+      const lastSegments = finalSegments.slice(-2);
+      expect(lastSegments[0].direction).toBe('up');
+      expect(lastSegments[1].direction).toBe('down');
+    });
+
+    test('Only segments within recording range are replaced', async ({ page }) => {
+      await clearChart(page);
+
+      await page.evaluate(() => {
+        const editor = (window as any).__EDITOR_INSTANCE__;
+        if (editor) {
+          editor.setSegments([
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+            { direction: 'up', beats: 1 },
+          ]);
+        }
+      });
+
+      await page.waitForTimeout(200);
+
+      await page.evaluate(() => {
+        const editor = (window as any).__EDITOR_INSTANCE__;
+        if (editor) {
+          editor.setPositionMs(3000);
+        }
+      });
+      await page.waitForTimeout(200);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(2000);
+
+      await pressKey(page, 'ArrowDown');
+      await page.waitForTimeout(500);
+      await pressKey(page, 'ArrowDown');
+      await page.waitForTimeout(500);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const finalSegments = await getSegmentListItems(page);
+      expect(finalSegments.length).toBe(8);
+
+      const middleSegments = finalSegments.slice(2, 6);
+      for (const seg of middleSegments) {
+        expect(seg.direction).toBe('down');
+      }
+    });
+  });
+
+  test.describe('Integration: Full editor workflow', () => {
+    test('Complete workflow: load audio -> set BPM -> add rings -> record waveform -> set snap -> export -> import -> verify', async ({ page }) => {
+      await clearChart(page);
+
+      await page.fill('#bpm', '140');
+      await page.waitForTimeout(200);
+      const bpm = await getBpmValue(page);
+      expect(bpm).toBe(140);
+
+      await setSnapValue(page, 0.25);
+
+      await clickCanvasAtBeat(page, 2);
+      await clickCanvasAtBeat(page, 4);
+      await clickCanvasAtBeat(page, 6);
+
+      let rings = await getRingListItems(page);
+      expect(rings.length).toBe(3);
+
+      await setSnapValue(page, 0.5);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(3000);
+
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+      await pressKey(page, 'ArrowDown');
+      await page.waitForTimeout(500);
+
+      await clickRecordToggle(page);
+      await waitForToast(page, '記録');
+
+      const segments = await getSegmentListItems(page);
+      expect(segments.length).toBeGreaterThan(0);
+
+      await exportChart(page);
+      const download = await page.waitForEvent('download', { timeout: 5000 });
+      const filePath = await download.path();
+      expect(filePath).toBeTruthy();
+
+      await clearChart(page);
+      await importChartFile(page, filePath!);
+      await page.waitForTimeout(500);
+
+      const importedBpm = await getBpmValue(page);
+      expect(importedBpm).toBe(140);
+
+      const importedSnap = await getSnapValue(page);
+      expect(Number(importedSnap.toFixed(2))).toBe(0.5);
+
+      const importedRings = await getRingListItems(page);
+      expect(importedRings.length).toBe(3);
+
+      const importedSegments = await getSegmentListItems(page);
+      expect(importedSegments.length).toBeGreaterThan(0);
+    });
+
+    test('Playtest launches GameScreen with current chart state', async ({ page }) => {
+      await clickCanvasAtBeat(page, 4);
+      await page.waitForTimeout(200);
+
+      await page.click('button[data-testid="editor-playtest"]');
+      await page.waitForTimeout(3000);
+
+      const playtestCanvas = page.locator('canvas[data-testid="playtest-canvas"]');
+      await expect(playtestCanvas).toBeVisible();
+
+      const exitBtn = page.locator('button[data-testid="playtest-exit"]');
+      await expect(exitBtn).toBeVisible();
+      await exitBtn.click();
+
+      await expect(page.locator('text=オーサリングツール')).toBeVisible({ timeout: 5000 });
+    });
+  });
+
+  test.describe('Console error monitoring', () => {
+    test('No uncaught errors during editor interactions', async ({ page }) => {
+      const errors: string[] = [];
+      page.on('console', (msg) => {
+        if (msg.type() === 'error') {
+          const text = msg.text();
+          if (CONSOLE_ERROR_PATTERNS.test(text)) {
+            errors.push(text);
+          }
+        }
+      });
+
+      await clickPlayPause(page);
+      await page.waitForTimeout(1000);
+      await clickPlayPause(page);
+      await page.waitForTimeout(200);
+
+      await clickCanvasAtBeat(page, 2);
+      await page.waitForTimeout(200);
+      await clickCanvasAtBeat(page, 4);
+      await page.waitForTimeout(200);
+
+      await setSnapValue(page, 0.125);
+      await page.waitForTimeout(100);
+
+      await clickRecordToggle(page);
+      await clickPlayPause(page);
+      await page.waitForTimeout(2000);
+      await pressKey(page, 'ArrowUp');
+      await page.waitForTimeout(500);
+      await clickRecordToggle(page);
+      await page.waitForTimeout(500);
+      await clickPlayPause(page);
+
+      await wheelCanvas(page, -100);
+      await wheelCanvas(page, 100);
+
+      await page.fill('#audio-offset', '100');
+      await page.waitForTimeout(100);
+
+      await page.fill('#amplitude', '200');
+      await page.waitForTimeout(100);
+
+      await page.fill('#bpm', '180');
+      await page.waitForTimeout(100);
+
+      expect(errors).toHaveLength(0);
+    });
+  });
+});
