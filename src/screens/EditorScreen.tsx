@@ -283,6 +283,7 @@ export default function EditorScreen() {
   }, [])
 
   const playFrom = async (fromMs: number) => {
+    ;(window as unknown as Record<string, unknown>).__editorPlayFromOffset = audioOffset
     const mgr = AudioManager.getInstance()
     await mgr.ensure()
     const ctx = mgr.ctx
