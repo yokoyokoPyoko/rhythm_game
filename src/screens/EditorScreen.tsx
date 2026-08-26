@@ -139,6 +139,17 @@ export default function EditorScreen() {
       setRingDetailsOpen(true)
     }
   }, [rings.length])
+
+  useEffect(() => {
+    const w = window as unknown as Record<string, unknown>
+    w.__editorSegments = segments
+    w.__editorRings = rings
+    w.__editorSnap = snap
+    w.__editorAudioOffset = audioOffset
+    w.__editorView = view
+    w.__editorTimeline = timeline
+  })
+
   const playtestActiveRef = useRef(false)
   const toastTimerRef = useRef<number | null>(null)
   const modeRef = useRef<'play' | 'record'>('play')
@@ -160,6 +171,7 @@ export default function EditorScreen() {
   const startCtxTimeRef = useRef(0)
   const startMsRef = useRef(0)
   const positionRef = useRef(0)
+  const endMsRef = useRef(0)
   const isPlayingRef = useRef(false)
 
   const setPlaying = (v: boolean) => {
@@ -226,13 +238,13 @@ export default function EditorScreen() {
       lastTickRef.current = now
       const ctx = AudioManager.getInstance().ctx
       const pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
-      if (buffer && pos >= buffer.duration * 1000) {
+      if (pos >= endMsRef.current) {
         if (sourceRef.current) {
           sourceRef.current.disconnect()
           sourceRef.current = null
         }
-        setPositionMs(buffer.duration * 1000)
-        positionRef.current = buffer.duration * 1000
+        setPositionMs(endMsRef.current)
+        positionRef.current = endMsRef.current
         if (modeRef.current === 'record') finishRecording()
         setPlaying(false)
       } else {
@@ -275,16 +287,17 @@ export default function EditorScreen() {
     await mgr.ensure()
     const ctx = mgr.ctx
     let buf = buffer
+    let audioFailed = false
     if (!buf) {
       setLoadingAudio(true)
       buf = await loadAudio(url, ctx)
       setLoadingAudio(false)
-      if (!buf) {
-        setError('音楽ファイルの読み込みに失敗しました')
-        return
+      if (buf) {
+        setBuffer(buf)
+        setDurationMs(buf.duration * 1000)
+      } else {
+        audioFailed = true
       }
-      setBuffer(buf)
-      setDurationMs(buf.duration * 1000)
     }
     if (sourceRef.current) {
       try {
@@ -295,27 +308,39 @@ export default function EditorScreen() {
       sourceRef.current.disconnect()
       sourceRef.current = null
     }
-    const src = ctx.createBufferSource()
-    src.buffer = buf
-    src.connect(ctx.destination)
-    const offsetSec = audioOffset / 1000
-    const audioTime = Math.max(0, fromMs / 1000)
-    if (offsetSec >= 0) {
-      src.start(ctx.currentTime + offsetSec, audioTime)
-    } else {
-      src.start(ctx.currentTime, Math.max(0, audioTime - offsetSec))
-    }
-    src.onended = () => {
-      if (sourceRef.current === src) {
-        sourceRef.current = null
-        setPlaying(false)
+    if (buf) {
+      const src = ctx.createBufferSource()
+      src.buffer = buf
+      src.connect(ctx.destination)
+      const offsetSec = audioOffset / 1000
+      const audioTime = Math.max(0, fromMs / 1000)
+      if (offsetSec >= 0) {
+        src.start(ctx.currentTime + offsetSec, audioTime)
+      } else {
+        src.start(ctx.currentTime, Math.max(0, audioTime - offsetSec))
       }
+      src.onended = () => {
+        if (sourceRef.current === src) {
+          sourceRef.current = null
+          setPlaying(false)
+        }
+      }
+      sourceRef.current = src
     }
-    sourceRef.current = src
+    const contentBeats = Math.max(
+      segments.reduce((s, seg) => s + seg.beats, 0),
+      rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), 0),
+      8,
+    )
+    endMsRef.current = buf ? buf.duration * 1000 : timeline.beatToMs(contentBeats + 4)
     startCtxTimeRef.current = ctx.currentTime
     startMsRef.current = fromMs
     setPlaying(true)
-    setError(null)
+    setError(
+      audioFailed
+        ? '音楽ファイルの読み込みに失敗しました（メトロノームのみで続行）'
+        : null,
+    )
   }
 
   const startRecording = useCallback(() => {
@@ -331,8 +356,7 @@ export default function EditorScreen() {
     modeRef.current = 'record'
     setMode('record')
     setRecLive({ beat: startBeat, y: startY, trajectory: recTrajRef.current.slice() })
-    if (!isPlayingRef.current) void playFrom(positionMs)
-  }, [timeline, segments, amplitude, positionMs, playFrom])
+  }, [timeline, segments, amplitude, positionMs])
 
   const stop = () => {
     const src = sourceRef.current
