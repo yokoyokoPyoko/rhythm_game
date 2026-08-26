@@ -672,12 +672,16 @@ def ensure_dev_server() -> bool:
 VIDEO_DIR = ROOT / "recordings"
 
 
-def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> GateResult:
-    if not task.ui or not has_dev_script():
-        return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
+def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> bool:
+    """TDD pipeline: QA-Gen writes tests/dynamic.spec.ts from the specification (no execution).
 
+    Returns True if the test file was actually written. The test is expected to FAIL (Red)
+    before implementation exists; the caller is responsible for the Red verification.
+    """
+    if not task.ui or not has_dev_script():
+        return False
     if not ensure_dev_server():
-        return GateResult("Gate B (Dynamic Test)", False, "Dev server failed to start")
+        return False
 
     SCREENSHOT_DIR.mkdir(exist_ok=True)
     VIDEO_DIR.mkdir(exist_ok=True)
@@ -690,70 +694,77 @@ def generate_and_run_gate_b(task: Task, qa_model: str, state: dict[str, Any] | N
 
     prompt = fr"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
 
-Context:
-This test execution automatically records a video (.webm) of the browser in action. The recorded video is inspected by an uncompromising Product Director / Senior UX/UI Critic (Gate C Reviewer) to evaluate visual polish, fluidity, and interaction craftsmanship.
+Context (TEST-DRIVEN DEVELOPMENT):
+This is a TDD task. The implementation code does NOT exist yet. Your job is to write a STRICT acceptance test that will initially FAIL (Red) and must later PASS (Green) once the Coder implements the feature. The recorded video is inspected by a Product Director (Gate C Reviewer) who requires per-requirement evidence.
 
 Specification:
 {spec}
 {recent_rules}
 
-STRICT QA REQUIREMENTS FOR VIDEO CAPTURE & ROBUSTNESS:
-1. Comprehensive Interaction: Actively simulate realistic, thorough user interactions for ALL features mentioned in the specification. Use `page.goto('/')` and HashRouter navigation (e.g. `window.location.hash = '#/editor'`).
-2. Audio Loading & Decoding Wait (CRITICAL): The default audio file (`08.Reply.flac`) is 68.8MB and takes several seconds to load and decode via Web Audio API. When testing audio loading/playing/seeking in the editor or game, you MUST wait explicitly for decoding/loading to complete (e.g., waiting for play button text to change from '読込中…' or waiting for buffer readiness) before interacting. Do not assume instant audio readiness.
-3. Number Input Assertion Rule (CRITICAL): HTML `<input type="number">` normalizes floating-point strings like `11.00` to `11`. Never assert exact string equality like `toHaveValue("11.00")`. Instead, use `expect(Number(await input.inputValue())).toBeCloseTo(11)` or regex `toHaveValue(/^11(\.0+)?$/)`.
-4. Visual Capture Timing: Insert adequate wait times (`page.waitForTimeout(1500-3000)` between critical actions) for CSS transitions and animations.
-5. Robust Locators & Stability: Use robust locators (text, roles, test IDs). Avoid strict visibility checks on 0-height containers.
-6. Console Error Monitoring: Listen to unhandled console exceptions and fail if any uncaught TypeError/ReferenceError occurs.
-7. Single File Rule: You MUST write the complete final test to `tests/dynamic.spec.ts`. Do NOT modify any other file. Do NOT run the test yourself. Use the file-write tool.
+STRICT QA REQUIREMENTS (verify BEHAVIOR / INTERNAL STATE, never surface-only DOM presence):
+1. For EACH requirement in the specification, write at least one assertion that verifies ACTUAL BEHAVIOR or INTERNAL STATE, not merely that a DOM element exists/is visible. Examples:
+   - Verify computed/numeric outcomes (e.g. a recorded segment's `beats` is a multiple of the quantize resolution) by reading app state via `window`, data-* attributes, or test IDs.
+   - Verify state transitions (e.g. after pressing a key in play mode, a segments/rings array does NOT change) by reading observable state.
+2. Simulate realistic, thorough interactions for ALL features. Use HashRouter (`window.location.hash = '#/editor'`).
+3. Audio Loading & Decoding Wait (CRITICAL): `08.Reply.flac` is 68.8MB. Wait for decode/loading to complete (e.g. play button text leaves '読込中…' or buffer ready) before interacting.
+4. Number Input Assertion Rule (CRITICAL): `<input type="number">` normalizes `11.00` to `11`. Use `expect(Number(await input.inputValue())).toBeCloseTo(11)` or `toHaveValue(/^11(\.0+)?$/)` — never exact string equality.
+5. Visual Capture Timing: `page.waitForTimeout(1500-3000)` between critical actions for transitions/animations.
+6. Robust Locators & Stability: use text/roles/test IDs. Avoid strict visibility checks on 0-height containers.
+7. Console Error Monitoring: fail on any uncaught TypeError/ReferenceError.
+8. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
+9. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
 
 Output only: DONE when finished. Never paste full test code into chat.
 """
-    golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
-    task_state = state.get("tasks", {}).get(task.id, {}) if state else {}
-    wrote_spec = False
-    if not fresh_sessions and task_state.get("gate_b_golden") and golden_file.exists():
-        log.info("Reusing previous passing golden test for Gate B (skipping QA generation)...")
-        try:
-            import shutil
-            shutil.copy(golden_file, DYNAMIC_SPEC_FILE)
-            wrote_spec = True
-        except Exception:
-            pass
+    QA_CONTINUE_RETRIES = 5
+    continuation_prompt = (
+        prompt
+        + "\n\n[CONTINUATION] 前回の実行では tests/dynamic.spec.ts を実際に書いていません"
+        "（書き込み完了前に終わりました）。今度は file-write ツールで tests/dynamic.spec.ts を"
+        "「今すぐ直接」書いてください。説明だけでなく実際に書くこと。書き終わったら DONE のみ出力。"
+    )
 
-    if not wrote_spec:
-        QA_CONTINUE_RETRIES = 5
-        continuation_prompt = (
-            prompt
-            + "\n\n[CONTINUATION] 前回の実行では tests/dynamic.spec.ts を実際に書いていません"
-            "（書き込み完了前に終わりました）。今度は file-write ツールで tests/dynamic.spec.ts を"
-            "「今すぐ直接」書いてください。説明だけでなく実際に書くこと。書き終わったら DONE のみ出力。"
+    cont_prompt = prompt
+    for attempt in range(1, QA_CONTINUE_RETRIES + 1):
+        mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
+        if attempt == 1:
+            log.info("QA generating dynamic test script (TDD direct-write mode)...")
+        else:
+            log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
+            cont_prompt = continuation_prompt
+        _, out = run_opencode_with_retry(
+            qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
+            task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions,
+            title=qa_title,
         )
 
-        cont_prompt = prompt
-        for attempt in range(1, QA_CONTINUE_RETRIES + 1):
-            mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
-            if attempt == 1:
-                log.info("QA generating dynamic test script (direct write mode)...")
-            else:
-                log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
-                cont_prompt = continuation_prompt
-            _, out = run_opencode_with_retry(
-                qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
-                task_id=task.id, role="qa", state=state, fresh_sessions=fresh_sessions,
-                title=qa_title,
-            )
+        wrote = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
+        if wrote:
+            log.info("QA model wrote tests/dynamic.spec.ts directly.")
+            return True
+    return False
 
-            wrote_spec = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
-            if wrote_spec:
-                log.info("QA model wrote tests/dynamic.spec.ts directly.")
-                break
-        else:
-            return GateResult(
-                "Gate B (Dynamic Test)",
-                False,
-                "QA model did not write tests/dynamic.spec.ts after 5 continues",
-                fatal=False,
-            )
+
+def run_dynamic_test_red(task: Task) -> bool:
+    """TDD Red phase: run the test ONCE. Returns True if it PASSED (false-positive / no real assertions)."""
+    if not DYNAMIC_SPEC_FILE.exists():
+        return False
+    if not ensure_dev_server():
+        return False
+    code, _, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="red: ")
+    return code == 0
+
+
+def run_gate_b_test(state: dict[str, Any] | None, task: Task) -> GateResult:
+    """Green phase: run the (already written) Playwright test with flaky-retry. Copies golden on success."""
+    if not task.ui or not has_dev_script():
+        return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
+
+    if not DYNAMIC_SPEC_FILE.exists():
+        return GateResult("Gate B (Dynamic Test)", False, "tests/dynamic.spec.ts not found (QA did not write it)")
+
+    if not ensure_dev_server():
+        return GateResult("Gate B (Dynamic Test)", False, "Dev server failed to start")
 
     log.info("Running Playwright execution with Video Recording (flaky-retry enabled)...")
     playwright_passed = False
@@ -772,6 +783,7 @@ Output only: DONE when finished. Never paste full test code into chat.
         detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
         return GateResult("Gate B (Dynamic Test)", False, detail)
 
+    golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
     try:
         import shutil
         shutil.copy(DYNAMIC_SPEC_FILE, golden_file)
@@ -809,7 +821,7 @@ def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
 
     prompt = f"""You are an Uncompromising Product Director and Senior UX/UI Critic inspecting the browser execution video recording for task {task.id} ({task.desc}).
 
-Specification & Intent:
+Specification & Intent (each bullet is a REQUIREMENT that must be evaluated individually):
 {spec}
 
 EVALUATION PHILOSOPHY:
@@ -821,16 +833,20 @@ MANDATORY EXCELLENCE CRITERIA (All must be met for a PASS):
 3. Feedback & State Clarity: Clear, immediate visual feedback for user actions; accurate data presentation without flickering or visual artifacts.
 4. Craft & Delight: The implementation should feel like a finished, polished product ready for users, demonstrating thoughtful care beyond mere functional compliance.
 
-SCORE TIERS & VERDICT (Binary Gate):
-- [80 - 100 pts] PASS: Outstanding execution. Fully functional, highly polished, visually refined, and delivers an exceptional user experience with zero noticeable flaws.
-- [0 - 79 pts]   FAIL (Immediate Rejection): Any jank, crude UI, missing polish, unresponsive feedback, design inconsistency, or superficial implementation that fails to deliver a truly finished product experience.
+MANDATORY EVIDENCE PROTOCOL (Strict — no exceptions):
+You MUST evaluate EVERY requirement listed in the Specification above, one by one. For each requirement provide a CONCRETE, FALSIFIABLE piece of evidence observed in the video (a timestamp + exactly what was seen/clicked). Abstract praise such as "works well", "properly implemented", or "looks good" WITHOUT a specific observable action is treated as UNMET.
+- If ANY requirement is status "UNMET" or is absent from the evidence array -> verdict MUST be "FAIL".
+- If any requirement's proof is vague / non-observable (fewer than ~8 meaningful characters) -> treat that requirement as UNMET.
 
-Output JSON only:
-{{"score": 90, "verdict": "PASS", "comment": "detailed product/UX critique"}} or {{"score": 50, "verdict": "FAIL", "comment": "specific UX/polish flaw observed"}}
+Output JSON only, with this exact schema:
+{{"score": 90, "verdict": "PASS", "evidence": [{{"requirement": "<verbatim requirement text or id from spec>", "status": "MET", "proof": "<specific observable evidence with timestamp, e.g. '00:12 clicked offset UI then audio sync shifted'>"}}], "comment": "detailed product/UX critique"}}
+
+If something fails, output e.g.:
+{{"score": 50, "verdict": "FAIL", "evidence": [{{"requirement": "<req text>", "status": "UNMET", "proof": "no observable evidence of the feature in the video"}}], "comment": "specific flaw observed"}}
 """
     log.info("Reviewer (Gemini Video AI via llm CLI) analyzing video: %s...", latest_video.name)
     code, out = run_llm_cli_video_review(latest_video, prompt, timeout=None)
-    
+
     if code != 0:
         log.error("Reviewer model failed/timed out. Rejecting Gate C.")
         return GateResult("Gate C (Dynamic Review)", False, f"Reviewer model execution failed (exit={code})")
@@ -842,7 +858,21 @@ Output JSON only:
             score = res.get("score", 0)
             verdict = res.get("verdict", "FAIL")
             comment = res.get("comment", "")
+            evidence = res.get("evidence", [])
             ok = score >= 80 and verdict == "PASS"
+            if ok:
+                # Evidence protocol: every requirement must be MET with a concrete proof.
+                if not isinstance(evidence, list) or len(evidence) == 0:
+                    ok = False
+                    comment = f"Reviewer provided no per-requirement evidence array. {comment}"
+                else:
+                    for ev in evidence:
+                        status = str(ev.get("status", "")).upper()
+                        proof = str(ev.get("proof", "")).strip()
+                        if status != "MET" or len(proof) < 8:
+                            ok = False
+                            comment = f"Evidence gap for requirement '{ev.get('requirement', '?')}' (status={status}). {comment}"
+                            break
             score_color = GREEN if ok else RED
             log.info("Review Verdict: %s%s (%d/100)%s | Reason: %s", score_color, verdict, score, RESET, comment)
             return GateResult("Gate C (Dynamic Review)", ok, f"Score={score}, Verdict={verdict}: {comment}")
@@ -972,7 +1002,8 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     cycles = 0
     no_progress_streak = 0
     best_stage = 0  # 0:未達 / 1:Gate A通過 / 2:Gate B通過 / 3:全ゲート通過
-    need_coder = True
+    need_coder = False  # TDD: Coder runs AFTER QA-Gen writes the test
+    need_test = bool(task.ui)  # TDD: (re)generate acceptance test first; skip for non-UI tasks
     coder_commit = None
 
     def mark_stage(stage: int) -> None:
@@ -986,11 +1017,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.warning("[%s] No progress at stage %d (best=%d, streak %d/%d)", task.id, stage, best_stage, no_progress_streak, NO_PROGRESS_LIMIT)
 
     def maybe_reset_cycle() -> None:
-        nonlocal cycles, no_progress_streak, need_coder
+        nonlocal cycles, no_progress_streak, need_coder, need_test
         if no_progress_streak >= NO_PROGRESS_LIMIT:
             cycles += 1
             no_progress_streak = 0
             need_coder = True
+            need_test = bool(task.ui)
             log.warning("[%s] %d consecutive attempts without progress. Rolling back to task-start commit and restarting cycle (%d/%d).", task.id, NO_PROGRESS_LIMIT, cycles, MAX_CYCLES)
             git_rollback(head_hash)
 
@@ -1000,7 +1032,41 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         save_state(state)
         log.info("Starting implementation [%s] (attempt %d, cycle %d/%d)", task.id, st["attempts"], cycles + 1, MAX_CYCLES)
 
-        # 1. Coder (+ Gate A) — skipped when retrying from QA-Gen
+        # --- TDD Phase 1: QA-Gen writes the acceptance test (Red stage) ---
+        if need_test:
+            if DYNAMIC_SPEC_FILE.exists():
+                try:
+                    DYNAMIC_SPEC_FILE.unlink()
+                except Exception:
+                    pass
+            wrote = generate_qa_test(task, models.qa, state=state, fresh_sessions=fresh_sessions)
+            if not wrote:
+                log.error("[%s] QA-Gen failed to write tests/dynamic.spec.ts.", task.id)
+                generate_postmortem(task, "QA-Gen did not write tests/dynamic.spec.ts.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                need_test = True
+                need_coder = False
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
+            # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
+            if run_dynamic_test_red(task):
+                log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
+                generate_postmortem(task, "QA test is a false-positive (passed before implementation). Rewrite stricter behavior/state-based assertions that FAIL on an unimplemented feature.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                need_test = True
+                need_coder = False
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
+            log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
+        else:
+            # Reusing a previous test: ensure the spec file exists (restore golden if rolled back).
+            if not DYNAMIC_SPEC_FILE.exists():
+                golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
+                if golden_file.exists():
+                    import shutil
+                    shutil.copy(golden_file, DYNAMIC_SPEC_FILE)
+
+        # --- TDD Phase 2: Coder implements to make the test Green (+ Gate A) ---
         if need_coder:
             if state and task.id in state.get("tasks", {}):
                 state["tasks"][task.id]["gate_b_golden"] = False
@@ -1045,11 +1111,9 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             git_checkpoint(f"checkpoint({task.id}, gate-a)")
             _, coder_commit, _ = run_cmd_pgid_stream(["git", "rev-parse", "HEAD"])
             coder_commit = coder_commit.strip()
-        else:
-            log.info("[%s] Reusing Coder output (retry from QA-Gen). Skipping Coder + Gate A.", task.id)
 
-        # 3. Gate B (Playwright)
-        gb = generate_and_run_gate_b(task, models.qa, state=state, fresh_sessions=fresh_sessions)
+        # --- TDD Phase 3: Gate B (Green) run the acceptance test ---
+        gb = run_gate_b_test(state, task)
         if not gb.ok:
             if gb.fatal:
                 log.error("[%s] Gate B failed (fatal): %s", task.id, gb.detail)
@@ -1060,10 +1124,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             log.error("[%s] Gate B failed: %s", task.id, gb.detail)
             pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
             if decode_retry_from(pm, coder_commit) == "qa":
-                log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
+                log.info("[%s] Postmortem: retry from QA-Gen (regenerate test).", task.id)
+                need_test = True
                 need_coder = False
             else:
                 need_coder = True
+                need_test = False
             mark_stage(1)
             maybe_reset_cycle()
             continue
