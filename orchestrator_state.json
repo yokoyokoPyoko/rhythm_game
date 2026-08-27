@@ -330,9 +330,16 @@
       "finished": 1787787742.6762261
     },
     "T101": {
-      "attempts": 0,
+      "attempts": 11,
       "status": "running",
-      "started": 1787787742.6766405
+      "started": 1787787742.6766405,
+      "cycles": 4,
+      "sessions": {
+        "qa": "ses_fbefe3ad4ffe24ma5pqcGwqMs4",
+        "postmortem": "ses_fbefe763cffeI97y7NkRfzm886",
+        "coder": "ses_fbefb6733ffetvqvrYFxhc3ynP"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

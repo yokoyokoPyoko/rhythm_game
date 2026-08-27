@@ -7,6 +7,7 @@ import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
 import { WaveEngine } from '../game/waveEngine'
+import { segmentize } from '../chart/quantize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
@@ -22,23 +23,6 @@ function formatSeconds(ms: number): string {
   const sec = s % 60
   const tenth = Math.floor((ms % 1000) / 100)
   return `${m}:${sec.toString().padStart(2, '0')}.${tenth}`
-}
-
-function interpolateY(traj: { beat: number; y: number }[], beat: number): number {
-  if (traj.length === 0) return GAME_CENTER_Y
-  if (beat <= traj[0].beat) return traj[0].y
-  const last = traj[traj.length - 1]
-  if (beat >= last.beat) return last.y
-  for (let i = 0; i < traj.length - 1; i++) {
-    const a = traj[i]
-    const b = traj[i + 1]
-    if (beat >= a.beat && beat <= b.beat) {
-      if (b.beat <= a.beat) return b.y
-      const t = (beat - a.beat) / (b.beat - a.beat)
-      return a.y + (b.y - a.y) * t
-    }
-  }
-  return last.y
 }
 
 function truncateSegmentsTo(
@@ -67,44 +51,6 @@ function truncateSegmentsTo(
     }
   }
   return { kept, startY }
-}
-
-function segmentize(
-  traj: { beat: number; y: number }[],
-  snap: number,
-  amplitude: number,
-): Segment[] {
-  if (traj.length < 2) return []
-  const sorted = [...traj].sort((a, b) => a.beat - b.beat)
-  const start = sorted[0].beat
-  const end = sorted[sorted.length - 1].beat
-  const micro: { direction: 'up' | 'down' | 'stay'; beats: number }[] = []
-  const threshold = Math.max((amplitude * snap) / 16, 0.5)
-  for (let b = start; b < end - 1e-6; b += snap) {
-    const y1 = interpolateY(sorted, b)
-    const y2 = interpolateY(sorted, b + snap)
-    const dy = y2 - y1
-    if (Math.abs(dy) <= threshold) {
-      micro.push({ direction: 'stay', beats: snap })
-    } else {
-      const dir: 'up' | 'down' = dy > 0 ? 'down' : 'up'
-      const moveBeats = Math.min(snap, (2 * Math.abs(dy)) / amplitude)
-      micro.push({ direction: dir, beats: Number(moveBeats.toFixed(4)) })
-      if (moveBeats < snap - 1e-6) {
-        micro.push({ direction: 'stay', beats: Number((snap - moveBeats).toFixed(4)) })
-      }
-    }
-  }
-  const merged: Segment[] = []
-  for (const m of micro) {
-    const last = merged[merged.length - 1]
-    if (last && last.direction === m.direction) {
-      last.beats = Number((last.beats + m.beats).toFixed(4))
-    } else {
-      merged.push({ direction: m.direction, beats: Number(m.beats.toFixed(4)) })
-    }
-  }
-  return merged.filter((s) => s.beats > 0.0001)
 }
 
 export default function EditorScreen() {
@@ -335,7 +281,8 @@ export default function EditorScreen() {
       rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), 0),
       8,
     )
-    endMsRef.current = buf ? buf.duration * 1000 : timeline.beatToMs(contentBeats + 4)
+    const fallbackMs = Math.max(timeline.beatToMs(contentBeats + 4), 30000)
+    endMsRef.current = buf ? buf.duration * 1000 : fallbackMs
     startCtxTimeRef.current = ctx.currentTime
     startMsRef.current = fromMs
     setPlaying(true)
@@ -377,7 +324,6 @@ export default function EditorScreen() {
     src.disconnect()
     sourceRef.current = null
     setPlaying(false)
-    if (modeRef.current === 'record') finishRecording()
   }
 
   const toggle = () => {
@@ -722,6 +668,24 @@ export default function EditorScreen() {
                 onChange={(e) => setAudioOffset(Number(e.target.value))}
               />
             </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="snap">
+                クオンタイズ / スナップ
+              </label>
+              <select
+                id="snap"
+                className="editor-input"
+                value={snap}
+                onChange={(e) => setSnap(Number(e.target.value))}
+                data-testid="snap-select"
+              >
+                {SNAP_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    1/{Math.round(1 / s)}
+                  </option>
+                ))}
+              </select>
+            </div>
             {error && <div className="editor-error">{error}</div>}
           </section>
 
@@ -822,28 +786,11 @@ export default function EditorScreen() {
           <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
 
           <section className="editor-pane editor-accordion">
-            <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>
-            <summary className="editor-accordion-summary">
-              <span>リング録音 ({rings.length})</span>
-            </summary>
-            <div className="editor-field">
-              <label className="editor-label" htmlFor="snap">
-                クオンタイズ / スナップ
-              </label>
-              <select
-                id="snap"
-                className="editor-input"
-                value={snap}
-                onChange={(e) => setSnap(Number(e.target.value))}
-              >
-                {SNAP_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    1/{Math.round(1 / s)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <p className="editor-hint">再生中に Space で現在のbeatをスタンプ。プレビュー上で直接クリック・ドラッグ・ダブルクリックも可能</p>
+             <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>
+             <summary className="editor-accordion-summary">
+               <span>リング録音 ({rings.length})</span>
+             </summary>
+             <p className="editor-hint">再生中に Space で現在のbeatをスタンプ。プレビュー上で直接クリック・ドラッグ・ダブルクリックも可能</p>
             {rings.length === 0 ? (
               <p className="editor-empty">リングなし</p>
             ) : (
