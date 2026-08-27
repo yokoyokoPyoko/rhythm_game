@@ -305,8 +305,8 @@
     },
     "T99": {
       "attempts": 32,
-      "status": "passed",
-      "started": 1787761684.5044105,
+      "status": "running",
+      "started": 1787829447.3294272,
       "cycles": 4,
       "gate_b_golden": true,
       "sessions": {
@@ -331,7 +331,7 @@
     },
     "T101": {
       "attempts": 14,
-      "status": "running",
+      "status": "passed",
       "started": 1787787742.6766405,
       "cycles": 4,
       "sessions": {
@@ -339,7 +339,8 @@
         "postmortem": "ses_fbed2468bffeb12NlxsotvoD9T",
         "coder": "ses_fbed1fae3ffeKhujJ9LZBMDaD3"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1787800553.7647355
     }
   },
   "consecutive_no_action": 0

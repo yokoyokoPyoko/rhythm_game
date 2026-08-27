@@ -707,6 +707,64 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T99] オーディオオフセットの音楽制御ペイン移動＋再生反映
+
+`src/screens/EditorScreen.tsx` + `src/screens/editor/BpmEditor.tsx`:
+- `BpmEditor.tsx` からオーディオオフセット入力（`#audio-offset`）を削除し、左ペインの音楽制御セクション（`#music-control`）内に移動。
+- `EditorScreen` の `audioOffset` 状態を `playFrom(ms)` 内で再生オフセットとして確実に適用（デコード済バッファの `start(0, offsetSec)` 等）。
+- 完了条件: 音楽制御ペイン内に `#audio-offset` が存在し、`BpmEditor` 側には存在しないこと（`toHaveCount(0)`）。オフセット値を変更して再生し、再生位置がオフセット分だけずれることを自動テストで確認。
+
+---
+
+### [T100] 録音時ホールドリング反映
+
+`src/screens/EditorScreen.tsx` + `src/game/ringSpawner.ts`:
+- 録音モードで Space を押し続けている間、hold 型リング（`type: 'hold'`, `duration` = 押下時間）を生成し、停止/コミット時にリングリストへ反映。
+- 完了条件: 録音後に `ring-type-select` が `hold` のリングが存在し、内部状態（`type === 'hold'`, `duration > 0.3`）を自動テストで確認。
+
+---
+
+### [T101] 録音時クオンタイズ（snap吸着）＋分解能UI
+
+`src/screens/EditorScreen.tsx` + `segmentize()`:
+- 録音中に上下キーで記録した軌跡を `segmentize(traj, snap, amplitude)` でセグメント化する際、各セグメントの `beats` を選択した snap 解像度（0.125 / 0.25 / 0.5 / 1）の**整数倍**に丸める。
+- 左ペインに「クオンタイズ / スナップ」セクション（`#snap`）と分解能ドロップダウン（1/4・1/2 等）を追加し、内部状態 `snap` に反映。
+- 完了条件: 録音して得られたセグメント配列の各 `beats` が `snap` の整数倍であることを自動テストで検証（本タスクの核心要求）。
+
+---
+
+### [T102] レガシー再生中セグメントスタンプ完全削除
+
+`src/screens/EditorScreen.tsx`:
+- `onKeyDown` において `mode !== 'record'`（再生中等）の場合、上下キー・W/S によるセグメント追加/スタンプ処理を完全に除去（record モード時のみ軌跡記録）。
+- 完了条件: 再生モードで ArrowUp/ArrowDown/W/S を押してもセグメント配列の件数が変化しないことを自動テストで確認。
+
+---
+
+### [T103] 波形上下表示領域拡張
+
+`src/screens/editor/WavePreview.tsx`:
+- canvas の縦マップを広げ、波形の上下表示領域を拡張（SCORE/COMBO/操作ヒントに侵食しない範囲）。`amplitude` 反映を維持。
+- 完了条件: canvas の非透明ピクセルの縦幅（`waveHeight`）が canvas 高の 0.3 倍以上であること、かつ上下端が表示領域内にあることを自動テストで確認。
+
+---
+
+### [T104] Canvasホイールズームでページスクロール防止
+
+`src/screens/editor/WavePreview.tsx`:
+- ホイールイベントハンドラ（`onWheel`）で `e.preventDefault()` を確実に呼び、ページがスクロールしないようにする（非 passive リスナ）。
+- 完了条件: canvas 上でホイール操作した際、ページの `window.scrollY` が変化しないことを自動テストで確認。
+
+---
+
+### [T105] 録音上書き範囲の限定
+
+`src/screens/EditorScreen.tsx` (`finishRecording`):
+- 録音停止時のコミットで、開始 beat（`startBeat`）〜終了 beat（`endBeat`）の範囲のみを上書きし、それ以降のセグメントを維持。
+- 完了条件: 録音前に存在した `endBeat` 以降のセグメントが録音後も件数・内容ともに維持されていることを自動テストで確認。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
