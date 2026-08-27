@@ -96,6 +96,7 @@ export default function EditorScreen() {
     w.__editorTimeline = timeline
     w.__editorBeat = beat
     w.__editorRecTraj = recTrajRef.current
+    w.__editorRecLive = recLive
   })
 
   const playtestActiveRef = useRef(false)
