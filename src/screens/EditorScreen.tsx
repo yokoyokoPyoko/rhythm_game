@@ -16,8 +16,6 @@ import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
 
-// Exposed for automated tests (e.g. negative test that patches segmentize).
-;(window as unknown as Record<string, unknown>).__segmentizeModule = { segmentize }
 const GAME_CENTER_Y = 300
 
 function formatSeconds(ms: number): string {
@@ -151,12 +149,7 @@ export default function EditorScreen() {
       const endBeat = sorted[sorted.length - 1].beat
 
       const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
-      const segMod = (window as unknown as Record<string, unknown>).__segmentizeModule
-      const segFn =
-        segMod && typeof (segMod as { segmentize?: unknown }).segmentize === 'function'
-          ? (segMod as { segmentize: typeof segmentize }).segmentize
-          : segmentize
-      const newSegs = segFn(traj, snap, amplitude)
+      const newSegs = segmentize(traj, snap, amplitude)
 
       let cum = 0
       const keptAfter: Segment[] = []
