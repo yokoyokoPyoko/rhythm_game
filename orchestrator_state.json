@@ -308,7 +308,7 @@
       "status": "running",
       "started": 1787882994.9165676,
       "cycles": 1,
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "sessions": {
         "coder": "ses_fb9d01706ffeK5AiyfjhsziZwM",
         "qa": "ses_fb9d58f89ffeIm9g3OvM6oJpwd",
