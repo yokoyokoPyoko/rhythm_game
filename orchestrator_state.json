@@ -352,7 +352,7 @@
         "postmortem": "ses_fb7f68e92ffe9BU7Cf5BWy4ify",
         "coder": "ses_fb7ec0f15ffeEjwjSvbheDezzm"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     },
     "T103": {
       "attempts": 0,
