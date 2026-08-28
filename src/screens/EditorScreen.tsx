@@ -15,6 +15,9 @@ import WavePreview, { type WaveView } from './editor/WavePreview'
 import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
+
+// Exposed for automated tests (e.g. negative test that patches segmentize).
+;(window as unknown as Record<string, unknown>).__segmentizeModule = { segmentize }
 const GAME_CENTER_Y = 300
 
 function formatSeconds(ms: number): string {
@@ -148,7 +151,12 @@ export default function EditorScreen() {
       const endBeat = sorted[sorted.length - 1].beat
 
       const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
-      const newSegs = segmentize(traj, snap, amplitude)
+      const segMod = (window as unknown as Record<string, unknown>).__segmentizeModule
+      const segFn =
+        segMod && typeof (segMod as { segmentize?: unknown }).segmentize === 'function'
+          ? (segMod as { segmentize: typeof segmentize }).segmentize
+          : segmentize
+      const newSegs = segFn(traj, snap, amplitude)
 
       let cum = 0
       const keptAfter: Segment[] = []
@@ -200,8 +208,9 @@ export default function EditorScreen() {
         setPositionMs(pos)
         positionRef.current = pos
         if (modeRef.current === 'record' && recCursorRef.current) {
-          const beat = timeline.msToBeat(pos)
-          const beatMs = timeline.beatMsAt(beat)
+          const rawBeat = timeline.msToBeat(pos)
+          const beat = Math.round(rawBeat / snap) * snap
+          const beatMs = timeline.beatMsAt(rawBeat)
           recCursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, beatMs)
           recTrajRef.current.push({ beat, y: recCursorRef.current.y })
           setRecLive({
@@ -314,7 +323,8 @@ export default function EditorScreen() {
   }
 
   const startRecording = useCallback(() => {
-    const startBeat = timeline.msToBeat(positionMs)
+    const rawStartBeat = timeline.msToBeat(positionMs)
+    const startBeat = Math.round(rawStartBeat / snap) * snap
     recStartBeatRef.current = startBeat
     const engine = new WaveEngine(segments, timeline, amplitude)
     const startY = segments.length > 0 ? engine.waveYAt(startBeat) : GAME_CENTER_Y
@@ -688,12 +698,17 @@ export default function EditorScreen() {
                 onChange={(e) => setAudioOffset(Number(e.target.value))}
               />
             </div>
+            {error && <div className="editor-error">{error}</div>}
+          </section>
+
+          <section className="editor-pane" id="snap">
+            <h2>クオンタイズ / スナップ</h2>
             <div className="editor-field">
-              <label className="editor-label" htmlFor="snap">
-                クオンタイズ / スナップ
+              <label className="editor-label" htmlFor="snap-resolution">
+                スナップ解像度 (1/N 拍)
               </label>
               <select
-                id="snap"
+                id="snap-resolution"
                 className="editor-input"
                 value={snap}
                 onChange={(e) => setSnap(Number(e.target.value))}
@@ -706,7 +721,7 @@ export default function EditorScreen() {
                 ))}
               </select>
             </div>
-            {error && <div className="editor-error">{error}</div>}
+            <p className="editor-hint">録音時の軌跡は選択した解像度の整数倍（1/8・1/4・1/2・1拍）に吸着します</p>
           </section>
 
           <section className="editor-pane">

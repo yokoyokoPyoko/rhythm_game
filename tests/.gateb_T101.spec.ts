@@ -220,7 +220,7 @@ test.describe('T101 Integration: Editor Quantization (Snap) during Recording', (
 
     const playBtn = page.locator('[data-testid="editor-play"]')
     const recordBtn = page.locator('[data-testid="editor-record-toggle"]')
-    const snapSelect = page.locator('#snap')
+    const snapSelect = page.locator('#snap-resolution')
 
     // 2. Load audio
     await expect(playBtn).toBeVisible()
@@ -228,7 +228,8 @@ test.describe('T101 Integration: Editor Quantization (Snap) during Recording', (
     await waitForAudioLoaded(page)
     await page.waitForTimeout(3000)
 
-    // 3. Verify snap dropdown has correct options (1/8, 1/4, 1/2, 1/1)
+     // 3. Verify snap section + dropdown has correct options (1/8, 1/4, 1/2, 1/1)
+    await expect(page.locator('#snap')).toBeVisible({ timeout: 5000 })
     await expect(snapSelect).toBeVisible({ timeout: 5000 })
     const options = await snapSelect.locator('option').all()
     expect(options.length).toBe(4)
@@ -423,7 +424,7 @@ test.describe('T101 Integration: Editor Quantization (Snap) during Recording', (
     await page.waitForTimeout(2000)
 
     // Verify snap dropdown has correct options
-    const snapSelect = page.locator('#snap')
+    const snapSelect = page.locator('#snap-resolution')
     await expect(snapSelect).toBeVisible({ timeout: 5000 })
 
     const options = await snapSelect.locator('option').all()
@@ -476,7 +477,7 @@ test.describe('T101 Integration: Editor Quantization (Snap) during Recording', (
 
     const playBtn = page.locator('[data-testid="editor-play"]')
     const recordBtn = page.locator('[data-testid="editor-record-toggle"]')
-    const snapSelect = page.locator('#snap')
+    const snapSelect = page.locator('#snap-resolution')
 
     // Load audio
     await playBtn.click()
