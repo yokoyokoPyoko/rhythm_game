@@ -273,13 +273,21 @@ export default function EditorScreen() {
         startOffset = Math.max(0, audioTime - offsetSec)
       }
       src.start(startWhen, startOffset)
-      ;(window as unknown as Record<string, unknown>).__editorPlayFrom = {
+      const hook: Record<string, unknown> = {
         when: startWhen,
         offset: startOffset,
         audioOffset,
         ctxTime: ctx.currentTime,
         fromMs,
       }
+      ;(window as unknown as Record<string, unknown>).__editorPlayFrom = hook
+      ;(window as unknown as Record<string, unknown>).__editorPlayFromStartParams = {
+        when: startWhen,
+        offset: startOffset,
+        audioTime,
+        ctxCurrentTime: ctx.currentTime,
+      }
+      ;(window as unknown as Record<string, unknown>).__editorPlayFromOffset = audioOffset
       src.onended = () => {
         if (sourceRef.current === src) {
           sourceRef.current = null
