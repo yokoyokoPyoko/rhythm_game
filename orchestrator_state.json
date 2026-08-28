@@ -331,7 +331,7 @@
     },
     "T101": {
       "attempts": 40,
-      "status": "running",
+      "status": "passed",
       "started": 1787884697.6400902,
       "cycles": 7,
       "sessions": {
@@ -340,11 +340,12 @@
         "coder": "ses_fb8beb8ceffeyTgjx5uP1RiX6W"
       },
       "gate_b_golden": true,
-      "finished": 1787800553.7647355
+      "finished": 1787902520.3298974
     },
     "T102": {
       "attempts": 0,
-      "status": "blocked"
+      "status": "running",
+      "started": 1787902520.3322988
     },
     "T103": {
       "attempts": 0,
