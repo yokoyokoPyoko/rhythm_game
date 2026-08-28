@@ -331,8 +331,8 @@
     },
     "T101": {
       "attempts": 40,
-      "status": "passed",
-      "started": 1787884697.6400902,
+      "status": "running",
+      "started": 1787912645.2464073,
       "cycles": 7,
       "sessions": {
         "qa": "ses_fb8cc02daffelUjnArll5qFT5z",
@@ -343,9 +343,16 @@
       "finished": 1787902520.3298974
     },
     "T102": {
-      "attempts": 0,
+      "attempts": 10,
       "status": "running",
-      "started": 1787902520.3322988
+      "started": 1787902520.3322988,
+      "cycles": 3,
+      "sessions": {
+        "qa": "ses_fb83ddc95ffedkk08gi96iRi30",
+        "postmortem": "ses_fb83e8540ffeIXQGwszqQDSIqY",
+        "coder": "ses_fb8a4e62cffeGeiS5IVqUAjYnj"
+      },
+      "gate_b_golden": false
     },
     "T103": {
       "attempts": 0,

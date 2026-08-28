@@ -1,278 +1,264 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type ConsoleMessage, type Page } from '@playwright/test'
 
-const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1];
-
-function isSnapAligned(beats: number, snap: number, epsilon = 1e-6): boolean {
-  if (!(snap > 0)) return true;
-  const remainder = ((beats % snap) + snap) % snap;
-  return remainder < epsilon || Math.abs(remainder - snap) < epsilon;
+async function waitForServerReady(page: Page, baseURL: string): Promise<void> {
+  let retries = 0
+  while (retries < 30) {
+    try {
+      const resp = await page.goto(baseURL, { waitUntil: 'networkidle', timeout: 5000 })
+      if (resp?.ok()) return
+    } catch {
+      // ignore
+    }
+    await page.waitForTimeout(1000)
+    retries++
+  }
+  throw new Error('Dev server not ready after 30s')
 }
 
-async function waitForAudioReady(page: any, timeout = 120000): Promise<void> {
+async function collectErrors(page: Page): Promise<string[]> {
+  const errors: string[] = []
+  page.on('console', (msg: ConsoleMessage) => {
+    const text = msg.text()
+    if (msg.type() === 'error' && /Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+      errors.push(text)
+    }
+  })
+  page.on('pageerror', (err) => {
+    if (/TypeError|ReferenceError|Uncaught/.test(err.message)) {
+      errors.push(err.message)
+    }
+  })
+  return errors
+}
+
+async function openEditor(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.location.hash = '#/editor'
+  })
+  await page.waitForSelector('.editor-screen', { timeout: 15000 })
+  await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
+  await expect(page.locator('[data-testid="wave-preview-canvas"]')).toBeVisible()
+  await page.waitForTimeout(3000)
+}
+
+async function waitForAudioLoaded(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
-      const btn = document.querySelector('[data-testid="editor-play"]');
-      return btn && !btn.textContent?.includes('読込中');
+      const btn = document.querySelector('[data-testid="editor-play"]') as HTMLButtonElement
+      if (!btn) return false
+      return !btn.textContent?.includes('読込')
     },
-    { timeout }
-  );
+    { timeout: 60000 }
+  )
+  await page.waitForTimeout(2000)
 }
 
-async function startPlayback(page: any): Promise<void> {
-  await page.click('[data-testid="editor-play"]');
+async function startPlayback(page: Page): Promise<void> {
+  await page.click('[data-testid="editor-play"]')
   await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-play"]');
-    return btn && btn.textContent?.includes('停止');
-  }, { timeout: 10000 });
+    const btn = document.querySelector('[data-testid="editor-play"]')
+    return btn && btn.textContent?.includes('停止')
+  }, { timeout: 10000 })
 }
 
-async function stopPlayback(page: any): Promise<void> {
-  await page.click('[data-testid="editor-play"]');
+async function stopPlayback(page: Page): Promise<void> {
+  await page.click('[data-testid="editor-play"]')
   await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-play"]');
-    return btn && !btn.textContent?.includes('停止');
-  }, { timeout: 5000 });
+    const btn = document.querySelector('[data-testid="editor-play"]')
+    return btn && !btn.textContent?.includes('停止')
+  }, { timeout: 5000 })
 }
 
-async function enterRecordMode(page: any): Promise<void> {
-  await page.click('[data-testid="editor-record-toggle"]');
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
-    return btn && btn.textContent?.includes('録音停止');
-  }, { timeout: 5000 });
+async function clearSegments(page: Page): Promise<void> {
+  page.once('dialog', (dialog: { accept: () => void }) => dialog.accept())
+  await page.click('[data-testid="editor-clear"]')
+  await page.waitForTimeout(500)
 }
 
-async function exitRecordMode(page: any): Promise<void> {
-  await page.click('[data-testid="editor-record-toggle"]');
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
-    return btn && btn.textContent?.includes('録音モード');
-  }, { timeout: 5000 });
+async function getSegmentsFromWindow(page: Page): Promise<Array<{ direction: string; beats: number }>> {
+  return await page.evaluate(() => (window as any).__editorSegments ?? [])
 }
 
-async function getSegmentsFromWindow(page: any): Promise<Array<{ direction: string; beats: number }>> {
-  return await page.evaluate(() => (window as any).__editorSegments ?? []);
-}
+test.describe.configure({ retries: 0 })
 
-async function getSnapFromWindow(page: any): Promise<number> {
-  return await page.evaluate(() => (window as any).__editorSnap ?? 0.25);
-}
+test.describe('T102: レガシー再生中セグメントスタンプ完全削除', () => {
+  let allErrors: string[] = []
 
-async function getRecLiveFromWindow(page: any): Promise<any> {
-  return await page.evaluate(() => (window as any).__editorRecLive ?? null);
-}
-
-async function clearSegments(page: any): Promise<void> {
-  page.once('dialog', (dialog: { accept: () => void }) => dialog.accept());
-  await page.click('[data-testid="editor-clear"]');
-  await page.waitForTimeout(500);
-}
-
-async function simulateKeyPress(page: any, key: string): Promise<void> {
-  await page.keyboard.down(key);
-  await page.waitForTimeout(50);
-  await page.keyboard.up(key);
-}
-
-test.describe('T101: 録音時クオンタイズ（スナップ吸着）＋分解能UI', () => {
   test.beforeEach(async ({ page }) => {
-    const errors: string[] = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        const t = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
-      }
-    });
-    page.on('pageerror', (err) => {
-      errors.push(err.message);
-    });
+    allErrors = await collectErrors(page)
 
-    await page.goto('http://localhost:5173/#/editor');
-    await page.waitForLoadState('networkidle', { timeout: 10000 });
-    await expect(page.locator('#snap')).toBeVisible();
-    await waitForAudioReady(page);
-    await page.waitForTimeout(1000);
-    expect(errors).toHaveLength(0);
-  });
+    const baseURL = process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/'
+    await waitForServerReady(page, baseURL)
+    await page.goto(baseURL, { waitUntil: 'networkidle' })
+    await expect(page.locator('#root')).toBeVisible()
+    await page.waitForTimeout(2500)
 
-  test('Snap dropdown exists and updates internal state', async ({ page }) => {
-    await expect(page.locator('[data-testid="snap-select"]')).toBeVisible();
+    await openEditor(page)
+    await page.waitForTimeout(3000)
 
-    const initialSnap = await getSnapFromWindow(page);
-    expect(SNAP_OPTIONS).toContain(initialSnap);
+    await waitForAudioLoaded(page)
+    await page.waitForTimeout(2000)
+  })
 
-    for (const snapValue of SNAP_OPTIONS) {
-      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
-      await page.waitForTimeout(100);
-      const currentSnap = await getSnapFromWindow(page);
-      expect(currentSnap).toBe(snapValue);
-    }
-  });
+  test.afterEach(async () => {
+    expect(allErrors).toHaveLength(0)
+  })
 
-  for (const snapValue of SNAP_OPTIONS) {
-    test(`Recording with snap=${snapValue} produces segments with beats quantized to ${snapValue}`, async ({ page }) => {
-      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
-      await page.waitForTimeout(200);
-      const snapUsed = await getSnapFromWindow(page);
-      expect(snapUsed).toBe(snapValue);
+  test('Playback mode: ArrowUp/ArrowDown/W/S key presses do NOT modify segment array', async ({ page }) => {
+    // Get initial segment count (default is play mode, not record mode)
+    const initialSegments = await getSegmentsFromWindow(page)
+    const initialCount = initialSegments.length
 
-      await clearSegments(page);
-      await startPlayback(page);
-      await page.waitForTimeout(500);
+    // Start playback in play mode (NOT record mode)
+    await startPlayback(page)
+    await page.waitForTimeout(1000)
 
-      await enterRecordMode(page);
-      await page.waitForTimeout(200);
+    // Verify playback started (button shows '停止')
+    const playBtn = page.locator('[data-testid="editor-play"]')
+    await expect(playBtn).toHaveText('停止')
 
-      for (let i = 0; i < 20; i++) {
-        await simulateKeyPress(page, i % 2 === 0 ? 'ArrowUp' : 'ArrowDown');
-        await page.waitForTimeout(100);
-      }
+    // Simulate ArrowUp key press
+    await page.keyboard.down('ArrowUp')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('ArrowUp')
+    await page.waitForTimeout(500)
 
-      await exitRecordMode(page);
-      await page.waitForTimeout(500);
+    let segmentsAfterArrowUp = await getSegmentsFromWindow(page)
+    expect(segmentsAfterArrowUp.length).toBe(initialCount)
 
-      const segments = await getSegmentsFromWindow(page);
-      expect(segments.length).toBeGreaterThan(0);
+    // Simulate ArrowDown key press
+    await page.keyboard.down('ArrowDown')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('ArrowDown')
+    await page.waitForTimeout(500)
 
-      for (const seg of segments) {
-        expect(isSnapAligned(seg.beats, snapUsed)).toBeTruthy();
-      }
-    });
-  }
+    let segmentsAfterArrowDown = await getSegmentsFromWindow(page)
+    expect(segmentsAfterArrowDown.length).toBe(initialCount)
 
-  test('Negative test: patching segmentize to return non-quantized beats causes test failure', async ({ page }) => {
-    await page.addInitScript(() => {
-      const originalSegmentize = (window as any).__originalSegmentize;
-      (window as any).__originalSegmentize = originalSegmentize;
-    });
+    // Simulate KeyW (W key) press
+    await page.keyboard.down('KeyW')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('KeyW')
+    await page.waitForTimeout(500)
 
-    await page.evaluate(() => {
-      const mod = (window as any).__segmentizeModule;
-      if (mod) {
-        (window as any).__originalSegmentize = mod.segmentize;
-        mod.segmentize = function(traj: any, snap: number, amplitude: number) {
-          const result = (window as any).__originalSegmentize(traj, snap, amplitude);
-          return result.map((s: any) => ({ ...s, beats: s.beats + 0.1 }));
-        };
-      }
-    });
+    let segmentsAfterKeyW = await getSegmentsFromWindow(page)
+    expect(segmentsAfterKeyW.length).toBe(initialCount)
 
-    const snapValue = 0.25;
-    await page.selectOption('[data-testid="snap-select"]', String(snapValue));
-    await page.waitForTimeout(200);
+    // Simulate KeyS (S key) press
+    await page.keyboard.down('KeyS')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('KeyS')
+    await page.waitForTimeout(500)
 
-    await clearSegments(page);
-    await startPlayback(page);
-    await page.waitForTimeout(500);
+    let segmentsAfterKeyS = await getSegmentsFromWindow(page)
+    expect(segmentsAfterKeyS.length).toBe(initialCount)
 
-    await enterRecordMode(page);
-    await page.waitForTimeout(200);
+    // Stop playback
+    await stopPlayback(page)
+    await page.waitForTimeout(1000)
 
-    for (let i = 0; i < 20; i++) {
-      await simulateKeyPress(page, i % 2 === 0 ? 'ArrowUp' : 'ArrowDown');
-      await page.waitForTimeout(100);
+    // Final verification after playback stops
+    const finalSegments = await getSegmentsFromWindow(page)
+    expect(finalSegments.length).toBe(initialCount)
+  })
+
+  test('Playback mode with existing segments: key presses do NOT add/modify segments', async ({ page }) => {
+    // Clear any existing segments first
+    await clearSegments(page)
+    await page.waitForTimeout(500)
+
+    // Manually add some segments via the segment editor to have a non-zero baseline
+    const segmentEditor = page.locator('section.editor-pane', { hasText: 'セグメント' })
+    const addSegmentBtn = segmentEditor.locator('button', { hasText: '追加' })
+    if (await addSegmentBtn.isVisible()) {
+      await addSegmentBtn.click()
+      await page.waitForTimeout(300)
+      await addSegmentBtn.click()
+      await page.waitForTimeout(300)
     }
 
-    await exitRecordMode(page);
-    await page.waitForTimeout(500);
+    const segmentsBeforePlay = await getSegmentsFromWindow(page)
+    const countBeforePlay = segmentsBeforePlay.length
+    expect(countBeforePlay).toBeGreaterThan(0)
 
-    const segments = await getSegmentsFromWindow(page);
-    const allAligned = segments.every((seg) => isSnapAligned(seg.beats, snapValue));
-    expect(allAligned).toBeFalsy();
-  });
+    // Start playback (play mode, NOT record mode)
+    await startPlayback(page)
+    await page.waitForTimeout(1000)
 
-  test('Live trajectory during recording is quantized to snap grid', async ({ page }) => {
-    const snapValue = 0.25;
-    await page.selectOption('[data-testid="snap-select"]', String(snapValue));
-    await page.waitForTimeout(200);
+    // Verify playback started
+    const playBtn = page.locator('[data-testid="editor-play"]')
+    await expect(playBtn).toHaveText('停止')
 
-    await clearSegments(page);
-    await startPlayback(page);
-    await page.waitForTimeout(500);
+    // Simulate multiple key presses
+    const keysToTest = ['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS']
+    for (const key of keysToTest) {
+      await page.keyboard.down(key)
+      await page.waitForTimeout(100)
+      await page.keyboard.up(key)
+      await page.waitForTimeout(300)
 
-    await enterRecordMode(page);
-    await page.waitForTimeout(200);
-
-    await simulateKeyPress(page, 'ArrowUp');
-    await page.waitForTimeout(150);
-
-    const recLive = await getRecLiveFromWindow(page);
-    expect(recLive).not.toBeNull();
-    expect(recLive.trajectory.length).toBeGreaterThan(1);
-
-    for (const point of recLive.trajectory) {
-      expect(isSnapAligned(point.beat, snapValue)).toBeTruthy();
+      const segmentsAfterKey = await getSegmentsFromWindow(page)
+      expect(segmentsAfterKey.length).toBe(countBeforePlay)
     }
 
-    await exitRecordMode(page);
-  });
+    // Stop playback
+    await stopPlayback(page)
+    await page.waitForTimeout(1000)
 
-  test('Different snap values produce correctly quantized segments', async ({ page }) => {
-    for (const snapValue of SNAP_OPTIONS) {
-       await page.selectOption('[data-testid="snap-select"]', String(snapValue));
-      await page.waitForTimeout(200);
+    // Final verification
+    const finalSegments = await getSegmentsFromWindow(page)
+    expect(finalSegments.length).toBe(countBeforePlay)
+  })
 
-      await clearSegments(page);
-      await startPlayback(page);
-      await page.waitForTimeout(500);
+  test('Record mode: ArrowUp/ArrowDown/W/S key presses DO modify trajectory (positive control)', async ({ page }) => {
+    // This test serves as a positive control to verify that record mode DOES work
+    // It should pass both before and after T102 fix
 
-      await enterRecordMode(page);
-      await page.waitForTimeout(200);
+    // Clear any existing segments first
+    await clearSegments(page)
+    await page.waitForTimeout(500)
 
-      for (let i = 0; i < 15; i++) {
-        await simulateKeyPress(page, i % 2 === 0 ? 'ArrowUp' : 'ArrowDown');
-        await page.waitForTimeout(100);
-      }
+    // Start playback
+    await startPlayback(page)
+    await page.waitForTimeout(1000)
 
-      await exitRecordMode(page);
-      await page.waitForTimeout(500);
+    // Enter record mode
+    await page.click('[data-testid="editor-record-toggle"]')
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('[data-testid="editor-record-toggle"]')
+      return btn && btn.textContent?.includes('録音停止')
+    }, { timeout: 5000 })
+    await page.waitForTimeout(500)
 
-      const segments = await getSegmentsFromWindow(page);
-      expect(segments.length).toBeGreaterThan(0);
+    // Verify record mode active (button shows '録音停止')
+    const recordBtn = page.locator('[data-testid="editor-record-toggle"]')
+    await expect(recordBtn).toHaveText('録音停止')
 
-      for (const seg of segments) {
-        expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
-      }
+    // Simulate key presses in record mode - these SHOULD affect trajectory
+    await page.keyboard.down('ArrowUp')
+    await page.waitForTimeout(200)
+    await page.keyboard.up('ArrowUp')
+    await page.waitForTimeout(200)
 
-      await stopPlayback(page);
-      await page.waitForTimeout(300);
-    }
-  });
+    await page.keyboard.down('ArrowDown')
+    await page.waitForTimeout(200)
+    await page.keyboard.up('ArrowDown')
+    await page.waitForTimeout(200)
 
-  test('Segment list in UI shows quantized beats', async ({ page }) => {
-    const snapValue = 0.5;
-    await page.selectOption('[data-testid="snap-select"]', String(snapValue));
-    await page.waitForTimeout(200);
+    // Exit record mode (this commits the trajectory as segments)
+    await page.click('[data-testid="editor-record-toggle"]')
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('[data-testid="editor-record-toggle"]')
+      return btn && btn.textContent?.includes('録音モード')
+    }, { timeout: 5000 })
+    await page.waitForTimeout(1000)
 
-    await startPlayback(page);
-    await page.waitForTimeout(500);
+    // In record mode, segments SHOULD have been added
+    const segmentsAfterRecord = await getSegmentsFromWindow(page)
+    expect(segmentsAfterRecord.length).toBeGreaterThan(0)
 
-    await enterRecordMode(page);
-    await page.waitForTimeout(200);
-
-    for (let i = 0; i < 15; i++) {
-      await simulateKeyPress(page, i % 2 === 0 ? 'ArrowUp' : 'ArrowDown');
-      await page.waitForTimeout(100);
-    }
-
-    await exitRecordMode(page);
-    await page.waitForTimeout(500);
-
-    await page.click('[data-testid="ring-list-details"] summary');
-    await page.waitForTimeout(200);
-
-    const segmentItems = page.locator('[data-testid^="ring-list-item-"]');
-    const count = await segmentItems.count();
-
-    if (count > 0) {
-      for (let i = 0; i < count; i++) {
-        const beatText = await segmentItems.nth(i).locator('.ring-list-beat').textContent();
-        const beatMatch = beatText?.match(/beat:\s*([\d.]+)/);
-        if (beatMatch) {
-          const beat = parseFloat(beatMatch[1]);
-          expect(isSnapAligned(beat, snapValue)).toBeTruthy();
-        }
-      }
-    }
-  });
-});
+    // Stop playback
+    await stopPlayback(page)
+    await page.waitForTimeout(1000)
+  })
+})
