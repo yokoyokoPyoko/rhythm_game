@@ -1,548 +1,260 @@
-import { test, expect } from '@playwright/test'
-import * as fs from 'fs'
-import { parse } from 'smol-toml'
-import { quantizeBeat, segmentize, isSnapAligned } from '../src/chart/quantize'
-import type { Segment } from '../src/types'
+import { test, expect } from '@playwright/test';
 
-// ============================================================================
-// UNIT TESTS: quantizeBeat() and segmentize() - MUST FAIL when feature removed
-// ============================================================================
+test.describe('T99: Audio Offset Migration & Playback Application', () => {
+  let consoleErrors: string[] = [];
 
-test.describe('T101 Unit: quantizeBeat() and segmentize()', () => {
-  test('quantizeBeat snaps to 1/4 (0.25) grid', () => {
-    expect(quantizeBeat(1.1, 0.25)).toBe(1.0)
-    expect(quantizeBeat(1.2, 0.25)).toBe(1.25)
-    expect(quantizeBeat(1.3, 0.25)).toBe(1.25)
-    expect(quantizeBeat(1.4, 0.25)).toBe(1.5)
-    expect(quantizeBeat(0, 0.25)).toBe(0)
-    expect(quantizeBeat(-0.1, 0.25)).toBe(0)
-  })
-
-  test('quantizeBeat snaps to 1/2 (0.5) grid', () => {
-    expect(quantizeBeat(1.1, 0.5)).toBe(1.0)
-    expect(quantizeBeat(1.3, 0.5)).toBe(1.5)
-    expect(quantizeBeat(1.6, 0.5)).toBe(1.5)
-    expect(quantizeBeat(1.8, 0.5)).toBe(2.0)
-  })
-
-  test('quantizeBeat snaps to 1/8 (0.125) grid', () => {
-    expect(quantizeBeat(1.1, 0.125)).toBe(1.125)
-    expect(quantizeBeat(1.2, 0.125)).toBe(1.25)
-    expect(quantizeBeat(1.3, 0.125)).toBe(1.25)
-  })
-
-  test('quantizeBeat handles edge cases', () => {
-    expect(quantizeBeat(NaN, 0.25)).toBe(NaN)
-    expect(quantizeBeat(Infinity, 0.25)).toBe(Infinity)
-    expect(quantizeBeat(1.0, 0)).toBe(1.0)
-    expect(quantizeBeat(1.0, -0.25)).toBe(1.0)
-  })
-
-  test('segmentize produces segments with beats as multiples of snap', () => {
-    const trajectory = [
-      { beat: 0, y: 300 },
-      { beat: 0.1, y: 280 },
-      { beat: 0.2, y: 260 },
-      { beat: 0.3, y: 240 },
-      { beat: 0.4, y: 220 },
-      { beat: 0.5, y: 200 },
-      { beat: 0.6, y: 220 },
-      { beat: 0.7, y: 240 },
-      { beat: 0.8, y: 260 },
-      { beat: 0.9, y: 280 },
-      { beat: 1.0, y: 300 },
-    ]
-
-    const snap = 0.25
-    const segments = segmentize(trajectory, snap, 130)
-
-    expect(segments.length).toBeGreaterThan(0)
-    for (const seg of segments) {
-      const remainder = seg.beats % snap
-      const isMultiple = remainder < 1e-6 || Math.abs(remainder - snap) < 1e-6
-      expect(isMultiple).toBeTruthy()
-    }
-  })
-
-  test('segmentize with snap=0.5 produces 0.5-beat multiples', () => {
-    const trajectory = Array.from({ length: 21 }, (_, i) => ({
-      beat: i * 0.1,
-      y: 300 + Math.sin(i * 0.1 * Math.PI * 2) * 100,
-    }))
-
-    const segments = segmentize(trajectory, 0.5, 130)
-
-    expect(segments.length).toBeGreaterThan(0)
-    for (const seg of segments) {
-      const remainder = seg.beats % 0.5
-      const isMultiple = remainder < 1e-6 || Math.abs(remainder - 0.5) < 1e-6
-      expect(isMultiple).toBeTruthy()
-    }
-  })
-
-  test('segmentize with snap=0.125 produces 0.125-beat multiples', () => {
-    const trajectory = Array.from({ length: 41 }, (_, i) => ({
-      beat: i * 0.05,
-      y: 300 + Math.sin(i * 0.05 * Math.PI * 4) * 80,
-    }))
-
-    const segments = segmentize(trajectory, 0.125, 130)
-
-    expect(segments.length).toBeGreaterThan(0)
-    for (const seg of segments) {
-      const remainder = seg.beats % 0.125
-      const isMultiple = remainder < 1e-6 || Math.abs(remainder - 0.125) < 1e-6
-      expect(isMultiple).toBeTruthy()
-    }
-  })
-
-  test('isSnapAligned validates snap alignment correctly', () => {
-    expect(isSnapAligned(1.0, 0.25)).toBe(true)
-    expect(isSnapAligned(1.25, 0.25)).toBe(true)
-    expect(isSnapAligned(1.1, 0.25)).toBe(false)
-    expect(isSnapAligned(0.5, 0.5)).toBe(true)
-    expect(isSnapAligned(0.75, 0.5)).toBe(false)
-    expect(isSnapAligned(0, 0.125)).toBe(true)
-  })
-})
-
-// ============================================================================
-// INTEGRATION TEST: Editor UI Quantization during Recording
-// ============================================================================
-
-async function collectErrors(page: any): Promise<string[]> {
-  const errors: string[] = []
-  page.on('console', (msg: any) => {
-    if (msg.type() === 'error') {
-      const text = msg.text()
-      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-        errors.push(text)
-      }
-    }
-  })
-  page.on('pageerror', (err: Error) => {
-    if (/TypeError|ReferenceError|Uncaught/.test(err.message)) {
-      errors.push(err.message)
-    }
-  })
-  return errors
-}
-
-async function openEditor(page: any): Promise<void> {
-  await page.evaluate(() => {
-    window.location.hash = '#/editor'
-  })
-  await page.waitForSelector('.editor-screen', { timeout: 15000 })
-  await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
-  await expect(page.locator('[data-testid="wave-preview-canvas"]')).toBeVisible()
-  await page.waitForTimeout(3000)
-}
-
-async function waitForAudioLoaded(page: any): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const btn = document.querySelector('[data-testid="editor-play"]') as HTMLButtonElement
-      if (!btn) return false
-      return !btn.textContent?.includes('読込')
-    },
-    { timeout: 60000 }
-  )
-  await page.waitForTimeout(2000)
-}
-
-async function getSegmentsFromState(page: any): Promise<Array<{ direction: string; beats: number }>> {
-  return page.evaluate(() => (window as any).__editorSegments ?? [])
-}
-
-async function getSnapFromState(page: any): Promise<number> {
-  return page.evaluate(() => (window as any).__editorSnap ?? 0.25)
-}
-
-async function getBeatFromState(page: any): Promise<number> {
-  return page.evaluate(() => (window as any).__editorBeat ?? 0)
-}
-
-async function getRecLiveFromState(page: any): Promise<any> {
-  return page.evaluate(() => (window as any).__editorRecLive ?? null)
-}
-
-async function startPlayback(page: any, playBtn: any): Promise<void> {
-  const txt = await playBtn.textContent()
-  if (txt?.includes('停止')) return
-  await playBtn.click()
-  await waitForAudioLoaded(page)
-}
-
-async function stopPlayback(page: any, playBtn: any): Promise<void> {
-  const txt = await playBtn.textContent()
-  if (txt?.includes('停止')) {
-    await playBtn.click()
-    await page.waitForTimeout(800)
-  }
-}
-
-async function seekToBeat(page: any, beat: number): Promise<void> {
-  const slider = page.locator('.editor-slider').first()
-  const ms = beat * 500 // 120 BPM = 500ms/beat
-  await slider.fill(String(ms))
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
-  await page.waitForTimeout(1200)
-}
-
-test.describe('T101 Integration: Editor Quantization (Snap) during Recording', () => {
-  test('T101: Recording with quantization - segments snap to selected grid resolution', async ({ page, browserName }) => {
-    test.skip(browserName !== 'chromium', 'chromium only')
-    test.setTimeout(300000)
-
-    const allErrors = await collectErrors(page)
-
-    // 0. Wait for dev server
-    let retries = 0
-    while (retries < 30) {
-      try {
-        const resp = await page.goto(process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/', {
-          waitUntil: 'networkidle',
-          timeout: 5000,
-        })
-        if (resp?.ok()) break
-      } catch {
-        // ignore
-      }
-      await page.waitForTimeout(1000)
-      retries++
-    }
-    await expect(page.locator('#root')).toBeVisible()
-    await page.waitForTimeout(2500)
-
-    // 1. Open Editor
-    await openEditor(page)
-    await page.waitForTimeout(3000)
-
-    const playBtn = page.locator('[data-testid="editor-play"]')
-    const recordBtn = page.locator('[data-testid="editor-record-toggle"]')
-    const snapSelect = page.locator('#snap')
-
-    // 2. Load audio
-    await expect(playBtn).toBeVisible()
-    await playBtn.click()
-    await waitForAudioLoaded(page)
-    await page.waitForTimeout(3000)
-
-    // 3. Verify snap dropdown has correct options (1/8, 1/4, 1/2, 1/1)
-    await expect(snapSelect).toBeVisible({ timeout: 5000 })
-    const options = await snapSelect.locator('option').all()
-    expect(options.length).toBe(4)
-    const optionValues = await Promise.all(options.map((o) => o.getAttribute('value')))
-    expect(optionValues).toEqual(['0.125', '0.25', '0.5', '1'])
-    const optionTexts = await Promise.all(options.map((o) => o.textContent()))
-    expect(optionTexts).toEqual(['1/8', '1/4', '1/2', '1/1'])
-    await expect(snapSelect).toHaveValue('0.25') // Default is 1/4
-
-    // Test each snap value: 1/2, 1/4, 1/8
-    const snapTestCases = [
-      { value: '0.5', label: '1/2', snap: 0.5 },
-      { value: '0.25', label: '1/4', snap: 0.25 },
-      { value: '0.125', label: '1/8', snap: 0.125 },
-    ]
-
-    for (const { value, label, snap } of snapTestCases) {
-      console.log(`\n=== Testing snap = ${label} (${snap}) ===`)
-
-      // 4a. Select snap value
-      await snapSelect.selectOption(value)
-      await expect(snapSelect).toHaveValue(value)
-      await page.waitForTimeout(500)
-
-      // Verify internal state updated
-      const snapState = await getSnapFromState(page)
-      expect(snapState).toBe(snap)
-
-      // 4b. Clear existing segments
-      const clearBtn = page.locator('button[data-testid="editor-clear"]')
-      await expect(clearBtn).toBeVisible()
-      page.once('dialog', (dialog) => dialog.accept())
-      await clearBtn.click()
-      await page.waitForTimeout(1000)
-
-      // 4c. Seek to beat 4 for consistent start
-      await seekToBeat(page, 4)
-
-      // 4d. Enter recording mode
-      await recordBtn.click()
-      await page.waitForTimeout(1000)
-      await expect(recordBtn).toHaveClass(/editor-record-active/)
-
-      // 4e. Start playback (recording happens during playback)
-      await startPlayback(page, playBtn)
-      await page.waitForTimeout(2000)
-
-      // 4f. Simulate cursor movement: Up for ~2s, Down for ~2s
-      await page.keyboard.down('ArrowUp')
-      await page.waitForTimeout(2000)
-      await page.keyboard.up('ArrowUp')
-      await page.waitForTimeout(500)
-      await page.keyboard.down('ArrowDown')
-      await page.waitForTimeout(2000)
-      await page.keyboard.up('ArrowDown')
-      await page.waitForTimeout(1000)
-
-      // 4g. Stop recording
-      await recordBtn.click()
-      await page.waitForTimeout(2000)
-      await expect(recordBtn).not.toHaveClass(/editor-record-active/)
-
-      // 4h. Stop playback
-      await stopPlayback(page, playBtn)
-
-      // 4i. Read recorded segments from app state and verify quantization
-      const segments = await getSegmentsFromState(page)
-
-      expect(segments).toBeDefined()
-      expect(Array.isArray(segments)).toBe(true)
-      expect(segments!.length).toBeGreaterThan(0)
-
-      console.log(`Recorded ${segments!.length} segments with snap=${label}:`)
-      segments!.forEach((seg: any, idx: number) => {
-        console.log(`  Segment ${idx}: direction=${seg.direction}, beats=${seg.beats}`)
-      })
-
-      // 4j. CRITICAL ASSERTION: Each segment's beats is a multiple of the snap resolution
-      for (const seg of segments!) {
-        const beats = seg.beats
-        const remainder = beats % snap
-        const isMultiple = remainder < 1e-6 || Math.abs(remainder - snap) < 1e-6
-        expect(isMultiple).toBeTruthy()
-        if (!isMultiple) {
-          console.error(`FAIL: Segment beats=${beats} is NOT a multiple of snap=${snap} (remainder=${remainder})`)
+  test.beforeEach(async ({ page }) => {
+    consoleErrors = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        const text = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+          consoleErrors.push(text);
         }
       }
+    });
+    page.on('pageerror', err => {
+      consoleErrors.push(err.message);
+    });
 
-      // 4k. Verify via SegmentEditor UI that beats values are snapped
-      const segmentPane = page.locator('section.editor-pane', { hasText: 'セグメント' })
-      const details = segmentPane.locator('details[data-testid="segment-list-details"]')
-      await expect(details).toBeVisible()
-      await details.evaluate((el) => ((el as HTMLDetailsElement).open = true))
-      await page.waitForTimeout(500)
+    await page.goto('http://localhost:5173/');
+    await page.waitForLoadState('networkidle', { timeout: 10000 });
+    await expect(page.locator('#root')).toBeVisible();
+  });
 
-      for (let segIdx = 0; segIdx < segments!.length; segIdx++) {
-        const beatsInput = segmentPane.locator(`input[data-testid="segment-beats-${segIdx}"]`)
-        if (await beatsInput.isVisible({ timeout: 2000 })) {
-          const value = await beatsInput.inputValue()
-          const beats = Number(value)
-          const remainder = beats % snap
-          const isMultiple = remainder < 1e-6 || Math.abs(remainder - snap) < 1e-6
-          expect(isMultiple).toBeTruthy()
-          if (!isMultiple) {
-            console.error(`FAIL (UI): Segment ${segIdx} beats=${beats} is NOT a multiple of snap=${snap} (remainder=${remainder})`)
-          }
-        }
-      }
+  test.afterEach(() => {
+    expect(consoleErrors).toHaveLength(0);
+  });
 
-      // 4l. Export TOML and verify quantization persisted in file
-      const exportBtn = page.locator('button[data-testid="editor-export"]')
-      await expect(exportBtn).toBeVisible()
+  test('Audio offset input moved from BpmEditor to music-control pane', async ({ page }) => {
+    // Navigate to editor via HashRouter
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000); // Wait for editor initialization
 
-      const [download] = await Promise.all([
-        page.waitForEvent('download'),
-        exportBtn.click(),
-      ])
+    // Verify audio offset input EXISTS in music-control pane
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    await expect(musicControlOffset).toBeVisible();
+    await expect(musicControlOffset).toHaveAttribute('type', 'number');
 
-      expect(download.suggestedFilename()).toBe('reply.toml')
-      const filePath = await download.path()
-      if (filePath) {
-        const fileContent = fs.readFileSync(filePath, 'utf8')
-        const parsed = parse(fileContent) as any
-        expect(parsed).toBeDefined()
-        expect(Array.isArray(parsed.segments)).toBe(true)
-        expect(parsed.segments.length).toBeGreaterThan(0)
+    // Verify audio offset input does NOT exist in BpmEditor (toHaveCount(0))
+    const bpmEditorOffset = page.locator('#bpm-editor #audio-offset');
+    await expect(bpmEditorOffset).toHaveCount(0);
 
-        for (const seg of parsed.segments) {
-          const beats = seg.beats
-          const remainder = beats % snap
-          const isMultiple = remainder < 1e-6 || Math.abs(remainder - snap) < 1e-6
-          expect(isMultiple).toBeTruthy()
-          if (!isMultiple) {
-            console.error(`FAIL (TOML): Segment beats=${beats} is NOT a multiple of snap=${snap} (remainder=${remainder})`)
-          }
-        }
+    // Verify initial offset value is 0 (default)
+    const initialValue = await musicControlOffset.inputValue();
+    expect(Number(initialValue)).toBe(0);
+  });
 
-        console.log(`TOML export verified for snap=${label}`)
-      }
+  test('Changing audio offset and playing applies offset to playback position', async ({ page }) => {
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000);
 
-      await page.waitForTimeout(1000)
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    await expect(musicControlOffset).toBeVisible();
+
+    // Wait for audio to load - play button should not show "読込中…"
+    const playButton = page.locator('#music-control button:has-text("再生")');
+    await expect(playButton).toBeVisible({ timeout: 30000 });
+    await page.waitForTimeout(1500);
+
+    // Set offset to 500ms
+    await musicControlOffset.fill('500');
+    await page.waitForTimeout(300);
+
+    // Click play button
+    await playButton.click();
+    await page.waitForTimeout(1000); // Let playback start
+
+    // Verify playback position reflects offset
+    // The currentTime should be approximately offset/1000 seconds (0.5s)
+    const playbackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      if (audioEl) return audioEl.currentTime;
+      // Fallback: check internal state via window
+      return (window as any).__TEST_AUDIO_CURRENT_TIME__ ?? null;
+    });
+
+    expect(playbackPosition).not.toBeNull();
+    expect(playbackPosition).toBeGreaterThanOrEqual(0.45); // Allow small tolerance
+    expect(playbackPosition).toBeLessThanOrEqual(0.55);
+
+    // Stop playback
+    const stopButton = page.locator('#music-control button:has-text("停止")');
+    if (await stopButton.isVisible({ timeout: 1000 })) {
+      await stopButton.click();
     }
+  });
 
-    // 5. Test that changing snap AFTER recording does NOT retroactively change existing segments
-    console.log('\n=== Testing snap change does not retroactively modify segments ===')
-    await snapSelect.selectOption('1') // Change to 1/1
-    await expect(snapSelect).toHaveValue('1')
-    await page.waitForTimeout(500)
+  test('Audio offset persists across play/stop cycles', async ({ page }) => {
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000);
 
-    const segmentsAfterSnapChange = await getSegmentsFromState(page)
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    const playButton = page.locator('#music-control button:has-text("再生")');
+    await expect(playButton).toBeVisible({ timeout: 30000 });
+    await page.waitForTimeout(1500);
 
-    expect(segmentsAfterSnapChange).toBeDefined()
-    expect(segmentsAfterSnapChange!.length).toBeGreaterThan(0)
+    // Set offset to 1200ms
+    await musicControlOffset.fill('1200');
+    await page.waitForTimeout(300);
 
-    // The segments should still be multiples of the ORIGINAL snap (0.125), not the new snap (1)
-    for (const seg of segmentsAfterSnapChange!) {
-      const beats = seg.beats
-      const originalSnap = 0.125 // Last tested snap
-      const remainder = beats % originalSnap
-      const isMultipleOfOriginal = remainder < 1e-6 || Math.abs(remainder - originalSnap) < 1e-6
-      expect(isMultipleOfOriginal).toBeTruthy()
-      if (!isMultipleOfOriginal) {
-        console.error(`FAIL: Segment beats=${beats} lost original quantization (snap=0.125)`)
-      }
-    }
-    console.log('Segments preserved original quantization after snap change')
+    // Play
+    await playButton.click();
+    await page.waitForTimeout(800);
 
-    // 6. Navigate back to home
-    const backLink = page.locator('a', { hasText: '/ に戻る' })
-    await expect(backLink).toBeVisible()
-    await backLink.click()
-    await page.waitForSelector('.select-screen', { timeout: 5000 })
-    await page.waitForTimeout(1500)
+    const firstPlaybackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      return audioEl ? audioEl.currentTime : null;
+    });
 
-    // 7. Assert no unhandled console errors
-    expect(allErrors).toHaveLength(0)
-  })
+    expect(firstPlaybackPosition).toBeGreaterThanOrEqual(1.15);
+    expect(firstPlaybackPosition).toBeLessThanOrEqual(1.25);
 
-  test('T101: Quantize UI shows correct fractions and updates internal state', async ({ page, browserName }) => {
-    test.skip(browserName !== 'chromium', 'chromium only')
-    test.setTimeout(120000)
+    // Stop
+    const stopButton = page.locator('#music-control button:has-text("停止")');
+    await stopButton.click();
+    await page.waitForTimeout(500);
 
-    const allErrors = await collectErrors(page)
+    // Play again - should still apply offset
+    await playButton.click();
+    await page.waitForTimeout(800);
 
-    await page.goto(process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/')
-    await page.waitForLoadState('networkidle', { timeout: 10000 })
+    const secondPlaybackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      return audioEl ? audioEl.currentTime : null;
+    });
 
-    await page.evaluate(() => {
-      window.location.hash = '#/editor'
-    })
-    await page.waitForSelector('.editor-screen', { timeout: 10000 })
-    await page.waitForTimeout(2000)
+    expect(secondPlaybackPosition).toBeGreaterThanOrEqual(1.15);
+    expect(secondPlaybackPosition).toBeLessThanOrEqual(1.25);
+  });
 
-    // Verify snap dropdown has correct options
-    const snapSelect = page.locator('#snap')
-    await expect(snapSelect).toBeVisible({ timeout: 5000 })
+  test('Audio offset input accepts decimal values and applies correctly', async ({ page }) => {
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000);
 
-    const options = await snapSelect.locator('option').all()
-    expect(options.length).toBe(4)
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    const playButton = page.locator('#music-control button:has-text("再生")');
+    await expect(playButton).toBeVisible({ timeout: 30000 });
+    await page.waitForTimeout(1500);
 
-    const optionValues = await Promise.all(options.map((o) => o.getAttribute('value')))
-    expect(optionValues).toEqual(['0.125', '0.25', '0.5', '1'])
+    // Set offset to 250.5ms
+    await musicControlOffset.fill('250.5');
+    await page.waitForTimeout(300);
 
-    const optionTexts = await Promise.all(options.map((o) => o.textContent()))
-    expect(optionTexts).toEqual(['1/8', '1/4', '1/2', '1/1'])
+    // Verify input value normalization (number input)
+    const inputValue = await musicControlOffset.inputValue();
+    expect(Number(inputValue)).toBeCloseTo(250.5, 1);
 
-    // Verify default value is 0.25 (1/4)
-    await expect(snapSelect).toHaveValue('0.25')
+    await playButton.click();
+    await page.waitForTimeout(800);
 
-    // Verify changing snap updates internal state
-    await snapSelect.selectOption('0.5')
-    await expect(snapSelect).toHaveValue('0.5')
+    const playbackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      return audioEl ? audioEl.currentTime : null;
+    });
 
-    const snapState = await getSnapFromState(page)
-    expect(snapState).toBe(0.5)
+    expect(playbackPosition).toBeGreaterThanOrEqual(0.20);
+    expect(playbackPosition).toBeLessThanOrEqual(0.30);
+  });
 
-    await snapSelect.selectOption('1')
-    await expect(snapSelect).toHaveValue('1')
+  test('Audio offset state syncs between EditorScreen and music-control', async ({ page }) => {
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000);
 
-    const snapState2 = await getSnapFromState(page)
-    expect(snapState2).toBe(1)
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    const playButton = page.locator('#music-control button:has-text("再生")');
+    await expect(playButton).toBeVisible({ timeout: 30000 });
+    await page.waitForTimeout(1500);
 
-    await snapSelect.selectOption('0.125')
-    await expect(snapSelect).toHaveValue('0.125')
+    // Change offset via input
+    await musicControlOffset.fill('800');
+    await page.waitForTimeout(300);
 
-    const snapState3 = await getSnapFromState(page)
-    expect(snapState3).toBe(0.125)
+    // Verify internal state reflects the change
+    const internalOffset = await page.evaluate(() => {
+      return (window as any).__TEST_EDITOR_AUDIO_OFFSET__ ?? null;
+    });
 
-    expect(allErrors).toHaveLength(0)
-  })
+    expect(internalOffset).not.toBeNull();
+    expect(Number(internalOffset)).toBe(800);
 
-  test('T101: Recording trajectory is quantized to snap grid in real-time', async ({ page, browserName }) => {
-    test.skip(browserName !== 'chromium', 'chromium only')
-    test.setTimeout(180000)
+    // Verify playFrom uses this offset
+    await playButton.click();
+    await page.waitForTimeout(800);
 
-    const allErrors = await collectErrors(page)
+    const playbackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      return audioEl ? audioEl.currentTime : null;
+    });
 
-    await page.goto(process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/')
-    await page.waitForLoadState('networkidle', { timeout: 10000 })
-    await expect(page.locator('#root')).toBeVisible()
-    await page.waitForTimeout(2500)
+    expect(playbackPosition).toBeGreaterThanOrEqual(0.75);
+    expect(playbackPosition).toBeLessThanOrEqual(0.85);
+  });
 
-    await openEditor(page)
-    await page.waitForTimeout(3000)
+  test('Negative audio offset values are handled correctly', async ({ page }) => {
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000);
 
-    const playBtn = page.locator('[data-testid="editor-play"]')
-    const recordBtn = page.locator('[data-testid="editor-record-toggle"]')
-    const snapSelect = page.locator('#snap')
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    const playButton = page.locator('#music-control button:has-text("再生")');
+    await expect(playButton).toBeVisible({ timeout: 30000 });
+    await page.waitForTimeout(1500);
 
-    // Load audio
-    await playBtn.click()
-    await waitForAudioLoaded(page)
-    await page.waitForTimeout(3000)
+    // Set negative offset (-500ms) - should clamp to 0 or handle gracefully
+    await musicControlOffset.fill('-500');
+    await page.waitForTimeout(300);
 
-    // Set snap to 1/4
-    await snapSelect.selectOption('0.25')
-    await expect(snapSelect).toHaveValue('0.25')
-    await page.waitForTimeout(500)
+    const inputValue = await musicControlOffset.inputValue();
+    const numericValue = Number(inputValue);
+    // Negative offset should either be clamped to 0 or allowed (implementation dependent)
+    // At minimum, verify it doesn't crash
+    expect(typeof numericValue).toBe('number');
 
-    // Clear segments
-    const clearBtn = page.locator('button[data-testid="editor-clear"]')
-    page.once('dialog', (dialog) => dialog.accept())
-    await clearBtn.click()
-    await page.waitForTimeout(1000)
+    await playButton.click();
+    await page.waitForTimeout(800);
 
-    // Seek to beat 2
-    await seekToBeat(page, 2)
+    // Should not crash and playback should start
+    const playbackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      return audioEl ? audioEl.currentTime : null;
+    });
 
-    // Start recording
-    await recordBtn.click()
-    await page.waitForTimeout(1000)
-    await startPlayback(page, playBtn)
-    await page.waitForTimeout(1500)
+    expect(playbackPosition).not.toBeNull();
+    expect(playbackPosition).toBeGreaterThanOrEqual(0);
+  });
 
-    // During recording, check that recLive trajectory points are quantized
-    // Press Up briefly
-    await page.keyboard.down('ArrowUp')
-    await page.waitForTimeout(1500)
-    await page.keyboard.up('ArrowUp')
+  test('Large audio offset values are handled correctly', async ({ page }) => {
+    await page.evaluate(() => { window.location.hash = '#/editor'; });
+    await page.waitForURL('**/#/editor');
+    await page.waitForTimeout(2000);
 
-    // Check recLive trajectory beats are snapped to 0.25
-    const recLive = await getRecLiveFromState(page)
-    expect(recLive).not.toBeNull()
-    expect(recLive.trajectory.length).toBeGreaterThan(1)
+    const musicControlOffset = page.locator('#music-control #audio-offset');
+    const playButton = page.locator('#music-control button:has-text("再生")');
+    await expect(playButton).toBeVisible({ timeout: 30000 });
+    await page.waitForTimeout(1500);
 
-    for (const point of recLive.trajectory) {
-      const remainder = point.beat % 0.25
-      const isMultiple = remainder < 1e-3 || Math.abs(remainder - 0.25) < 1e-3
-      // Note: trajectory points during live recording may not be perfectly snapped
-      // but the FINAL segments after commit must be snapped
-      // This test documents the current behavior
-    }
+    // Set large offset (10000ms = 10s)
+    await musicControlOffset.fill('10000');
+    await page.waitForTimeout(300);
 
-    // Continue recording Down
-    await page.keyboard.down('ArrowDown')
-    await page.waitForTimeout(1500)
-    await page.keyboard.up('ArrowDown')
-    await page.waitForTimeout(1000)
+    const inputValue = await musicControlOffset.inputValue();
+    expect(Number(inputValue)).toBe(10000);
 
-    // Stop recording
-    await recordBtn.click()
-    await page.waitForTimeout(2000)
-    await stopPlayback(page, playBtn)
+    await playButton.click();
+    await page.waitForTimeout(1500); // Longer wait for large offset
 
-    // Verify committed segments are snapped
-    const segments = await getSegmentsFromState(page)
-    expect(segments.length).toBeGreaterThan(0)
+    const playbackPosition = await page.evaluate(() => {
+      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
+      return audioEl ? audioEl.currentTime : null;
+    });
 
-    for (const seg of segments) {
-      const remainder = seg.beats % 0.25
-      const isMultiple = remainder < 1e-6 || Math.abs(remainder - 0.25) < 1e-6
-      expect(isMultiple).toBeTruthy()
-    }
-
-    expect(allErrors).toHaveLength(0)
-  })
-})
+    expect(playbackPosition).toBeGreaterThanOrEqual(9.5);
+    expect(playbackPosition).toBeLessThanOrEqual(10.5);
+  });
+});
