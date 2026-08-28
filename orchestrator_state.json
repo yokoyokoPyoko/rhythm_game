@@ -326,7 +326,7 @@
         "postmortem": "ses_fb9c7996affeMFOy7HVO84K9ex",
         "coder": "ses_fb9c6dfd4ffeu5qjjmRVoicQeZ"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "finished": 1787787742.6762261
     },
     "T101": {
