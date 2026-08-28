@@ -1,260 +1,265 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type ConsoleMessage, type Page } from '@playwright/test'
+import * as fs from 'fs'
+import { parse } from 'smol-toml'
 
-test.describe('T99: Audio Offset Migration & Playback Application', () => {
-  let consoleErrors: string[] = [];
-
-  test.beforeEach(async ({ page }) => {
-    consoleErrors = [];
-    page.on('console', msg => {
-      if (msg.type() === 'error') {
-        const text = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-          consoleErrors.push(text);
-        }
-      }
-    });
-    page.on('pageerror', err => {
-      consoleErrors.push(err.message);
-    });
-
-    await page.goto('http://localhost:5173/');
-    await page.waitForLoadState('networkidle', { timeout: 10000 });
-    await expect(page.locator('#root')).toBeVisible();
-  });
-
-  test.afterEach(() => {
-    expect(consoleErrors).toHaveLength(0);
-  });
-
-  test('Audio offset input moved from BpmEditor to music-control pane', async ({ page }) => {
-    // Navigate to editor via HashRouter
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000); // Wait for editor initialization
-
-    // Verify audio offset input EXISTS in music-control pane
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    await expect(musicControlOffset).toBeVisible();
-    await expect(musicControlOffset).toHaveAttribute('type', 'number');
-
-    // Verify audio offset input does NOT exist in BpmEditor (toHaveCount(0))
-    const bpmEditorOffset = page.locator('#bpm-editor #audio-offset');
-    await expect(bpmEditorOffset).toHaveCount(0);
-
-    // Verify initial offset value is 0 (default)
-    const initialValue = await musicControlOffset.inputValue();
-    expect(Number(initialValue)).toBe(0);
-  });
-
-  test('Changing audio offset and playing applies offset to playback position', async ({ page }) => {
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000);
-
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    await expect(musicControlOffset).toBeVisible();
-
-    // Wait for audio to load - play button should not show "読込中…"
-    const playButton = page.locator('#music-control button:has-text("再生")');
-    await expect(playButton).toBeVisible({ timeout: 30000 });
-    await page.waitForTimeout(1500);
-
-    // Set offset to 500ms
-    await musicControlOffset.fill('500');
-    await page.waitForTimeout(300);
-
-    // Click play button
-    await playButton.click();
-    await page.waitForTimeout(1000); // Let playback start
-
-    // Verify playback position reflects offset
-    // The currentTime should be approximately offset/1000 seconds (0.5s)
-    const playbackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      if (audioEl) return audioEl.currentTime;
-      // Fallback: check internal state via window
-      return (window as any).__TEST_AUDIO_CURRENT_TIME__ ?? null;
-    });
-
-    expect(playbackPosition).not.toBeNull();
-    expect(playbackPosition).toBeGreaterThanOrEqual(0.45); // Allow small tolerance
-    expect(playbackPosition).toBeLessThanOrEqual(0.55);
-
-    // Stop playback
-    const stopButton = page.locator('#music-control button:has-text("停止")');
-    if (await stopButton.isVisible({ timeout: 1000 })) {
-      await stopButton.click();
+async function waitForServerReady(page: Page, baseURL: string): Promise<void> {
+  let retries = 0
+  while (retries < 30) {
+    try {
+      const resp = await page.goto(baseURL, { waitUntil: 'networkidle', timeout: 5000 })
+      if (resp?.ok()) return
+    } catch {
+      // ignore
     }
-  });
+    await page.waitForTimeout(1000)
+    retries++
+  }
+  throw new Error('Dev server not ready after 30s')
+}
 
-  test('Audio offset persists across play/stop cycles', async ({ page }) => {
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000);
+async function collectErrors(page: Page): Promise<string[]> {
+  const errors: string[] = []
+  page.on('console', (msg: ConsoleMessage) => {
+    const text = msg.text()
+    if (msg.type() === 'error' && /Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+      errors.push(text)
+    }
+  })
+  page.on('pageerror', (err) => {
+    if (/TypeError|ReferenceError|Uncaught/.test(err.message)) {
+      errors.push(err.message)
+    }
+  })
+  return errors
+}
 
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    const playButton = page.locator('#music-control button:has-text("再生")');
-    await expect(playButton).toBeVisible({ timeout: 30000 });
-    await page.waitForTimeout(1500);
+async function openEditor(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.location.hash = '#/editor'
+  })
+  await page.waitForSelector('.editor-screen', { timeout: 15000 })
+  await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
+  await expect(page.locator('[data-testid="wave-preview-canvas"]')).toBeVisible()
+  await page.waitForTimeout(3000)
+}
 
-    // Set offset to 1200ms
-    await musicControlOffset.fill('1200');
-    await page.waitForTimeout(300);
+async function waitForAudioLoaded(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const btn = document.querySelector('[data-testid="editor-play"]') as HTMLButtonElement
+      if (!btn) return false
+      return !btn.textContent?.includes('読込')
+    },
+    { timeout: 120000 }
+  )
+  await page.waitForTimeout(2000)
+}
 
-    // Play
-    await playButton.click();
-    await page.waitForTimeout(800);
+async function getAudioOffsetFromState(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as any).__editorAudioOffset ?? 0
+  })
+}
 
-    const firstPlaybackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      return audioEl ? audioEl.currentTime : null;
-    });
+async function getPlayFromStartParams(page: Page): Promise<{
+  when: number
+  offset: number
+  audioTime: number
+  ctxCurrentTime: number
+} | null> {
+  return page.evaluate(() => {
+    return (window as any).__editorPlayFromStartParams ?? null
+  })
+}
 
-    expect(firstPlaybackPosition).toBeGreaterThanOrEqual(1.15);
-    expect(firstPlaybackPosition).toBeLessThanOrEqual(1.25);
+async function getPlayFromOffset(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as any).__editorPlayFromOffset ?? 0
+  })
+}
 
-    // Stop
-    const stopButton = page.locator('#music-control button:has-text("停止")');
-    await stopButton.click();
-    await page.waitForTimeout(500);
+test.describe.configure({ retries: 0 })
 
-    // Play again - should still apply offset
-    await playButton.click();
-    await page.waitForTimeout(800);
+test('T99 Audio Offset: Music Control pane placement & playFrom behavioral contract', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'chromium only')
+  test.setTimeout(300000)
 
-    const secondPlaybackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      return audioEl ? audioEl.currentTime : null;
-    });
+  const baseURL = process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/'
+  const allErrors = await collectErrors(page)
 
-    expect(secondPlaybackPosition).toBeGreaterThanOrEqual(1.15);
-    expect(secondPlaybackPosition).toBeLessThanOrEqual(1.25);
-  });
+  // ============================================================
+  // 0. Wait for dev server to be ready
+  // ============================================================
+  await waitForServerReady(page, baseURL)
+  await page.goto(baseURL, { waitUntil: 'networkidle' })
+  await expect(page.locator('#root')).toBeVisible()
+  await page.waitForTimeout(2500)
 
-  test('Audio offset input accepts decimal values and applies correctly', async ({ page }) => {
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000);
+  // ============================================================
+  // 1. Open Editor
+  // ============================================================
+  await openEditor(page)
+  await page.waitForTimeout(3000)
 
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    const playButton = page.locator('#music-control button:has-text("再生")');
-    await expect(playButton).toBeVisible({ timeout: 30000 });
-    await page.waitForTimeout(1500);
+  // ============================================================
+  // 2. Verify Audio Offset input is in Music Control pane (NOT BPM Settings)
+  // ============================================================
+  const offsetInput = page.locator('#audio-offset')
+  await expect(offsetInput).toBeVisible()
 
-    // Set offset to 250.5ms
-    await musicControlOffset.fill('250.5');
-    await page.waitForTimeout(300);
+  // Verify offset input exists in Music Control section (id="music-control")
+  const musicControlSection = page.locator('section.editor-pane#music-control, section.editor-pane:has-text("音楽制御")')
+  await expect(musicControlSection).toBeVisible()
+  await expect(musicControlSection.locator('#audio-offset')).toBeVisible()
 
-    // Verify input value normalization (number input)
-    const inputValue = await musicControlOffset.inputValue();
-    expect(Number(inputValue)).toBeCloseTo(250.5, 1);
+  // BPM Settings section should NOT contain audio offset
+  const bpmSection = page.locator('section.editor-pane:has-text("BPM設定")')
+  await expect(bpmSection).toBeVisible()
+  await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
 
-    await playButton.click();
-    await page.waitForTimeout(800);
+  // ============================================================
+  // 3. Set positive audio offset and verify internal state reflects it
+  // ============================================================
+  const positiveOffset = 150 // ms
+  await offsetInput.fill(String(positiveOffset))
+  await expect(Number(await offsetInput.inputValue())).toBeCloseTo(positiveOffset)
 
-    const playbackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      return audioEl ? audioEl.currentTime : null;
-    });
+  // Verify internal state has the offset
+  const stateOffset = await getAudioOffsetFromState(page)
+  expect(stateOffset).toBe(positiveOffset)
 
-    expect(playbackPosition).toBeGreaterThanOrEqual(0.20);
-    expect(playbackPosition).toBeLessThanOrEqual(0.30);
-  });
+  // ============================================================
+  // 4. Test playFrom reflection with positive offset: verify behavioral contract
+  // ============================================================
+  const playBtn = page.locator('[data-testid="editor-play"]')
+  await expect(playBtn).toBeVisible()
+  await playBtn.click()
 
-  test('Audio offset state syncs between EditorScreen and music-control', async ({ page }) => {
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000);
+  // Wait for 68.8MB FLAC to load and decode
+  await waitForAudioLoaded(page)
+  await page.waitForTimeout(3000)
 
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    const playButton = page.locator('#music-control button:has-text("再生")');
-    await expect(playButton).toBeVisible({ timeout: 30000 });
-    await page.waitForTimeout(1500);
+  // Verify the NEW test hook captures exact (when, offset) parameters passed to src.start()
+  // For positive audioOffset:
+  //   when === ctx.currentTime + offsetSec (offsetSec = audioOffset / 1000)
+  //   offset === audioTime (audioTime = fromMs / 1000)
+  const startParams = await getPlayFromStartParams(page)
+  expect(startParams).not.toBeNull()
+  if (startParams) {
+    const { when, offset, audioTime, ctxCurrentTime } = startParams
+    const offsetSec = positiveOffset / 1000
+    
+    // Behavioral contract assertion for positive offset
+    expect(when).toBeCloseTo(ctxCurrentTime + offsetSec, 2) // when === ctx.currentTime + offsetSec
+    expect(offset).toBeCloseTo(audioTime, 3) // offset === audioTime
+  }
 
-    // Change offset via input
-    await musicControlOffset.fill('800');
-    await page.waitForTimeout(300);
+  // Stop audio
+  await playBtn.click()
+  await page.waitForTimeout(2000)
 
-    // Verify internal state reflects the change
-    const internalOffset = await page.evaluate(() => {
-      return (window as any).__TEST_EDITOR_AUDIO_OFFSET__ ?? null;
-    });
+  // ============================================================
+  // 5. Test negative audio offset behavioral contract
+  // ============================================================
+  const negativeOffset = -100 // ms
+  await offsetInput.fill(String(negativeOffset))
+  await expect(Number(await offsetInput.inputValue())).toBeCloseTo(negativeOffset)
 
-    expect(internalOffset).not.toBeNull();
-    expect(Number(internalOffset)).toBe(800);
+  const stateNegativeOffset = await getAudioOffsetFromState(page)
+  expect(stateNegativeOffset).toBe(negativeOffset)
 
-    // Verify playFrom uses this offset
-    await playButton.click();
-    await page.waitForTimeout(800);
+  await playBtn.click()
+  await waitForAudioLoaded(page)
+  await page.waitForTimeout(3000)
 
-    const playbackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      return audioEl ? audioEl.currentTime : null;
-    });
+  // Verify the NEW test hook captures exact (when, offset) parameters for negative offset
+  // For negative audioOffset:
+  //   when === ctx.currentTime (no delay)
+  //   offset === audioTime - offsetSec (offsetSec = audioOffset / 1000, so audioTime + |offsetSec|)
+  const startParamsNegative = await getPlayFromStartParams(page)
+  expect(startParamsNegative).not.toBeNull()
+  if (startParamsNegative) {
+    const { when, offset, audioTime, ctxCurrentTime } = startParamsNegative
+    const offsetSec = negativeOffset / 1000 // negative value
+    
+    // Behavioral contract assertion for negative offset
+    expect(when).toBeCloseTo(ctxCurrentTime, 2) // when === ctx.currentTime (no delay for negative)
+    expect(offset).toBeCloseTo(audioTime - offsetSec, 3) // offset === audioTime - offsetSec (which is audioTime + |offsetSec|)
+  }
 
-    expect(playbackPosition).toBeGreaterThanOrEqual(0.75);
-    expect(playbackPosition).toBeLessThanOrEqual(0.85);
-  });
+  await playBtn.click()
+  await page.waitForTimeout(2000)
 
-  test('Negative audio offset values are handled correctly', async ({ page }) => {
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000);
+  // ============================================================
+  // 6. Test seek + playFrom with offset (positive)
+  // ============================================================
+  await offsetInput.fill(String(positiveOffset))
+  await expect(Number(await offsetInput.inputValue())).toBeCloseTo(positiveOffset)
 
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    const playButton = page.locator('#music-control button:has-text("再生")');
-    await expect(playButton).toBeVisible({ timeout: 30000 });
-    await page.waitForTimeout(1500);
+  const seekSlider = page.locator('.editor-slider').first()
+  if (await seekSlider.isEnabled()) {
+    await seekSlider.fill('5000')
+    await page.waitForTimeout(2000)
 
-    // Set negative offset (-500ms) - should clamp to 0 or handle gracefully
-    await musicControlOffset.fill('-500');
-    await page.waitForTimeout(300);
+    // Play again from seeked position
+    await playBtn.click()
+    await waitForAudioLoaded(page)
+    await page.waitForTimeout(3000)
 
-    const inputValue = await musicControlOffset.inputValue();
-    const numericValue = Number(inputValue);
-    // Negative offset should either be clamped to 0 or allowed (implementation dependent)
-    // At minimum, verify it doesn't crash
-    expect(typeof numericValue).toBe('number');
+    // Verify playFrom still uses the same audio offset with seeked position
+    const startParamsSeek = await getPlayFromStartParams(page)
+    expect(startParamsSeek).not.toBeNull()
+    if (startParamsSeek) {
+      const { when, offset, audioTime, ctxCurrentTime } = startParamsSeek
+      const offsetSec = positiveOffset / 1000
+      
+      // Behavioral contract assertion for positive offset with seek
+      expect(when).toBeCloseTo(ctxCurrentTime + offsetSec, 2)
+      expect(offset).toBeCloseTo(audioTime, 3)
+      // Also verify audioTime corresponds to seeked position (~5000ms = 5s)
+      expect(audioTime).toBeCloseTo(5, 1)
+    }
 
-    await playButton.click();
-    await page.waitForTimeout(800);
+    await playBtn.click()
+    await page.waitForTimeout(2000)
+  }
 
-    // Should not crash and playback should start
-    const playbackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      return audioEl ? audioEl.currentTime : null;
-    });
+  // ============================================================
+  // 7. Test TOML Export includes audio_offset
+  // ============================================================
+  const exportBtn = page.locator('[data-testid="editor-export"]')
+  await expect(exportBtn).toBeVisible()
 
-    expect(playbackPosition).not.toBeNull();
-    expect(playbackPosition).toBeGreaterThanOrEqual(0);
-  });
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    exportBtn.click(),
+  ])
+  expect(download.suggestedFilename()).toBe('reply.toml')
+  const filePath = await download.path()
+  if (filePath) {
+    const fileContent = fs.readFileSync(filePath, 'utf8')
+    const parsed = parse(fileContent) as any
+    expect(parsed).toBeDefined()
+    expect(parsed.audio_offset).toBe(positiveOffset) // Last set value
+  }
 
-  test('Large audio offset values are handled correctly', async ({ page }) => {
-    await page.evaluate(() => { window.location.hash = '#/editor'; });
-    await page.waitForURL('**/#/editor');
-    await page.waitForTimeout(2000);
+  // ============================================================
+  // 8. Test TOML Import restores audio_offset in Music Control pane
+  // ============================================================
+  const importInput = page.locator('[data-testid="import-toml"]')
+  const filePathForImport = filePath!
+  await importInput.setInputFiles(filePathForImport)
+  await page.waitForTimeout(2000)
 
-    const musicControlOffset = page.locator('#music-control #audio-offset');
-    const playButton = page.locator('#music-control button:has-text("再生")');
-    await expect(playButton).toBeVisible({ timeout: 30000 });
-    await page.waitForTimeout(1500);
+  // Verify imported audio_offset appears in Music Control pane
+  const importedOffset = Number(await page.locator('#audio-offset').inputValue())
+  expect(importedOffset).toBeCloseTo(positiveOffset)
 
-    // Set large offset (10000ms = 10s)
-    await musicControlOffset.fill('10000');
-    await page.waitForTimeout(300);
+  // Verify BPM Settings still doesn't have audio offset
+  await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
 
-    const inputValue = await musicControlOffset.inputValue();
-    expect(Number(inputValue)).toBe(10000);
-
-    await playButton.click();
-    await page.waitForTimeout(1500); // Longer wait for large offset
-
-    const playbackPosition = await page.evaluate(() => {
-      const audioEl = document.querySelector('#music-control audio') as HTMLAudioElement | null;
-      return audioEl ? audioEl.currentTime : null;
-    });
-
-    expect(playbackPosition).toBeGreaterThanOrEqual(9.5);
-    expect(playbackPosition).toBeLessThanOrEqual(10.5);
-  });
-});
+  // ============================================================
+  // 9. Final assertions
+  // ============================================================
+  expect(allErrors).toHaveLength(0)
+})

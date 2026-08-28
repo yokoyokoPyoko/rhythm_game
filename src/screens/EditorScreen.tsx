@@ -232,7 +232,6 @@ export default function EditorScreen() {
   }, [])
 
   const playFrom = async (fromMs: number) => {
-    ;(window as unknown as Record<string, unknown>).__editorPlayFromOffset = audioOffset
     const mgr = AudioManager.getInstance()
     await mgr.ensure()
     const ctx = mgr.ctx
@@ -264,10 +263,22 @@ export default function EditorScreen() {
       src.connect(ctx.destination)
       const offsetSec = audioOffset / 1000
       const audioTime = Math.max(0, fromMs / 1000)
+      let startWhen: number
+      let startOffset: number
       if (offsetSec >= 0) {
-        src.start(ctx.currentTime + offsetSec, audioTime)
+        startWhen = ctx.currentTime + offsetSec
+        startOffset = audioTime
       } else {
-        src.start(ctx.currentTime, Math.max(0, audioTime - offsetSec))
+        startWhen = ctx.currentTime
+        startOffset = Math.max(0, audioTime - offsetSec)
+      }
+      src.start(startWhen, startOffset)
+      ;(window as unknown as Record<string, unknown>).__editorPlayFrom = {
+        when: startWhen,
+        offset: startOffset,
+        audioOffset,
+        ctxTime: ctx.currentTime,
+        fromMs,
       }
       src.onended = () => {
         if (sourceRef.current === src) {
@@ -610,7 +621,7 @@ export default function EditorScreen() {
             {importError && <div className="editor-error">{importError}</div>}
           </section>
 
-          <section className="editor-pane">
+          <section className="editor-pane" id="music-control">
             <h2>音楽制御</h2>
             <div className="editor-field">
               <label className="editor-label" htmlFor="audio-url">

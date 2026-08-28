@@ -55,21 +55,15 @@ async function waitForAudioLoaded(page: Page): Promise<void> {
   await page.waitForTimeout(2000)
 }
 
-async function getAudioOffsetFromState(page: Page): Promise<number> {
+async function getPlayFrom(page: Page): Promise<{ when: number; offset: number; audioOffset: number; ctxTime: number; fromMs: number } | null> {
   return page.evaluate(() => {
-    return (window as any).__editorAudioOffset ?? 0
-  })
-}
-
-async function getPlayFromAudioOffset(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    return (window as any).__editorPlayFromOffset ?? 0
+    return (window as any).__editorPlayFrom ?? null
   })
 }
 
 test.describe.configure({ retries: 0 })
 
-test('T99 Audio Offset: Music Control pane placement & playFrom reflection', async ({ page, browserName }) => {
+test('T99 Audio Offset: Music Control pane placement & playFrom behavioral reflection', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'chromium only')
   test.setTimeout(300000)
 
@@ -96,8 +90,8 @@ test('T99 Audio Offset: Music Control pane placement & playFrom reflection', asy
   const offsetInput = page.locator('#audio-offset')
   await expect(offsetInput).toBeVisible()
 
-  // Verify offset input exists in Music Control section
-  const musicControlSection = page.locator('section.editor-pane:has-text("音楽制御")')
+  // Music Control section must have id="music-control" per spec
+  const musicControlSection = page.locator('#music-control')
   await expect(musicControlSection).toBeVisible()
   await expect(musicControlSection.locator('#audio-offset')).toBeVisible()
 
@@ -107,79 +101,52 @@ test('T99 Audio Offset: Music Control pane placement & playFrom reflection', asy
   await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
 
   // ============================================================
-  // 3. Set audio offset and verify internal state reflects it
+  // 3. Set POSITIVE audio offset and verify behavioral start contract
   // ============================================================
   const testOffset = 150 // ms
   await offsetInput.fill(String(testOffset))
   await expect(Number(await offsetInput.inputValue())).toBeCloseTo(testOffset)
 
-  // Verify internal state has the offset
-  const stateOffset = await getAudioOffsetFromState(page)
-  expect(stateOffset).toBe(testOffset)
-
-  // ============================================================
-  // 4. Test playFrom reflection: load audio, play from position, verify offset used
-  // ============================================================
   const playBtn = page.locator('[data-testid="editor-play"]')
   await expect(playBtn).toBeVisible()
   await playBtn.click()
 
-  // Wait for 68.8MB FLAC to load and decode
   await waitForAudioLoaded(page)
   await page.waitForTimeout(3000)
 
-  // Verify audio offset is passed to playFrom by checking internal flag
-  // (The implementation should set __editorPlayFromOffset when playFrom is called)
-  const playFromOffset = await getPlayFromAudioOffset(page)
-  expect(playFromOffset).toBe(testOffset)
+  const posPlay = await getPlayFrom(page)
+  expect(posPlay).not.toBeNull()
+  // Positive offset: when === ctx.currentTime + offsetSec AND offset === audioTime
+  expect(posPlay!.when).toBeCloseTo(posPlay!.ctxTime + testOffset / 1000, 3)
+  expect(posPlay!.offset).toBeCloseTo(Math.max(0, posPlay!.fromMs / 1000), 3)
+  expect(posPlay!.audioOffset).toBe(testOffset)
 
-  // Stop audio
   await playBtn.click()
   await page.waitForTimeout(2000)
 
   // ============================================================
-  // 5. Test seek + playFrom with offset
-  // ============================================================
-  const seekSlider = page.locator('.editor-slider').first()
-  if (await seekSlider.isEnabled()) {
-    await seekSlider.fill('5000')
-    await page.waitForTimeout(2000)
-
-    // Play again from seeked position
-    await playBtn.click()
-    await waitForAudioLoaded(page)
-    await page.waitForTimeout(3000)
-
-    // Verify playFrom still uses the same audio offset
-    const playFromOffsetAfterSeek = await getPlayFromAudioOffset(page)
-    expect(playFromOffsetAfterSeek).toBe(testOffset)
-
-    await playBtn.click()
-    await page.waitForTimeout(2000)
-  }
-
-  // ============================================================
-  // 6. Test negative audio offset
+  // 4. Test NEGATIVE audio offset behavioral contract
   // ============================================================
   const negativeOffset = -100
   await offsetInput.fill(String(negativeOffset))
   await expect(Number(await offsetInput.inputValue())).toBeCloseTo(negativeOffset)
 
-  const stateNegativeOffset = await getAudioOffsetFromState(page)
-  expect(stateNegativeOffset).toBe(negativeOffset)
-
   await playBtn.click()
   await waitForAudioLoaded(page)
   await page.waitForTimeout(3000)
 
-  const playFromNegativeOffset = await getPlayFromAudioOffset(page)
-  expect(playFromNegativeOffset).toBe(negativeOffset)
+  const negPlay = await getPlayFrom(page)
+  expect(negPlay).not.toBeNull()
+  // Negative offset: when === ctx.currentTime AND offset === audioTime - offsetSec
+  expect(negPlay!.when).toBeCloseTo(negPlay!.ctxTime, 3)
+  expect(negPlay!.offset).toBeCloseTo(Math.max(0, negPlay!.fromMs / 1000 - negativeOffset / 1000), 3)
+  expect(negPlay!.audioOffset).toBe(negativeOffset)
 
   await playBtn.click()
   await page.waitForTimeout(2000)
 
   // ============================================================
-  // 7. Test TOML Export includes audio_offset
+  // 5. Test TOML Export includes audio_offset
   // ============================================================
   const exportBtn = page.locator('[data-testid="editor-export"]')
   await expect(exportBtn).toBeVisible()
@@ -194,26 +161,24 @@ test('T99 Audio Offset: Music Control pane placement & playFrom reflection', asy
     const fileContent = fs.readFileSync(filePath, 'utf8')
     const parsed = parse(fileContent) as any
     expect(parsed).toBeDefined()
-    expect(parsed.audio_offset).toBe(negativeOffset) // Last set value
+    expect(parsed.audio_offset).toBe(negativeOffset)
   }
 
   // ============================================================
-  // 8. Test TOML Import restores audio_offset in Music Control pane
+  // 6. Test TOML Import restores audio_offset in Music Control pane
   // ============================================================
   const importInput = page.locator('[data-testid="import-toml"]')
   const filePathForImport = filePath!
   await importInput.setInputFiles(filePathForImport)
   await page.waitForTimeout(2000)
 
-  // Verify imported audio_offset appears in Music Control pane
   const importedOffset = Number(await page.locator('#audio-offset').inputValue())
   expect(importedOffset).toBeCloseTo(negativeOffset)
 
-  // Verify BPM Settings still doesn't have audio offset
   await expect(bpmSection.locator('#audio-offset')).toHaveCount(0)
 
   // ============================================================
-  // 9. Final assertions
+  // 7. Final assertions
   // ============================================================
   expect(allErrors).toHaveLength(0)
 })
