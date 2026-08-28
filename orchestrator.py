@@ -586,6 +586,120 @@ def extract_compact_spec(task_id: str) -> str:
     return f"Task {task_id} specification"
 
 
+def get_task_context_path(task_id: str) -> Path:
+    POSTMORTEM_DIR.mkdir(exist_ok=True)
+    return POSTMORTEM_DIR / f"context_{task_id}.json"
+
+
+def load_task_context(task_id: str) -> dict[str, Any]:
+    path = get_task_context_path(task_id)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "task_id": task_id,
+        "implemented_ui": {
+            "ids": [],
+            "test_ids": [],
+            "files_changed": []
+        },
+        "last_failure": {
+            "error_summary": ""
+        },
+        "fix_hints": [],
+        "prohibited_rules": []
+    }
+
+
+def save_task_context(task_id: str, context: dict[str, Any]) -> None:
+    path = get_task_context_path(task_id)
+    try:
+        path.write_text(json.dumps(context, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        log.warning("[%s] Failed to save task context: %s", task_id, e)
+
+
+def extract_implemented_ui(task_id: str) -> dict[str, Any]:
+    """Extract actual DOM IDs, data-testids, and changed files to prevent QA hallucinations."""
+    ids: set[str] = set()
+    test_ids: set[str] = set()
+    files_changed: list[str] = []
+
+    # Get changed files from git diff if possible
+    code, out, _ = run_cmd_pgid_stream(["git", "diff", "--name-only", "HEAD~1", "HEAD"])
+    if code == 0 and out.strip():
+        files_changed = [
+            f.strip() for f in out.splitlines()
+            if f.strip().startswith("src/") and f.strip().endswith((".tsx", ".ts"))
+        ]
+
+    # Scan relevant tsx/ts files for id and data-testid
+    scan_targets = [ROOT / f for f in files_changed] if files_changed else list((ROOT / "src").glob("**/*.tsx"))
+    for fpath in scan_targets:
+        if fpath.exists():
+            try:
+                content = fpath.read_text(encoding="utf-8")
+                # Match id="..." (excluding dynamic expressions)
+                for m in re.findall(r'\bid=["\']([a-zA-Z0-9_-]+)["\']', content):
+                    if m not in ("root",):
+                        ids.add(m)
+                # Match data-testid="..."
+                for m in re.findall(r'data-testid=["\']([a-zA-Z0-9_-]+)["\']', content):
+                    test_ids.add(m)
+            except Exception:
+                pass
+
+    return {
+        "ids": sorted(list(ids)),
+        "test_ids": sorted(list(test_ids)),
+        "files_changed": files_changed,
+    }
+
+
+def get_task_context_prompt_for_qa(task_id: str) -> str:
+    ctx = load_task_context(task_id)
+    ui = ctx.get("implemented_ui", {})
+    fix_hints = ctx.get("fix_hints", [])
+
+    parts = []
+    if ui.get("ids") or ui.get("test_ids") or ui.get("files_changed"):
+        parts.append("【Actual Implemented UI Elements (from Codebase)】:")
+        if ui.get("files_changed"):
+            parts.append(f"- Files Modified: {', '.join(ui['files_changed'])}")
+        if ui.get("test_ids"):
+            parts.append(f"- Available data-testid: {', '.join(f'[data-testid=\"{t}\"]' for t in ui['test_ids'])}")
+        if ui.get("ids"):
+            parts.append(f"- Available IDs: {', '.join(f'#{i}' for i in ui['ids'])}")
+        parts.append("- CRITICAL: Do NOT hallucinate or guess non-existent parent container IDs (e.g. #music-control, #bpm-editor, etc.). Use the available data-testid, IDs, or text selectors listed above.")
+
+    if fix_hints:
+        parts.append("\n【Actionable Fix Prescriptions (from Postmortem)】:")
+        for hint in fix_hints[-3:]:
+            parts.append(f"- {hint}")
+
+    return "\n".join(parts) + "\n" if parts else ""
+
+
+def get_task_context_prompt_for_coder(task_id: str) -> str:
+    ctx = load_task_context(task_id)
+    fix_hints = ctx.get("fix_hints", [])
+    last_fail = ctx.get("last_failure", {}).get("error_summary", "")
+
+    parts = []
+    if last_fail:
+        parts.append("【Previous Failure Summary】:")
+        parts.append(f"- {last_fail[:400]}")
+
+    if fix_hints:
+        parts.append("\n【Actionable Fix Prescriptions (from Postmortem)】:")
+        for hint in fix_hints[-3:]:
+            parts.append(f"- {hint}")
+
+    return "\n".join(parts) + "\n" if parts else ""
+
+
 def get_recent_postmortem_rules() -> str:
     if POSTMORTEM_FILE.exists():
         pm_text = POSTMORTEM_FILE.read_text(encoding="utf-8")
@@ -598,6 +712,7 @@ def get_recent_postmortem_rules() -> str:
 def build_compact_coder_prompt(task: Task) -> str:
     spec = extract_compact_spec(task.id)
     recent_rules = get_recent_postmortem_rules()
+    context_hints = get_task_context_prompt_for_coder(task.id)
 
     return f"""Implement the following task. No questions allowed.
 
@@ -606,6 +721,7 @@ Task: {task.id} - {task.desc}
 Specification:
 {spec}
 {recent_rules}
+{context_hints}
 
 Constraints:
 - Ensure zero TypeScript compiler errors (`tsc --noEmit`).
@@ -687,6 +803,7 @@ def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = N
     VIDEO_DIR.mkdir(exist_ok=True)
     spec = extract_compact_spec(task.id)
     recent_rules = get_recent_postmortem_rules()
+    context_hints = get_task_context_prompt_for_qa(task.id)
 
     if state and task.id in state.get("tasks", {}):
         state["tasks"][task.id].setdefault("sessions", {})["qa"] = None
@@ -700,6 +817,7 @@ This is a TDD task. The implementation code does NOT exist yet. Your job is to w
 Specification:
 {spec}
 {recent_rules}
+{context_hints}
 
 STRICT QA REQUIREMENTS (verify BEHAVIOR / INTERNAL STATE, never surface-only DOM presence):
 1. For EACH requirement in the specification, write at least one assertion that verifies ACTUAL BEHAVIOR or INTERNAL STATE, not merely that a DOM element exists/is visible. Examples:
@@ -939,10 +1057,10 @@ def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, st
     POSTMORTEM_DIR.mkdir(exist_ok=True)
     if state and task.id in state.get("tasks", {}):
         state["tasks"][task.id].setdefault("sessions", {})["postmortem"] = None
-    prompt = f"""Analyze the failure for task {task.id}. Determine root cause and generate a strict prohibited rule for next attempt.
+    prompt = f"""Analyze the failure for task {task.id}. Determine root cause, generate a prohibited rule, and provide an ACTIONABLE prescription (fix_hint) for the next attempt.
 
 Failure Log:
-{error_detail[:1000]}
+{error_detail[:1200]}
 
 Decide where the next retry should restart from:
 - "coder": the failure is due to the implementation code (Coder output) and it must be regenerated.
@@ -951,12 +1069,13 @@ Decide where the next retry should restart from:
 Output JSON only:
 {{
   "approach": "approach taken",
-  "root_cause": "root cause",
-  "prohibited_rule": "prohibited rule for next run",
+  "root_cause": "concise root cause description",
+  "prohibited_rule": "prohibited rule for next run (what NOT to do)",
+  "fix_hint": "clear, actionable prescription for Coder/QA (e.g. which exact selectors to use, what DOM/state logic to fix, how to calculate values)",
   "retry_from": "coder" or "qa"
 }}
 """
-    log.info("Postmortem analyzing failure and formulating rules...")
+    log.info("Postmortem analyzing failure and formulating actionable prescriptions...")
     pm_title = f"[{task.id}] Postmortem {uuid.uuid4().hex[:8]}"
     _, out = run_opencode_with_retry(
         postmortem_model, prompt, timeout=None, label="Postmortem", variant="max",
@@ -970,15 +1089,29 @@ Output JSON only:
     log.info("Updated POSTMORTEM.md.")
 
     data = _extract_postmortem_json(out)
-    if data:
-        return {
-            "approach": data.get("approach", ""),
-            "root_cause": data.get("root_cause", ""),
-            "rule": data.get("prohibited_rule", ""),
-            "retry_from": data.get("retry_from", "coder"),
-        }
-    log.warning("Postmortem JSON parse failed; defaulting retry_from=coder. Raw head: %s", out[:400])
-    return {"approach": "", "root_cause": "", "rule": "", "retry_from": "coder"}
+    if not data:
+        log.warning("Postmortem JSON parse failed; defaulting retry_from=coder. Raw head: %s", out[:400])
+        data = {"approach": "", "root_cause": "", "prohibited_rule": "", "fix_hint": "", "retry_from": "coder"}
+
+    # Update shared task context
+    ctx = load_task_context(task.id)
+    ctx["last_failure"] = {
+        "error_summary": error_detail[:600],
+        "root_cause": data.get("root_cause", ""),
+    }
+    if data.get("prohibited_rule"):
+        ctx.setdefault("prohibited_rules", []).append(data["prohibited_rule"])
+    if data.get("fix_hint"):
+        ctx.setdefault("fix_hints", []).append(data["fix_hint"])
+    save_task_context(task.id, ctx)
+
+    return {
+        "approach": data.get("approach", ""),
+        "root_cause": data.get("root_cause", ""),
+        "rule": data.get("prohibited_rule", ""),
+        "fix_hint": data.get("fix_hint", ""),
+        "retry_from": data.get("retry_from", "coder"),
+    }
 
 
 def git_checkpoint(message: str) -> None:
@@ -1133,6 +1266,13 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             _, coder_commit, _ = run_cmd_pgid_stream(["git", "rev-parse", "HEAD"])
             coder_commit = coder_commit.strip()
 
+            # Record implemented UI elements and modified files into shared task context
+            ctx = load_task_context(task.id)
+            ctx["implemented_ui"] = extract_implemented_ui(task.id)
+            save_task_context(task.id, ctx)
+            log.info("[%s] Updated shared task context with %d ID(s) and %d data-testid(s).",
+                     task.id, len(ctx["implemented_ui"]["ids"]), len(ctx["implemented_ui"]["test_ids"]))
+
         # --- TDD Phase 3: Gate B (Green) run the acceptance test ---
         gb = run_gate_b_test(state, task)
         if not gb.ok:
@@ -1178,6 +1318,11 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         st["finished"] = time.time()
         state["consecutive_no_action"] = 0
         save_state(state)
+
+        ctx = load_task_context(task.id)
+        ctx["status"] = "passed"
+        save_task_context(task.id, ctx)
+
         print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
 
         if args.step:
