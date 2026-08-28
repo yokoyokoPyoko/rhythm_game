@@ -305,7 +305,7 @@
     },
     "T99": {
       "attempts": 70,
-      "status": "running",
+      "status": "passed",
       "started": 1787882994.9165676,
       "cycles": 1,
       "gate_b_golden": true,
@@ -314,12 +314,12 @@
         "qa": "ses_fb9d58f89ffeIm9g3OvM6oJpwd",
         "postmortem": "ses_fb9d0722dffevfH9wbf1ZTwKB4"
       },
-      "finished": 1787854744.2095857
+      "finished": 1787884160.454267
     },
     "T100": {
       "attempts": 8,
-      "status": "blocked",
-      "started": 1787767997.319455,
+      "status": "running",
+      "started": 1787884160.4555297,
       "cycles": 3,
       "sessions": {
         "qa": "ses_fc0814e24ffeWTH6uv4mdGCwD0",
