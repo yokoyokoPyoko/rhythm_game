@@ -13,7 +13,7 @@ export default defineConfig({
     command: 'npm run dev',
     url: 'http://127.0.0.1:5173/rhythm_game/',
     reuseExistingServer: true,
-    timeout: 120000,
+    timeout: 30000,
   },
-  timeout: 180000,
+  timeout: 45000,
 });

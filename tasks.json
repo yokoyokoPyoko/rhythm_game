@@ -448,7 +448,8 @@
     "depends_on": [
       "T101"
     ],
-    "ui": true
+    "ui": true,
+    "type": "negative"
   },
   {
     "id": "T103",

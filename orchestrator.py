@@ -112,6 +112,7 @@ class Task:
     desc: str
     depends_on: list[str] = field(default_factory=list)
     ui: bool = False
+    task_type: str = "feature"
 
 
 @dataclass
@@ -390,6 +391,7 @@ def load_tasks() -> list[Task]:
             desc=item.get("desc", ""),
             depends_on=item.get("depends_on", []),
             ui=bool(item.get("ui", False)),
+            task_type=str(item.get("type", "feature")),
         ))
     return tasks
 
@@ -809,6 +811,17 @@ def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = N
         state["tasks"][task.id].setdefault("sessions", {})["qa"] = None
     qa_title = f"[{task.id}] Qa {uuid.uuid4().hex[:8]}"
 
+    task_type_guidance = ""
+    if task.task_type in ("negative", "removal"):
+        task_type_guidance = f"""
+NEGATIVE/REMOVAL TASK PROTOCOL (Task Type: {task.task_type}):
+- This task ({task.id}) removes or disables a legacy feature (e.g. key presses in playback mode must not create segments).
+- You MUST test BOTH:
+  (a) Positive Control: In the valid mode (e.g. record mode), key actions DO create/modify trajectories/segments.
+  (b) Negative Control: In the disabled mode (e.g. playback mode), the exact same key actions do NOT modify segments.
+- Make sure positive controls verify genuine behavior so that tests do NOT trivially pass on un-implemented/stub code.
+"""
+
     prompt = fr"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
 
 Context (TEST-DRIVEN DEVELOPMENT):
@@ -818,19 +831,24 @@ Specification:
 {spec}
 {recent_rules}
 {context_hints}
+{task_type_guidance}
 
 STRICT QA REQUIREMENTS (verify BEHAVIOR / INTERNAL STATE, never surface-only DOM presence):
-1. For EACH requirement in the specification, write at least one assertion that verifies ACTUAL BEHAVIOR or INTERNAL STATE, not merely that a DOM element exists/is visible. Examples:
-   - Verify computed/numeric outcomes (e.g. a recorded segment's `beats` is a multiple of the quantize resolution) by reading app state via `window`, data-* attributes, or test IDs.
-   - Verify state transitions (e.g. after pressing a key in play mode, a segments/rings array does NOT change) by reading observable state.
-2. Simulate realistic, thorough interactions for ALL features. Use HashRouter (`window.location.hash = '#/editor'`).
-3. Audio Loading & Decoding Wait (CRITICAL): `08.Reply.flac` is 68.8MB. Wait for decode/loading to complete (e.g. play button text leaves '読込中…' or buffer ready) before interacting.
-4. Number Input Assertion Rule (CRITICAL): `<input type="number">` normalizes `11.00` to `11`. Use `expect(Number(await input.inputValue())).toBeCloseTo(11)` or `toHaveValue(/^11(\.0+)?$/)` — never exact string equality.
-5. Visual Capture Timing: `page.waitForTimeout(1500-3000)` between critical actions for transitions/animations.
-6. Robust Locators & Stability: use text/roles/test IDs. Avoid strict visibility checks on 0-height containers.
-7. Console Error Monitoring: fail on any uncaught TypeError/ReferenceError.
-8. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
-9. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
+1. MANDATORY 3-Step State-Transition Assertions (CRITICAL to prevent false-positives):
+   - NEVER write surface-only existence checks (toBeVisible, toHaveCount, toBeDefined) alone.
+   - For EACH feature requirement, write a 3-step dynamic test:
+     [Step 1: Capture Initial State] -> read before state (e.g. initial segment count, play state, offset value).
+     [Step 2: Perform User Interaction] -> click, type, or trigger action with realistic wait.
+     [Step 3: Assert Resulting Transition] -> assert that state/computed value changed to the EXPECTED target outcome (e.g. segment beats quantized to exact multiples of snap resolution).
+2. Dynamic Computed Values: Assert computed outputs (e.g. beats / snap is exact integer, playback position shifted by offset). Never accept un-implemented default values.
+3. Simulate realistic, thorough interactions for ALL features. Use HashRouter (`window.location.hash = '#/editor'`).
+4. Audio Loading & Decoding Wait (CRITICAL): `08.Reply.flac` is 68.8MB. Wait for decode/loading to complete (e.g. play button text leaves '読込中…' or buffer ready) before interacting. Use `page.waitForFunction` with max 30s timeout.
+5. Number Input Assertion Rule (CRITICAL): `<input type="number">` normalizes `11.00` to `11`. Use `expect(Number(await input.inputValue())).toBeCloseTo(11)` or `toHaveValue(/^11(\.0+)?$/)` — never exact string equality.
+6. Visual Capture Timing: `page.waitForTimeout(1000-2000)` between critical actions for transitions/animations.
+7. Robust Locators & Stability: use text/roles/test IDs from actual implemented UI elements. Avoid guessing parent container IDs.
+8. Console Error Monitoring: fail on any uncaught TypeError/ReferenceError.
+9. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
+10. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
 
 Output only: DONE when finished. Never paste full test code into chat.
 """
@@ -863,14 +881,14 @@ Output only: DONE when finished. Never paste full test code into chat.
     return False
 
 
-def run_dynamic_test_red(task: Task) -> bool:
-    """TDD Red phase: run the test ONCE. Returns True if it PASSED (false-positive / no real assertions)."""
+def run_dynamic_test_red(task: Task) -> tuple[bool, str]:
+    """TDD Red phase: run the test ONCE. Returns (True, output) if it PASSED (false-positive / no real assertions)."""
     if not DYNAMIC_SPEC_FILE.exists():
-        return False
+        return False, "tests/dynamic.spec.ts does not exist"
     if not ensure_dev_server():
-        return False
-    code, _, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="red: ")
-    return code == 0
+        return False, "Dev server failed to start"
+    code, out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="red: ")
+    return code == 0, out
 
 
 def run_gate_b_test(state: dict[str, Any] | None, task: Task) -> GateResult:
@@ -936,8 +954,9 @@ You are INDEPENDENT reviewer #{run_index + 1} of {REVIEWER_QUORUM}. Be especiall
 Specification & Intent (each bullet is a REQUIREMENT that must be evaluated individually):
 {spec}
 
-EVALUATION PHILOSOPHY:
-Do not merely check if technical bullet points or bare-minimum features exist. Evaluate whether the implementation achieves high-end product polish, delightful user experience (UX), and refined visual craftsmanship. If a feature technically works but feels crude, janky, unpolished, or visually unappealing, it fails.
+EVALUATION PHILOSOPHY & SCOPE:
+- Do not merely check if technical bullet points or bare-minimum features exist. Evaluate whether the implementation achieves high-end product polish, delightful user experience (UX), and refined visual craftsmanship. If a feature technically works but feels crude, janky, unpolished, or visually unappealing, it fails.
+- CRITICAL SCOPE CLARIFICATION: If the specification mentions "verify via automated tests", "make it verifiable by automated tests", or "自動テストで検証可能にする", Gate C evaluates the observable USER INTERFACE and BROWSER BEHAVIOR in the video. The automated test execution itself is strictly checked by Gate B (Playwright runner). Do NOT fail a submission merely because a terminal, console, or test runner is not shown in the video; instead, evaluate whether the underlying UI element, interaction, and resulting visual changes are working smoothly in the browser.
 
 MANDATORY EXCELLENCE CRITERIA (All must be met for a PASS):
 1. Fluidity & Responsiveness: Interactions and animations must be butter-smooth, responsive, and completely free of stutter, jank, or frozen states.
@@ -1203,9 +1222,18 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 maybe_reset_cycle()
                 continue
             # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
-            if run_dynamic_test_red(task):
+            red_passed, red_out = run_dynamic_test_red(task)
+            if red_passed:
                 log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
-                generate_postmortem(task, "QA test is a false-positive (passed before implementation). Rewrite stricter behavior/state-based assertions that FAIL on an unimplemented feature.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                passed_lines = [l.strip() for l in red_out.splitlines() if "passed" in l or "✓" in l or "›" in l]
+                sample_passed = "\n".join(passed_lines[:6]) if passed_lines else red_out[-400:]
+                pm_detail = (
+                    f"QA test is a FALSE-POSITIVE (all tests passed on UNIMPLEMENTED code):\n{sample_passed}\n"
+                    "The assertions were too weak (e.g. only verified initial DOM/state or default values). "
+                    "Rewrite strict 3-step state-transition assertions ([Capture Before] -> [Perform Action] -> [Assert Changed Outcome]) "
+                    "that GUARANTEE failure on unimplemented features."
+                )
+                generate_postmortem(task, pm_detail, models.postmortem, state=state, fresh_sessions=fresh_sessions)
                 need_test = True
                 need_coder = False
                 mark_stage(0)
