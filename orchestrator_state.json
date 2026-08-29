@@ -383,8 +383,9 @@
     },
     "T105": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1787979021.1882944,
+      "finished": 1787980862.0,
       "cycles": 1,
       "sessions": {
         "qa": "ses_fb4252a4dffe9yDxHDGch5lbx8",
