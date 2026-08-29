@@ -1,0 +1,6 @@
+[[songs]]
+id = "reply"
+title = "Reply"
+artist = ""
+chartPath = "/rhythm_game/charts/reply.toml"
+difficulty = 5
