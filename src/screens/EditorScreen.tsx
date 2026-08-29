@@ -7,7 +7,7 @@ import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
 import { WaveEngine } from '../game/waveEngine'
-import { segmentize, quantizeBeat } from '../chart/quantize'
+import { segmentize, quantizeBeat, type TrajPoint } from '../chart/quantize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
@@ -99,13 +99,15 @@ export default function EditorScreen() {
     w.__editorRecTraj = recTrajRef.current
     w.__editorRecLive = recLive
     w.__editorRecStartBeat = recStartBeatRef.current
+    w.__editorQuantizeModule = { quantizeBeat, segmentize }
+    w.__editorSeekToBeat = seekToBeat
   })
 
   const playtestActiveRef = useRef(false)
   const toastTimerRef = useRef<number | null>(null)
   const modeRef = useRef<'play' | 'record'>('play')
   const recCursorRef = useRef<Cursor | null>(null)
-  const recTrajRef = useRef<{ beat: number; y: number }[]>([])
+  const recTrajRef = useRef<TrajPoint[]>([])
   const recStartBeatRef = useRef(0)
   const recStartYRef = useRef(GAME_CENTER_Y)
   const lastTickRef = useRef(0)
@@ -203,10 +205,10 @@ export default function EditorScreen() {
         positionRef.current = pos
         if (modeRef.current === 'record' && recCursorRef.current) {
           const rawBeat = timeline.msToBeat(pos)
-          const beat = Math.round(rawBeat / snap) * snap
+          const beat = quantizeBeat(rawBeat, snap)
           const beatMs = timeline.beatMsAt(rawBeat)
           recCursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, beatMs)
-          recTrajRef.current.push({ beat, y: recCursorRef.current.y })
+          recTrajRef.current.push({ beat, y: recCursorRef.current.y, down: keysRef.current.up || keysRef.current.down })
           setRecLive({
             beat,
             y: recCursorRef.current.y,
@@ -318,7 +320,7 @@ export default function EditorScreen() {
 
   const startRecording = useCallback(() => {
     const rawStartBeat = timeline.msToBeat(positionMs)
-    const startBeat = Math.round(rawStartBeat / snap) * snap
+    const startBeat = quantizeBeat(rawStartBeat, snap)
     recStartBeatRef.current = startBeat
     const engine = new WaveEngine(segments, timeline, amplitude)
     const startY = segments.length > 0 ? engine.waveYAt(startBeat) : GAME_CENTER_Y
@@ -326,7 +328,7 @@ export default function EditorScreen() {
     const cursor = new Cursor(amplitude)
     cursor.y = startY
     recCursorRef.current = cursor
-    recTrajRef.current = [{ beat: startBeat, y: startY }]
+    recTrajRef.current = [{ beat: startBeat, y: startY, down: false }]
     modeRef.current = 'record'
     setMode('record')
     setRecLive({ beat: startBeat, y: startY, trajectory: recTrajRef.current.slice() })
@@ -375,7 +377,7 @@ export default function EditorScreen() {
         if (modeRef.current !== 'record') return
         if (keysRef.current.space) return
         const rawBeat = timeline.msToBeat(positionRef.current)
-        const snapped = Math.round(rawBeat / snap) * snap
+        const snapped = quantizeBeat(rawBeat, snap)
         spacePressBeatRef.current = snapped
         keysRef.current.space = true
         return
@@ -417,10 +419,11 @@ export default function EditorScreen() {
         const traj = recTrajRef.current
         const last = traj[traj.length - 1]
         if (!last || releaseBeat > last.beat + 1e-9) {
-          traj.push({ beat: releaseBeat, y })
+          traj.push({ beat: releaseBeat, y, down: false })
         } else {
           last.beat = releaseBeat
           last.y = y
+          last.down = false
         }
         setRecLive({ beat: releaseBeat, y, trajectory: traj.slice() })
       }
@@ -435,10 +438,10 @@ export default function EditorScreen() {
         }
         if (modeRef.current === 'record') {
           const rawBeat = timeline.msToBeat(positionRef.current)
-          const snapped = Math.round(rawBeat / snap) * snap
+          const snapped = quantizeBeat(rawBeat, snap)
           const startBeat = spacePressBeatRef.current ?? snapped
           const rawDuration = snapped - startBeat
-          const duration = Number((Math.round(rawDuration / snap) * snap).toFixed(2))
+          const duration = Number(quantizeBeat(rawDuration, snap).toFixed(2))
           let added = false
           setRings((prev) => {
             if (prev.some((r) => Math.abs(r.beat - startBeat) < 0.001)) return prev
@@ -470,7 +473,7 @@ export default function EditorScreen() {
 
   const addRing = useCallback(
     (beat: number): number | undefined => {
-      const snapped = Math.round(beat / snap) * snap
+      const snapped = quantizeBeat(beat, snap)
       let index = -1
       setRings((prev) => {
         if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) {

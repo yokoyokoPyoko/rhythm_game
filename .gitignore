@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Audio assets (copyrighted)
+*.flac
+*.mp3
+*.wav
+*.ogg
+public/audio/*
+!public/audio/.gitkeep
+docs/audio/*
+!docs/audio/.gitkeep
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

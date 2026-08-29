@@ -68,6 +68,14 @@ async function clearSegments(page: any): Promise<void> {
   await page.waitForTimeout(500);
 }
 
+async function seekToBeat(page: any, beat: number): Promise<void> {
+  await page.evaluate((b) => {
+    const w = window as unknown as Record<string, unknown>;
+    if (w.__editorSeekToBeat) (w.__editorSeekToBeat as (b: number) => void)(b);
+  }, beat);
+  await page.waitForTimeout(200);
+}
+
 // Find the beat at which the recorded trajectory stops moving (key release
 // point). Before release the y changes; after release it is flat (stay).
 function releaseBeatOf(traj: Array<{ beat: number; y: number }>): number {
@@ -114,6 +122,8 @@ test.describe('T105: 録音クオンタイズのキー離し（リリース）�
 
       await startPlayback(page);
       await page.waitForTimeout(500);
+      await seekToBeat(page, 0);
+      await page.waitForTimeout(200);
 
       await enterRecordMode(page);
       await page.waitForTimeout(200);
@@ -174,6 +184,8 @@ test.describe('T105: 録音クオンタイズのキー離し（リリース）�
     await clearSegments(page);
     await startPlayback(page);
     await page.waitForTimeout(400);
+    await seekToBeat(page, 0);
+    await page.waitForTimeout(200);
 
     await enterRecordMode(page);
     await page.waitForTimeout(150);

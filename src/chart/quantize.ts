@@ -1,22 +1,10 @@
 import type { Segment } from '../types'
 
-const DEFAULT_CENTER_Y = 300
-
-function interpolateY(traj: { beat: number; y: number }[], beat: number): number {
-  if (traj.length === 0) return DEFAULT_CENTER_Y
-  if (beat <= traj[0].beat) return traj[0].y
-  const last = traj[traj.length - 1]
-  if (beat >= last.beat) return last.y
-  for (let i = 0; i < traj.length - 1; i++) {
-    const a = traj[i]
-    const b = traj[i + 1]
-    if (beat >= a.beat && beat <= b.beat) {
-      if (b.beat <= a.beat) return b.y
-      const t = (beat - a.beat) / (b.beat - a.beat)
-      return a.y + (b.y - a.y) * t
-    }
-  }
-  return last.y
+export interface TrajPoint {
+  beat: number
+  y: number
+  /** true while a direction key (up/down) is held, false while released (stay). */
+  down: boolean
 }
 
 export function quantizeBeat(beat: number, snap: number): number {
@@ -26,51 +14,73 @@ export function quantizeBeat(beat: number, snap: number): number {
 
 /**
  * Convert a recorded cursor trajectory into wave segments.
- * Every produced segment's `beats` is a multiple of `snap` (quantized),
- * so recordings stay aligned to the selected grid resolution.
+ *
+ * The trajectory records the pressed state (`down`) per sampled point. A run of
+ * consecutive points sharing the same `down` value defines one segment:
+ *   - `down === true`  -> moving run (up/down based on y delta)
+ *   - `down === false` -> stay run (horizontal)
+ *
+ * Every produced segment's `beats` is a multiple of `snap` (quantized), so
+ * recordings stay aligned to the selected grid resolution.
+ *
+ * Release snapping (T105): the end beat of a moving run is taken from the first
+ * point *after* the run (the release point, which is already snapped to the grid
+ * in `onKeyUp`). This makes the moving segment end exactly at
+ *   b_end = round(b_rel / s) * s
+ * and guarantees no overshoot into the next snap cell.
  */
 export function segmentize(
-  traj: { beat: number; y: number }[],
+  traj: TrajPoint[],
   snap: number,
   amplitude: number,
 ): Segment[] {
   if (traj.length < 2 || !(snap > 0)) return []
-  const sorted = [...traj].sort((a, b) => a.beat - b.beat)
-  const start = sorted[0].beat
-  const end = sorted[sorted.length - 1].beat
+  const pts = [...traj].sort((a, b) => a.beat - b.beat)
   const threshold = Math.max((amplitude * snap) / 16, 0.5)
 
-  const micro: Segment[] = []
-  for (let b = start; b < end - 1e-6; b += snap) {
-    const y1 = interpolateY(sorted, b)
-    const y2 = interpolateY(sorted, b + snap)
-    const dy = y2 - y1
-    let dir: 'up' | 'down' | 'stay'
-    if (Math.abs(dy) <= threshold) {
-      dir = 'stay'
-    } else {
-      dir = dy > 0 ? 'down' : 'up'
+  const segs: Segment[] = []
+  let i = 0
+  while (i < pts.length) {
+    // Extend the current run while the `down` state stays identical.
+    let j = i
+    while (j + 1 < pts.length && pts[j + 1].down === pts[i].down) j++
+
+    const startBeat = pts[i].beat
+    const endBeat = j + 1 < pts.length ? pts[j + 1].beat : pts[j].beat
+    const rawBeats = endBeat - startBeat
+    if (rawBeats <= 1e-9) {
+      i = j + 1
+      continue
     }
-    micro.push({ direction: dir, beats: snap })
+
+    let direction: 'up' | 'down' | 'stay'
+    if (!pts[i].down) {
+      direction = 'stay'
+    } else {
+      const y0 = pts[i].y
+      const y1 = j + 1 < pts.length ? pts[j + 1].y : pts[j].y
+      const dy = y1 - y0
+      if (Math.abs(dy) <= threshold) direction = 'stay'
+      else direction = dy > 0 ? 'down' : 'up'
+    }
+
+    const beats = quantizeBeat(rawBeats, snap)
+    if (beats > 1e-6) {
+      const last = segs[segs.length - 1]
+      if (last && last.direction === direction) {
+        last.beats = Number((last.beats + beats).toFixed(4))
+      } else {
+        segs.push({ direction, beats: Number(beats.toFixed(4)) })
+      }
+    }
+    i = j + 1
   }
 
-  const merged: Segment[] = []
-  for (const m of micro) {
-    const last = merged[merged.length - 1]
-    if (last && last.direction === m.direction) {
-      last.beats = Number((last.beats + m.beats).toFixed(4))
-    } else {
-      merged.push({ direction: m.direction, beats: Number(m.beats.toFixed(4)) })
-    }
-  }
-   // Quantize every produced segment's beats to an integer multiple of `snap`
-   // so recordings stay aligned to the selected grid resolution.
-   return merged
-     .filter((s) => s.beats > 1e-6)
-     .map((s) => {
-       const snapped = quantizeBeat(s.beats, snap)
-       return { direction: s.direction, beats: Number(snapped.toFixed(4)) }
-     })
+  // Final pass: re-quantize every produced segment's beats so recordings stay
+  // perfectly aligned to the grid (no sub-epsilon drift), then drop empties.
+  return segs
+    .map((s) => ({ direction: s.direction, beats: Number(quantizeBeat(s.beats, snap).toFixed(4)) }))
+    .filter((s) => s.beats > 1e-6)
 }
 
 export function isSnapAligned(beats: number, snap: number): boolean {
