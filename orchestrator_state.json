@@ -369,9 +369,13 @@
       "gate_b_golden": true
     },
     "T104": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1787978289.8698487
+      "started": 1787978289.8698487,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_fb4305299ffeV4j3Je5J7yetGy"
+      }
     },
     "T105": {
       "attempts": 0,
