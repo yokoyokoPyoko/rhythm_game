@@ -1719,6 +1719,15 @@ def main() -> None:
             log.info("  Plan: %s <- %s", t.id, t.desc)
         return
 
+    # Safety Guard: Never allow --force across the entire repository without explicit --only or --range
+    if args.force and not args.only and not args.range:
+        log.error("SAFETY ERROR: `--force` cannot be run across all tasks simultaneously (risk of cascading overwrite).")
+        log.error("Please specify `--only <TID>` or `--range <FROM> <TO>` to target specific tasks.")
+        sys.exit(1)
+
+    # Protected foundational tasks that should NEVER be rerun once passed (e.g. initial scaffolding)
+    PERMANENTLY_PROTECTED_TASKS = {"T00", "T82"}
+
     start_time = time.time()
     deadline = start_time + args.budget_min * 60
 
@@ -1733,9 +1742,15 @@ def main() -> None:
                 sys.exit(1)
 
             st = state["tasks"].get(t.id, {})
-            if st.get("status") == "passed" and not args.force:
-                log.info("[%s] Already passed -> Skip (--force to rerun)", t.id)
-                continue
+            is_passed = st.get("status") == "passed"
+
+            if is_passed:
+                if t.id in PERMANENTLY_PROTECTED_TASKS:
+                    log.info("[%s] Foundational task permanently complete -> Skip", t.id)
+                    continue
+                if not args.force:
+                    log.info("[%s] Already passed -> Skip", t.id)
+                    continue
 
             res = exec_task(t, state, models, args, fresh_sessions=args.fresh_sessions)
             if res != "passed" and not args.force:
