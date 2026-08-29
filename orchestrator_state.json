@@ -392,7 +392,7 @@
         "postmortem": "ses_fb3670502ffem6Ix14wjhQCmGf",
         "coder": "ses_fb362ee17ffecoCwYerchftw0d"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     },
     "T106": {
       "attempts": 1,
