@@ -63,14 +63,14 @@ export function segmentize(
       merged.push({ direction: m.direction, beats: Number(m.beats.toFixed(4)) })
     }
   }
-  // Quantize every produced segment's beats to an integer multiple of `snap`
-  // so recordings stay aligned to the selected grid resolution.
-  return merged
-    .filter((s) => s.beats > 1e-6)
-    .map((s) => {
-      const snapped = Math.round(s.beats / snap) * snap
-      return { direction: s.direction, beats: Number(snapped.toFixed(4)) }
-    })
+   // Quantize every produced segment's beats to an integer multiple of `snap`
+   // so recordings stay aligned to the selected grid resolution.
+   return merged
+     .filter((s) => s.beats > 1e-6)
+     .map((s) => {
+       const snapped = quantizeBeat(s.beats, snap)
+       return { direction: s.direction, beats: Number(snapped.toFixed(4)) }
+     })
 }
 
 export function isSnapAligned(beats: number, snap: number): boolean {

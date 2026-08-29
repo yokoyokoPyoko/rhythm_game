@@ -7,7 +7,7 @@ import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
 import { WaveEngine } from '../game/waveEngine'
-import { segmentize } from '../chart/quantize'
+import { segmentize, quantizeBeat } from '../chart/quantize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
@@ -98,6 +98,7 @@ export default function EditorScreen() {
     w.__editorBeat = beat
     w.__editorRecTraj = recTrajRef.current
     w.__editorRecLive = recLive
+    w.__editorRecStartBeat = recStartBeatRef.current
   })
 
   const playtestActiveRef = useRef(false)
@@ -403,8 +404,29 @@ export default function EditorScreen() {
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') keysRef.current.up = false
-      if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') keysRef.current.down = false
+      const isUpKey = e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW'
+      const isDownKey = e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS'
+
+      // T105: snap the release moment to the grid so the moving segment ends
+      // exactly at the released (quantized) beat and does not bleed into the
+      // next snap cell (overshoot).
+      if ((isUpKey || isDownKey) && modeRef.current === 'record' && isPlayingRef.current && recCursorRef.current) {
+        const rawBeat = timeline.msToBeat(positionRef.current)
+        const releaseBeat = quantizeBeat(rawBeat, snap)
+        const y = recCursorRef.current.y
+        const traj = recTrajRef.current
+        const last = traj[traj.length - 1]
+        if (!last || releaseBeat > last.beat + 1e-9) {
+          traj.push({ beat: releaseBeat, y })
+        } else {
+          last.beat = releaseBeat
+          last.y = y
+        }
+        setRecLive({ beat: releaseBeat, y, trajectory: traj.slice() })
+      }
+
+      if (isUpKey) keysRef.current.up = false
+      if (isDownKey) keysRef.current.down = false
       // T103: ring stamping via Space is only allowed in record mode.
       if (e.code === 'Space') {
         if (!isPlayingRef.current || !keysRef.current.space) {

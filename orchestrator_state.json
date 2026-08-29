@@ -382,9 +382,16 @@
       "finished": 1787979021.1874175
     },
     "T105": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1787979021.1882944
+      "started": 1787979021.1882944,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_fb4252a4dffe9yDxHDGch5lbx8",
+        "postmortem": "ses_fb4217399ffeNlPjF7p2e5RWXE",
+        "coder": "ses_fb420a381ffeBXS90fi6RIS6FC"
+      },
+      "gate_b_golden": false
     },
     "T106": {
       "attempts": 0,
