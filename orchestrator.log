@@ -3287,3 +3287,11 @@
 2026-08-28 20:16:56,698 [INFO] Dispatching Video Review via Simon Willison's llm CLI (model=gemini-3.5-flash-lite, video=video.webm)...
 2026-08-28 20:17:05,028 [INFO] Review 3/3 Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=95, Verdict=PASS: The legacy keyboard segment stamping functionality during play/non-record modes has been cleanly removed, with proper user-facing instructions and stable segment counts observed in the editor interface.
 2026-08-28 20:17:05,028 [INFO] [T102] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-08-29 10:22:38,845 [WARNING] Selected range has unpassed prerequisite dependencies: T102 (status: running)
+2026-08-29 10:23:54,973 [INFO] Orchestrator range execution: 5 tasks (from=T103, to=T107, budget=600m)
+2026-08-29 10:23:54,974 [WARNING] [T103] Blocked by incomplete dependency: T102 (running)
+2026-08-29 10:23:54,974 [WARNING] [T104] Blocked by incomplete dependency: T103 (blocked)
+2026-08-29 10:23:54,975 [WARNING] [T105] Blocked by incomplete dependency: T104 (blocked)
+2026-08-29 10:23:54,976 [WARNING] [T106] Blocked by incomplete dependency: T105 (blocked)
+2026-08-29 10:23:54,977 [WARNING] [T107] Blocked by incomplete dependency: T106 (blocked)
+2026-08-29 10:25:22,836 [INFO] Orchestrator range execution: 5 tasks (from=T103, to=T107, budget=600m)
