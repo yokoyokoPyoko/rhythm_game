@@ -396,7 +396,8 @@
     },
     "T106": {
       "attempts": 0,
-      "status": "pending"
+      "status": "running",
+      "started": 1787981649.09574
     },
     "T107": {
       "attempts": 0,
