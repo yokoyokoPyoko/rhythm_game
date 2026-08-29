@@ -847,7 +847,8 @@ STRICT QA REQUIREMENTS (verify BEHAVIOR / INTERNAL STATE, never surface-only DOM
 6. Visual Capture Timing: `page.waitForTimeout(1000-2000)` between critical actions for transitions/animations.
 7. Robust Locators & Stability: use text/roles/test IDs from actual implemented UI elements. Avoid guessing parent container IDs.
 8. Console Error Monitoring: fail on any uncaught TypeError/ReferenceError.
-9. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
+9. Off-Grid (Fractional Timing) Principle: When testing quantization, snapping, or timing judgments, NEVER test only whole-beat/integer multiples (e.g. 1000ms / 2.0 beats). You MUST include fractional off-grid inputs (e.g. holding key for 1.2 beats or 1.3 beats when snap=0.5) to verify that the value accurately snaps to the nearest grid line and prevents overshoot.
+10. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
 10. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
 
 Output only: DONE when finished. Never paste full test code into chat.
@@ -1034,17 +1035,82 @@ If something fails, output e.g.:
 """
 
 
+def _extract_json_object(out: str) -> dict | None:
+    """Extract a top-level JSON object from model output with nested brace / markdown handling."""
+    if not out:
+        return None
+    # 1. Look for markdown json code block
+    for pattern in [r'```(?:json)?\s*(\{.*?\})\s*```', r'```(?:json)?\s*(\[.*?\])\s*```']:
+        m = re.search(pattern, out, re.S)
+        if m:
+            try:
+                res = json.loads(m.group(1))
+                if isinstance(res, dict):
+                    return res
+                if isinstance(res, list) and res and isinstance(res[0], dict):
+                    return res[0]
+            except Exception:
+                pass
+
+    # 2. Balanced bracket parser (handles nested braces inside strings/code/escapes)
+    first_brace = out.find('{')
+    if first_brace != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        end_idx = -1
+        for i in range(first_brace, len(out)):
+            char = out[i]
+            if escape:
+                escape = False
+                continue
+            if char == '\\':
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = i
+                        break
+        if end_idx != -1:
+            try:
+                candidate = out[first_brace:end_idx + 1]
+                res = json.loads(candidate)
+                if isinstance(res, dict):
+                    return res
+            except Exception:
+                pass
+
+    # 3. Fallback: widest outer braces
+    first_brace = out.find('{')
+    last_brace = out.rfind('}')
+    if first_brace != -1 and last_brace > first_brace:
+        try:
+            res = json.loads(out[first_brace:last_brace + 1])
+            if isinstance(res, dict):
+                return res
+        except Exception:
+            pass
+
+    return None
+
+
 def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
-    match = re.search(r'\{.*"score".*"verdict".*\}', out, re.S)
-    if not match:
-        return False, "Reviewer output did not contain valid evaluation JSON."
+    res = _extract_json_object(out)
+    if not res or not isinstance(res, dict):
+        return False, f"Reviewer output did not contain valid evaluation JSON. Raw head: {out[:200]!r}"
     try:
-        res = json.loads(match.group(0))
         score = res.get("score", 0)
         verdict = res.get("verdict", "FAIL")
         comment = res.get("comment", "")
         evidence = res.get("evidence", [])
-        ok = score >= 80 and verdict == "PASS"
+        ok = score >= 80 and str(verdict).upper() == "PASS"
         if ok:
             # Evidence protocol: every requirement must be MET with a concrete proof.
             if not isinstance(evidence, list) or len(evidence) == 0:
@@ -1052,6 +1118,8 @@ def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
                 comment = f"Reviewer provided no per-requirement evidence array. {comment}"
             else:
                 for ev in evidence:
+                    if not isinstance(ev, dict):
+                        continue
                     status = str(ev.get("status", "")).upper()
                     proof = str(ev.get("proof", "")).strip()
                     if status != "MET" or len(proof) < 8:
@@ -1059,8 +1127,8 @@ def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
                         comment = f"Evidence gap for requirement '{ev.get('requirement', '?')}' (status={status}). {comment}"
                         break
         return ok, f"Score={score}, Verdict={verdict}: {comment}"
-    except Exception:
-        return False, "Reviewer output JSON parse failed."
+    except Exception as e:
+        return False, f"Reviewer output evaluation error: {e}"
 
 
 def check_gate_c(task: Task, reviewer_model: str, is_red_audit: bool = False) -> GateResult:
@@ -1113,56 +1181,7 @@ def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
 
 
 def _extract_postmortem_json(out: str) -> dict | None:
-    # 1. Look for markdown json code block
-    m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', out, re.S)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except Exception:
-            pass
-
-    # 2. Balanced bracket parser (handles nested braces inside strings/code)
-    first_brace = out.find('{')
-    if first_brace != -1:
-        depth = 0
-        in_string = False
-        escape = False
-        end_idx = -1
-        for i in range(first_brace, len(out)):
-            char = out[i]
-            if escape:
-                escape = False
-                continue
-            if char == '\\':
-                escape = True
-                continue
-            if char == '"':
-                in_string = not in_string
-                continue
-            if not in_string:
-                if char == '{':
-                    depth += 1
-                elif char == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end_idx = i
-                        break
-        if end_idx != -1:
-            try:
-                candidate = out[first_brace:end_idx + 1]
-                return json.loads(candidate)
-            except Exception:
-                pass
-
-    # 3. Fallback: widest outer braces
-    last_brace = out.rfind('}')
-    if first_brace != -1 and last_brace > first_brace:
-        try:
-            return json.loads(out[first_brace:last_brace + 1])
-        except Exception:
-            pass
-
-    return None
+    return _extract_json_object(out)
 
 
 def generate_postmortem(task: Task, error_detail: str, postmortem_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> dict:

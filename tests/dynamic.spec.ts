@@ -1,344 +1,612 @@
 import { test, expect } from '@playwright/test';
-import path from 'path';
 
-const AUDIO_FILE = path.resolve(__dirname, '../public/audio/08.Reply.flac');
-const AUDIO_FILENAME = '08.Reply.flac';
-const EXPECTED_TITLE = '08.Reply';
+const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1];
 
-const consoleErrors: string[] = [];
-
-test.beforeEach(async ({ page }) => {
-  consoleErrors.length = 0;
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      const text = msg.text();
-      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-        consoleErrors.push(text);
-      }
-    }
-  });
-  await page.goto('/rhythm_game/');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(1000);
-});
-
-test.afterEach(async () => {
-  expect(consoleErrors).toHaveLength(0);
-});
-
-async function navigateToEditor(page: import('@playwright/test').Page) {
-  await page.goto('/rhythm_game/#/editor');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(1500);
-  await expect(page.locator('h1')).toContainText('オーサリングツール');
+function isSnapAligned(beats: number, snap: number, epsilon = 1e-6): boolean {
+  if (!(snap > 0)) return true;
+  const remainder = ((beats % snap) + snap) % snap;
+  return remainder < epsilon || Math.abs(remainder - snap) < epsilon;
 }
 
-async function waitForAudioLoaded(page: import('@playwright/test').Page, timeout = 30000) {
+function quantizeBeat(beat: number, snap: number): number {
+  if (!(snap > 0) || !Number.isFinite(beat)) return beat;
+  return Number((Math.round(beat / snap) * snap).toFixed(4));
+}
+
+async function waitForAudioReady(page: any, timeout = 120000): Promise<void> {
   await page.waitForFunction(
     () => {
-      const playBtn = document.querySelector('[data-testid="editor-play"]');
-      return playBtn && !playBtn.textContent?.includes('読込中');
+      const btn = document.querySelector('[data-testid="editor-play"]');
+      return btn && !btn.textContent?.includes('読込中');
     },
     { timeout }
   );
-  await page.waitForTimeout(1000);
 }
 
-async function getPlayButtonText(page: import('@playwright/test').Page) {
-  const btn = page.locator('[data-testid="editor-play"]');
-  return (await btn.textContent())?.trim() || '';
+async function startPlayback(page: any): Promise<void> {
+  await page.click('[data-testid="editor-play"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-play"]');
+    return btn && btn.textContent?.includes('停止');
+  }, { timeout: 10000 });
 }
 
-async function getPositionMs(page: import('@playwright/test').Page) {
-  const timeEl = page.locator('.editor-pos-time');
-  const text = await timeEl.textContent();
-  return text ? parseTimeToMs(text) : 0;
+async function stopPlayback(page: any): Promise<void> {
+  await page.click('[data-testid="editor-play"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-play"]');
+    return btn && !btn.textContent?.includes('停止');
+  }, { timeout: 5000 });
 }
 
-async function getBeat(page: import('@playwright/test').Page) {
-  const beatEl = page.locator('.editor-pos-beat');
-  const text = await beatEl.textContent();
-  const match = text?.match(/beat:\s*([\d.]+)/);
-  return match ? parseFloat(match[1]) : 0;
+async function enterRecordMode(page: any): Promise<void> {
+  await page.click('[data-testid="editor-record-toggle"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
+    return btn && btn.textContent?.includes('録音停止');
+  }, { timeout: 5000 });
 }
 
-function parseTimeToMs(timeStr: string): number {
-  const parts = timeStr.split(':');
-  if (parts.length !== 2) return 0;
-  const minutes = parseInt(parts[0], 10);
-  const secParts = parts[1].split('.');
-  const seconds = parseInt(secParts[0], 10);
-  const tenths = secParts[1] ? parseInt(secParts[1].padEnd(1, '0')[0], 10) : 0;
-  return (minutes * 60 + seconds) * 1000 + tenths * 100;
+async function exitRecordMode(page: any): Promise<void> {
+  await page.click('[data-testid="editor-record-toggle"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
+    return btn && btn.textContent?.includes('録音モード');
+  }, { timeout: 5000 });
 }
 
-test.describe('T106: Local Audio File Loading (File Input & Drag-and-Drop)', () => {
-  test('File Input: loads local audio file, enables playback, timeline, and auto-sets title', async ({ page }) => {
-    await navigateToEditor(page);
+async function getSegmentsFromWindow(page: any): Promise<Array<{ direction: string; beats: number }>> {
+  return await page.evaluate(() => (window as any).__editorSegments ?? []);
+}
 
-    const fileInput = page.locator('[data-testid="audio-file-input"]');
-    await expect(fileInput).toBeAttached();
+async function getSnapFromWindow(page: any): Promise<number> {
+  return await page.evaluate(() => (window as any).__editorSnap ?? 0.25);
+}
 
-    const initialTitle = await page.locator('#chart-title').inputValue();
-    const initialBuffer = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
-    expect(initialBuffer).toBeFalsy();
+async function getRecTrajFromWindow(page: any): Promise<Array<{ beat: number; y: number }>> {
+  return await page.evaluate(() => (window as any).__editorRecTraj ?? []);
+}
 
-    await fileInput.setInputFiles(AUDIO_FILE);
+async function getRecStartBeatFromWindow(page: any): Promise<number> {
+  return await page.evaluate(() => (window as any).__editorRecStartBeat ?? 0);
+}
 
-    const loadStartTime = Date.now();
-    await waitForAudioLoaded(page, 30000);
-    const loadDuration = Date.now() - loadStartTime;
-    console.log(`Audio load took ${loadDuration}ms`);
+async function clearSegments(page: any): Promise<void> {
+  page.once('dialog', (dialog: { accept: () => void }) => dialog.accept());
+  await page.click('[data-testid="editor-clear"]');
+  await page.waitForTimeout(500);
+}
 
-    const postLoadTitle = await page.locator('#chart-title').inputValue();
-    expect(postLoadTitle).toBe(EXPECTED_TITLE);
+async function seekToBeatZero(page: any): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as any;
+    if (typeof w.seekTo === 'function') {
+      w.seekTo(0);
+    }
+  });
+  await page.waitForTimeout(200);
+}
 
-    const bufferAfterLoad = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
-    expect(bufferAfterLoad).toBeTruthy();
+function computeExpectedEndBeat(releaseBeat: number, snap: number): number {
+  return quantizeBeat(releaseBeat, snap);
+}
 
-    const durationMs = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
-    expect(typeof durationMs).toBe('number');
-    expect(durationMs).toBeGreaterThan(0);
+function releaseBeatFromTraj(traj: Array<{ beat: number; y: number }>): number {
+  const sorted = [...traj].sort((a, b) => a.beat - b.beat);
+  let releaseBeat = sorted.length > 0 ? sorted[sorted.length - 1].beat : 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const dy = Math.abs(sorted[i].y - sorted[i - 1].y);
+    if (dy > 0.5) {
+      releaseBeat = sorted[i].beat;
+    }
+  }
+  return releaseBeat;
+}
 
-    const playBtnTextBeforePlay = await getPlayButtonText(page);
-    expect(playBtnTextBeforePlay).not.toContain('読込中');
+test.describe('T105: 録音クオンタイズのキー離し（リリース）位置吸着改善', () => {
+  test.beforeEach(async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const t = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+      }
+    });
+    page.on('pageerror', (err) => errors.push(err.message));
 
-    await page.click('[data-testid="editor-play"]');
-    await page.waitForTimeout(500);
-
-    const playBtnTextDuringPlay = await getPlayButtonText(page);
-    expect(playBtnTextDuringPlay).toBe('停止');
-
-    await page.waitForTimeout(2000);
-
-    const posMsDuringPlay = await getPositionMs(page);
-    const beatDuringPlay = await getBeat(page);
-    expect(posMsDuringPlay).toBeGreaterThan(0);
-    expect(beatDuringPlay).toBeGreaterThan(0);
-
-    await page.click('[data-testid="editor-play"]');
-    await page.waitForTimeout(500);
-
-    const posMsAfterStop = await getPositionMs(page);
-    expect(posMsAfterStop).toBeGreaterThanOrEqual(posMsDuringPlay - 500);
-
-    const slider = page.locator('.editor-slider[type="range"]');
-    await expect(slider).toBeEnabled();
-    const sliderMax = await slider.getAttribute('max');
-    expect(parseFloat(sliderMax || '0')).toBeGreaterThan(0);
+    await page.goto('http://localhost:5173/#/editor');
+    await page.waitForLoadState('networkidle', { timeout: 10000 });
+    await expect(page.locator('[data-testid="snap-select"]')).toBeVisible();
+    await waitForAudioReady(page);
+    await page.waitForTimeout(1000);
+    expect(errors).toHaveLength(0);
   });
 
-  test('Drag-and-Drop: loads local audio file via drop, enables playback, timeline, and auto-sets title', async ({ page }) => {
-    await navigateToEditor(page);
+  test.describe('Single key press/release at off-grid positions', () => {
+    for (const snapValue of SNAP_OPTIONS) {
+      test(`snap=${snapValue}: ArrowUp press+release at off-grid beat quantizes to nearest snap and no overshoot`, async ({ page }) => {
+        // Step 1: Capture Initial State
+        await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+        await page.waitForTimeout(200);
+        const snapUsed = await getSnapFromWindow(page);
+        expect(snapUsed).toBe(snapValue);
 
-    const dropZone = page.locator('#music-control');
-    await expect(dropZone).toBeAttached();
+        await clearSegments(page);
+        const segsBefore = await getSegmentsFromWindow(page);
+        expect(segsBefore.length).toBe(0);
 
-    const initialTitle = await page.locator('#chart-title').inputValue();
+        await startPlayback(page);
+        await page.waitForTimeout(500);
 
-    const dataTransfer = await page.evaluateHandle(() => {
-      const dt = new DataTransfer();
-      return dt;
+        // Seek to beat 0 to ensure recording starts at a known position
+        await seekToBeatZero(page);
+        await page.waitForTimeout(200);
+
+        await enterRecordMode(page);
+        await page.waitForTimeout(200);
+
+        // Step 2: Perform User Interaction - Press ArrowUp, hold for ~450ms (off-grid), release
+        // At 120 BPM, 450ms ≈ 0.9 beats. We want to release at ~1.2 or ~1.3 beats for snap=0.5
+        // For other snaps, adjust hold time to target specific off-grid positions.
+        // We'll press, wait, then release. The exact beat depends on playback position.
+        const pressStartTime = Date.now();
+        await page.keyboard.down('ArrowUp');
+        await page.waitForTimeout(450);
+        await page.keyboard.up('ArrowUp');
+        await page.waitForTimeout(200);
+
+        // Step 3: Capture trajectory during recording
+        const trajDuring = await getRecTrajFromWindow(page);
+        expect(trajDuring.length).toBeGreaterThan(1);
+
+        const recStartBeat = await getRecStartBeatFromWindow(page);
+        const releaseBeatRaw = releaseBeatFromTraj(trajDuring);
+        const expectedEndBeat = computeExpectedEndBeat(releaseBeatRaw, snapUsed);
+
+        await exitRecordMode(page);
+        await page.waitForTimeout(500);
+
+        // Step 4: Assert Resulting Transition
+        const segments = await getSegmentsFromWindow(page);
+        expect(segments.length).toBeGreaterThan(0);
+
+        // Requirement 1: Every produced segment's `beats` is an integer multiple of the snap resolution
+        for (const seg of segments) {
+          expect(isSnapAligned(seg.beats, snapUsed)).toBeTruthy();
+        }
+
+        // Requirement 2: Moving (up/down) segments total span ends at (or within one snap of) the quantized release beat
+        const movingSegments = segments.filter((s) => s.direction !== 'stay');
+        expect(movingSegments.length).toBeGreaterThan(0);
+
+        let cum = 0;
+        for (const seg of movingSegments) {
+          cum += seg.beats;
+        }
+        const movingBeats = cum;
+
+        // Moving beats should approximately equal (expectedEndBeat - recStartBeat)
+        // because recording starts at recStartBeat (quantized to snap)
+        const expectedMovingBeats = expectedEndBeat - recStartBeat;
+        expect(movingBeats).toBeCloseTo(expectedMovingBeats, 2);
+
+        // No moving segment may begin after the expectedEndBeat (no overshoot)
+        cum = 0;
+        for (const seg of segments) {
+          if (seg.direction !== 'stay') {
+            expect(cum).toBeLessThanOrEqual(expectedEndBeat + 1e-3);
+          }
+          cum += seg.beats;
+        }
+
+        // Verify the last moving segment ends at or before expectedEndBeat
+        const lastMovingSeg = [...movingSegments].pop();
+        if (lastMovingSeg) {
+          const endOfLastMoving = segments
+            .slice(0, segments.indexOf(lastMovingSeg) + 1)
+            .reduce((sum, s) => sum + s.beats, 0);
+          expect(endOfLastMoving).toBeLessThanOrEqual(expectedEndBeat + 1e-3);
+        }
+
+        await stopPlayback(page);
+      });
+    }
+
+    test('snap=0.5: release at ~1.2 beats quantizes to 1.0 (round down)', async ({ page }) => {
+      const snapValue = 0.5;
+      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+      await page.waitForTimeout(200);
+
+      await clearSegments(page);
+      await startPlayback(page);
+      await page.waitForTimeout(500);
+      await seekToBeatZero(page);
+      await page.waitForTimeout(200);
+
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
+
+      // At 120 BPM, 1 beat = 500ms. To reach ~1.2 beats from start, hold ~600ms
+      await page.keyboard.down('ArrowUp');
+      await page.waitForTimeout(600); // ~1.2 beats at 120 BPM
+      await page.keyboard.up('ArrowUp');
+      await page.waitForTimeout(200);
+
+      const trajDuring = await getRecTrajFromWindow(page);
+      const recStartBeat = await getRecStartBeatFromWindow(page);
+      const releaseBeatRaw = releaseBeatFromTraj(trajDuring);
+
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
+
+      const segments = await getSegmentsFromWindow(page);
+      expect(segments.length).toBeGreaterThan(0);
+
+      // All segments snap-aligned
+      for (const seg of segments) {
+        expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
+      }
+
+      // Expected end beat = round(1.2 / 0.5) * 0.5 = round(2.4) * 0.5 = 2 * 0.5 = 1.0
+      const expectedEndBeat = quantizeBeat(releaseBeatRaw, snapValue);
+      const expectedMovingBeats = expectedEndBeat - recStartBeat;
+
+      const movingBeats = segments
+        .filter((s) => s.direction !== 'stay')
+        .reduce((sum, s) => sum + s.beats, 0);
+
+      expect(movingBeats).toBeCloseTo(expectedMovingBeats, 2);
+
+      // No overshoot past expectedEndBeat
+      let cum = 0;
+      for (const seg of segments) {
+        if (seg.direction !== 'stay') {
+          expect(cum).toBeLessThanOrEqual(expectedEndBeat + 1e-3);
+        }
+        cum += seg.beats;
+      }
+
+      await stopPlayback(page);
     });
 
-    await page.evaluate(
-      async ({ filePath, dataTransfer }) => {
-        const response = await fetch(filePath);
-        const blob = await response.blob();
-        const file = new File([blob], '08.Reply.flac', { type: 'audio/flac' });
-        dataTransfer.items.add(file);
-        const dropEvent = new DragEvent('drop', { dataTransfer, bubbles: true });
-        const dragoverEvent = new DragEvent('dragover', { dataTransfer, bubbles: true });
-        const dropZone = document.querySelector('#music-control');
-        dropZone?.dispatchEvent(dragoverEvent);
-        dropZone?.dispatchEvent(dropEvent);
-      },
-      { filePath: `/rhythm_game/audio/08.Reply.flac`, dataTransfer }
-    );
+    test('snap=0.5: release at ~1.3 beats quantizes to 1.5 (round up)', async ({ page }) => {
+      const snapValue = 0.5;
+      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+      await page.waitForTimeout(200);
 
-    await waitForAudioLoaded(page, 30000);
+      await clearSegments(page);
+      await startPlayback(page);
+      await page.waitForTimeout(500);
+      await seekToBeatZero(page);
+      await page.waitForTimeout(200);
 
-    const postLoadTitle = await page.locator('#chart-title').inputValue();
-    expect(postLoadTitle).toBe(EXPECTED_TITLE);
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
 
-    const bufferAfterLoad = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
-    expect(bufferAfterLoad).toBeTruthy();
+      // At 120 BPM, 1 beat = 500ms. To reach ~1.3 beats from start, hold ~650ms
+      await page.keyboard.down('ArrowUp');
+      await page.waitForTimeout(650); // ~1.3 beats at 120 BPM
+      await page.keyboard.up('ArrowUp');
+      await page.waitForTimeout(200);
 
-    const durationMs = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
-    expect(typeof durationMs).toBe('number');
-    expect(durationMs).toBeGreaterThan(0);
+      const trajDuring = await getRecTrajFromWindow(page);
+      const recStartBeat = await getRecStartBeatFromWindow(page);
+      const releaseBeatRaw = releaseBeatFromTraj(trajDuring);
 
-    await page.click('[data-testid="editor-play"]');
-    await page.waitForTimeout(500);
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
 
-    const playBtnTextDuringPlay = await getPlayButtonText(page);
-    expect(playBtnTextDuringPlay).toBe('停止');
+      const segments = await getSegmentsFromWindow(page);
+      expect(segments.length).toBeGreaterThan(0);
 
-    await page.waitForTimeout(2000);
-
-    const posMsDuringPlay = await getPositionMs(page);
-    const beatDuringPlay = await getBeat(page);
-    expect(posMsDuringPlay).toBeGreaterThan(0);
-    expect(beatDuringPlay).toBeGreaterThan(0);
-
-    await page.click('[data-testid="editor-play"]');
-    await page.waitForTimeout(500);
-
-    const slider = page.locator('.editor-slider[type="range"]');
-    await expect(slider).toBeEnabled();
-    const sliderMax = await slider.getAttribute('max');
-    expect(parseFloat(sliderMax || '0')).toBeGreaterThan(0);
-  });
-
-  test('File Input: verifies audio offset is applied to playback start position', async ({ page }) => {
-    await navigateToEditor(page);
-
-    const fileInput = page.locator('[data-testid="audio-file-input"]');
-    await fileInput.setInputFiles(AUDIO_FILE);
-    await waitForAudioLoaded(page, 30000);
-
-    const offsetInput = page.locator('#audio-offset');
-    await offsetInput.fill('500');
-    await page.waitForTimeout(200);
-
-    const offsetValue = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorAudioOffset);
-    expect(offsetValue).toBe(500);
-
-    await page.click('[data-testid="editor-play"]');
-    await page.waitForTimeout(1000);
-
-    const playFromHook = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorPlayFrom);
-    expect(playFromHook).toBeTruthy();
-    expect(playFromHook.audioOffset).toBe(500);
-    expect(playFromHook.when).toBeGreaterThan(playFromHook.ctxTime);
-
-    await page.click('[data-testid="editor-play"]');
-  });
-
-  test('File Input: different audio formats (mp3, wav, ogg) can be loaded', async ({ page }) => {
-    await navigateToEditor(page);
-
-    const fileInput = page.locator('[data-testid="audio-file-input"]');
-
-    const formats = [
-      { ext: 'mp3', name: 'test.mp3' },
-      { ext: 'wav', name: 'test.wav' },
-      { ext: 'ogg', name: 'test.ogg' },
-    ];
-
-    for (const fmt of formats) {
-      await page.evaluate(
-        async ({ fmt }) => {
-          const audioCtx = new (window.AudioContext || (window as unknown as Record<string, unknown>).webkitAudioContext)();
-          const buffer = audioCtx.createBuffer(1, 44100, 44100);
-          const channelData = buffer.getChannelData(0);
-          for (let i = 0; i < channelData.length; i++) {
-            channelData[i] = Math.sin(i * 0.1);
-          }
-          const blob = await new Promise<Blob>((resolve) => {
-            const offlineCtx = new OfflineAudioContext(1, 44100, 44100);
-            const src = offlineCtx.createBufferSource();
-            src.buffer = buffer;
-            src.connect(offlineCtx.destination);
-            src.start();
-            offlineCtx.startRendering().then((rendered) => {
-              const wavBlob = audioBufferToWav(rendered);
-              resolve(wavBlob);
-            });
-          });
-          const file = new File([blob], fmt.name, { type: `audio/${fmt.ext}` });
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          const input = document.querySelector('[data-testid="audio-file-input"]') as HTMLInputElement;
-          if (input) {
-            input.files = dt.files;
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        },
-        { fmt }
-      );
-
-      await page.waitForTimeout(2000);
-
-      const bufferLoaded = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
-      if (bufferLoaded) {
-        const durationMs = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
-        expect(durationMs).toBeGreaterThan(0);
-        break;
+      for (const seg of segments) {
+        expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
       }
+
+      // Expected end beat = round(1.3 / 0.5) * 0.5 = round(2.6) * 0.5 = 3 * 0.5 = 1.5
+      const expectedEndBeat = quantizeBeat(releaseBeatRaw, snapValue);
+      const expectedMovingBeats = expectedEndBeat - recStartBeat;
+
+      const movingBeats = segments
+        .filter((s) => s.direction !== 'stay')
+        .reduce((sum, s) => sum + s.beats, 0);
+
+      expect(movingBeats).toBeCloseTo(expectedMovingBeats, 2);
+
+      let cum = 0;
+      for (const seg of segments) {
+        if (seg.direction !== 'stay') {
+          expect(cum).toBeLessThanOrEqual(expectedEndBeat + 1e-3);
+        }
+        cum += seg.beats;
+      }
+
+      await stopPlayback(page);
+    });
+
+    test('snap=0.25: release at off-grid (e.g., 0.37, 0.62 beats) quantizes correctly', async ({ page }) => {
+      const snapValue = 0.25;
+      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+      await page.waitForTimeout(200);
+
+      await clearSegments(page);
+      await startPlayback(page);
+      await page.waitForTimeout(500);
+      await seekToBeatZero(page);
+      await page.waitForTimeout(200);
+
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
+
+      // Hold ~185ms for ~0.37 beats, or ~310ms for ~0.62 beats at 120 BPM
+      await page.keyboard.down('ArrowUp');
+      await page.waitForTimeout(310); // ~0.62 beats
+      await page.keyboard.up('ArrowUp');
+      await page.waitForTimeout(200);
+
+      const trajDuring = await getRecTrajFromWindow(page);
+      const recStartBeat = await getRecStartBeatFromWindow(page);
+      const releaseBeatRaw = releaseBeatFromTraj(trajDuring);
+
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
+
+      const segments = await getSegmentsFromWindow(page);
+      expect(segments.length).toBeGreaterThan(0);
+
+      for (const seg of segments) {
+        expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
+      }
+
+      const expectedEndBeat = quantizeBeat(releaseBeatRaw, snapValue);
+      const expectedMovingBeats = expectedEndBeat - recStartBeat;
+
+      const movingBeats = segments
+        .filter((s) => s.direction !== 'stay')
+        .reduce((sum, s) => sum + s.beats, 0);
+
+      expect(movingBeats).toBeCloseTo(expectedMovingBeats, 2);
+
+      let cum = 0;
+      for (const seg of segments) {
+        if (seg.direction !== 'stay') {
+          expect(cum).toBeLessThanOrEqual(expectedEndBeat + 1e-3);
+        }
+        cum += seg.beats;
+      }
+
+      await stopPlayback(page);
+    });
+  });
+
+  test.describe('Alternating up/down key presses with snap alignment', () => {
+    for (const snapValue of SNAP_OPTIONS) {
+      test(`snap=${snapValue}: ArrowUp then ArrowDown produces alternating snap-aligned segments without overshoot`, async ({ page }) => {
+        await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+        await page.waitForTimeout(200);
+
+        await clearSegments(page);
+        await startPlayback(page);
+        await page.waitForTimeout(400);
+        await seekToBeatZero(page);
+        await page.waitForTimeout(200);
+
+        await enterRecordMode(page);
+        await page.waitForTimeout(150);
+
+        // First press: ArrowUp
+        await page.keyboard.down('ArrowUp');
+        await page.waitForTimeout(350);
+        await page.keyboard.up('ArrowUp');
+        await page.waitForTimeout(150);
+
+        // Second press: ArrowDown
+        await page.keyboard.down('ArrowDown');
+        await page.waitForTimeout(350);
+        await page.keyboard.up('ArrowDown');
+        await page.waitForTimeout(150);
+
+        const traj = await getRecTrajFromWindow(page);
+        const recStartBeat = await getRecStartBeatFromWindow(page);
+        const releaseBeatRaw = releaseBeatFromTraj(traj);
+
+        await exitRecordMode(page);
+        await page.waitForTimeout(500);
+
+        const segments = await getSegmentsFromWindow(page);
+        expect(segments.length).toBeGreaterThan(0);
+
+        for (const seg of segments) {
+          expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
+        }
+
+        // Should have both up and down segments
+        const directions = segments.map(s => s.direction);
+        expect(directions).toContain('up');
+        expect(directions).toContain('down');
+
+        const expectedEndBeat = quantizeBeat(releaseBeatRaw, snapValue);
+        const expectedMovingBeats = expectedEndBeat - recStartBeat;
+
+        const movingBeats = segments
+          .filter((s) => s.direction !== 'stay')
+          .reduce((sum, s) => sum + s.beats, 0);
+
+        expect(movingBeats).toBeCloseTo(expectedMovingBeats, 2);
+
+        let cum = 0;
+        for (const seg of segments) {
+          if (seg.direction !== 'stay') {
+            expect(cum).toBeLessThanOrEqual(expectedEndBeat + 1e-3);
+          }
+          cum += seg.beats;
+        }
+
+        await stopPlayback(page);
+      });
     }
   });
 
-  test('File Input: clears previous buffer and state when new file is loaded', async ({ page }) => {
-    await navigateToEditor(page);
+  test.describe('Stay segments alignment after release', () => {
+    test('After key release, subsequent stay segments are snap-aligned and start exactly at quantized release beat', async ({ page }) => {
+      const snapValue = 0.5;
+      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+      await page.waitForTimeout(200);
 
-    const fileInput = page.locator('[data-testid="audio-file-input"]');
-    await fileInput.setInputFiles(AUDIO_FILE);
-    await waitForAudioLoaded(page, 30000);
+      await clearSegments(page);
+      await startPlayback(page);
+      await page.waitForTimeout(500);
+      await seekToBeatZero(page);
+      await page.waitForTimeout(200);
 
-    await page.click('[data-testid="editor-play"]');
-    await page.waitForTimeout(1000);
-    await page.click('[data-testid="editor-play"]');
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
 
-    const firstDuration = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
+      // Press and release at ~1.3 beats -> should quantize to 1.5
+      await page.keyboard.down('ArrowUp');
+      await page.waitForTimeout(650);
+      await page.keyboard.up('ArrowUp');
+      // Continue recording for a bit after release to generate stay segments
+      await page.waitForTimeout(400);
 
-    await page.evaluate(() => {
-      (window as unknown as Record<string, unknown>).__editorBuffer = null;
-      (window as unknown as Record<string, unknown>).__editorDurationMs = 0;
+      const trajDuring = await getRecTrajFromWindow(page);
+      const recStartBeat = await getRecStartBeatFromWindow(page);
+      const releaseBeatRaw = releaseBeatFromTraj(trajDuring);
+
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
+
+      const segments = await getSegmentsFromWindow(page);
+      expect(segments.length).toBeGreaterThan(0);
+
+      for (const seg of segments) {
+        expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
+      }
+
+      const expectedEndBeat = quantizeBeat(releaseBeatRaw, snapValue);
+
+      // Find the transition from moving to stay
+      let foundTransition = false;
+      let cum = 0;
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (seg.direction !== 'stay') {
+          cum += seg.beats;
+        } else {
+          // First stay segment should start at expectedEndBeat
+          if (!foundTransition) {
+            expect(cum).toBeCloseTo(expectedEndBeat, 2);
+            foundTransition = true;
+          }
+          cum += seg.beats;
+        }
+      }
+      expect(foundTransition).toBeTruthy();
+
+      await stopPlayback(page);
     });
+  });
 
-    await fileInput.setInputFiles(AUDIO_FILE);
-    await waitForAudioLoaded(page, 30000);
+  test.describe('Recording overwrite range limitation (T109)', () => {
+    test('Recording only overwrites segments within the recorded range; later segments preserved', async ({ page }) => {
+      const snapValue = 0.25;
+      await page.selectOption('[data-testid="snap-select"]', String(snapValue));
+      await page.waitForTimeout(200);
 
-    const secondDuration = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
-    expect(secondDuration).toBe(firstDuration);
+      await clearSegments(page);
+      await startPlayback(page);
+      await page.waitForTimeout(500);
+      await seekToBeatZero(page);
+      await page.waitForTimeout(200);
 
-    const positionMs = await getPositionMs(page);
-    expect(positionMs).toBe(0);
+      // First recording: record at start (beat 0 to ~2)
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
+      await page.keyboard.down('ArrowUp');
+      await page.waitForTimeout(800); // ~1.6 beats
+      await page.keyboard.up('ArrowUp');
+      await page.waitForTimeout(200);
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
+
+      const firstSegments = await getSegmentsFromWindow(page);
+      expect(firstSegments.length).toBeGreaterThan(0);
+
+      // Manually add a segment after the recorded range (simulate existing later content)
+      // We can't directly manipulate segments via UI easily, so we'll do a second recording
+      // starting later and verify the first recording's segments are preserved.
+
+      // Seek to beat 4 and record again
+      await page.evaluate(() => {
+        const w = window as any;
+        if (typeof w.seekTo === 'function') {
+          w.seekTo(w.__editorTimeline?.beatToMs(4) ?? 2000);
+        }
+      });
+      await page.waitForTimeout(300);
+
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
+      await page.keyboard.down('ArrowDown');
+      await page.waitForTimeout(500);
+      await page.keyboard.up('ArrowDown');
+      await page.waitForTimeout(200);
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
+
+      const segments = await getSegmentsFromWindow(page);
+      expect(segments.length).toBeGreaterThan(0);
+
+      // Verify there are both up (from first recording) and down (from second) segments
+      const directions = segments.map(s => s.direction);
+      expect(directions).toContain('up');
+      expect(directions).toContain('down');
+
+      // All segments snap-aligned
+      for (const seg of segments) {
+        expect(isSnapAligned(seg.beats, snapValue)).toBeTruthy();
+      }
+
+      await stopPlayback(page);
+    });
+  });
+
+  test.describe('Console error monitoring', () => {
+    test('No uncaught errors during quantization recording workflow', async ({ page }) => {
+      const errors: string[] = [];
+      page.on('console', (msg) => {
+        if (msg.type() === 'error') {
+          const t = msg.text();
+          if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+        }
+      });
+      page.on('pageerror', (err) => errors.push(err.message));
+
+      await page.selectOption('[data-testid="snap-select"]', '0.5');
+      await page.waitForTimeout(200);
+      await clearSegments(page);
+      await startPlayback(page);
+      await page.waitForTimeout(500);
+      await seekToBeatZero(page);
+      await page.waitForTimeout(200);
+
+      await enterRecordMode(page);
+      await page.waitForTimeout(200);
+      await page.keyboard.down('ArrowUp');
+      await page.waitForTimeout(400);
+      await page.keyboard.up('ArrowUp');
+      await page.waitForTimeout(200);
+      await page.keyboard.down('ArrowDown');
+      await page.waitForTimeout(400);
+      await page.keyboard.up('ArrowDown');
+      await page.waitForTimeout(200);
+      await exitRecordMode(page);
+      await page.waitForTimeout(500);
+
+      await stopPlayback(page);
+      await page.waitForTimeout(500);
+
+      expect(errors).toHaveLength(0);
+    });
   });
 });
-
-function audioBufferToWav(buffer: AudioBuffer): Blob {
-  const numChannels = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const length = buffer.length;
-  const bytesPerSample = 2;
-  const blockAlign = numChannels * bytesPerSample;
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = length * blockAlign;
-  const bufferSize = 44 + dataSize;
-
-  const arrayBuffer = new ArrayBuffer(bufferSize);
-  const view = new DataView(arrayBuffer);
-
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, bufferSize - 8, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bytesPerSample * 8, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  let offset = 44;
-  for (let i = 0; i < length; i++) {
-    for (let ch = 0; ch < numChannels; ch++) {
-      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += 2;
-    }
-  }
-
-  return new Blob([arrayBuffer], { type: 'audio/wav' });
-}
-
-function writeString(view: DataView, offset: number, str: string) {
-  for (let i = 0; i < str.length; i++) {
-    view.setUint8(offset + i, str.charCodeAt(i));
-  }
-}

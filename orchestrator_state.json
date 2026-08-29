@@ -382,17 +382,17 @@
       "finished": 1787979021.1874175
     },
     "T105": {
-      "attempts": 2,
+      "attempts": 11,
       "status": "running",
       "started": 1787981784.5690453,
       "finished": 1787980862.0,
-      "cycles": 1,
+      "cycles": 3,
       "sessions": {
-        "qa": "ses_fb4252a4dffe9yDxHDGch5lbx8",
-        "postmortem": "ses_fb4217399ffeNlPjF7p2e5RWXE",
-        "coder": "ses_fb420a381ffeBXS90fi6RIS6FC"
+        "qa": null,
+        "postmortem": "ses_fb3911262ffeMcMjP10vdnvsG5",
+        "coder": "ses_fb3ad8fd5ffeSW8p2daD7xYMIN"
       },
-      "gate_b_golden": true
+      "gate_b_golden": false
     },
     "T106": {
       "attempts": 1,
