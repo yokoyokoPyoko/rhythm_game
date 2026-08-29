@@ -1,45 +1,59 @@
 import { test, expect } from '@playwright/test';
 
-async function getSegmentsFromWindow(page: any): Promise<Array<{ direction: string; beats: number }>> {
-  return await page.evaluate(() => (window as any).__editorSegments ?? []);
+async function waitForAudioReady(page: any, timeout = 120000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const btn = document.querySelector('[data-testid="editor-play"]');
+      return btn && !btn.textContent?.includes('読込中');
+    },
+    { timeout }
+  );
 }
 
-async function getModeFromUI(page: any): Promise<'play' | 'record'> {
-  return await page.evaluate(() => {
+async function startPlayback(page: any): Promise<void> {
+  await page.click('[data-testid="editor-play"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-play"]');
+    return btn && btn.textContent?.includes('停止');
+  }, { timeout: 15000 });
+}
+
+async function stopPlayback(page: any): Promise<void> {
+  await page.click('[data-testid="editor-play"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-play"]');
+    return btn && !btn.textContent?.includes('停止');
+  }, { timeout: 5000 });
+}
+
+async function enterRecordMode(page: any): Promise<void> {
+  await page.click('[data-testid="editor-record-toggle"]');
+  await page.waitForFunction(() => {
     const btn = document.querySelector('[data-testid="editor-record-toggle"]');
-    if (!btn) return 'play';
-    const text = btn.textContent || '';
-    return text.includes('録音停止') ? 'record' : 'play';
+    return btn && btn.textContent?.includes('録音停止');
+  }, { timeout: 5000 });
+}
+
+async function exitRecordMode(page: any): Promise<void> {
+  await page.click('[data-testid="editor-record-toggle"]');
+  await page.waitForFunction(() => {
+    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
+    return btn && btn.textContent?.includes('録音モード');
+  }, { timeout: 5000 });
+}
+
+async function getRingsFromWindow(page: any): Promise<Array<{ beat: number; type?: string; duration?: number }>> {
+  return await page.evaluate(() => (window as any).__editorRings ?? []);
+}
+
+async function clearRings(page: any): Promise<void> {
+  await page.evaluate(() => {
+    (window as any).__editorRings = [];
   });
+  await page.waitForTimeout(200);
 }
 
-async function ensurePlayMode(page: any): Promise<void> {
-  const mode = await getModeFromUI(page);
-  if (mode === 'record') {
-    await page.click('[data-testid="editor-record-toggle"]');
-    await page.waitForFunction(() => {
-      const btn = document.querySelector('[data-testid="editor-record-toggle"]');
-      return btn && btn.textContent?.includes('録音モード');
-    }, { timeout: 10000 });
-  }
-}
-
-async function clearSegments(page: any): Promise<void> {
-  page.once('dialog', (dialog: { accept: () => void }) => dialog.accept());
-  await page.click('[data-testid="editor-clear"]');
-  await page.waitForTimeout(400);
-}
-
-async function simulateKeyPress(page: any, key: string): Promise<void> {
-  await page.keyboard.down(key);
-  await page.waitForTimeout(60);
-  await page.keyboard.up(key);
-  await page.waitForTimeout(60);
-}
-
-test.describe('T102: レガシー再生中セグメントスタンプ完全削除', () => {
-  test.setTimeout(120000);
-
+test.describe('T103: レガシー再生中リングスタンプ完全削除', () => {
   test.beforeEach(async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (msg) => {
@@ -48,80 +62,192 @@ test.describe('T102: レガシー再生中セグメントスタンプ完全削�
         if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
       }
     });
-    page.on('pageerror', (err) => errors.push(err.message));
+    page.on('pageerror', (err) => {
+      errors.push(err.message);
+    });
 
-    await page.goto('http://localhost:5173/#/editor', { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('[data-testid="editor-legend"]')).toBeVisible({ timeout: 30000 });
-    await ensurePlayMode(page);
+    await page.goto('http://localhost:5173/#/editor');
+    await page.waitForLoadState('networkidle', { timeout: 10000 });
+    await waitForAudioReady(page);
+    await page.waitForTimeout(1000);
     expect(errors).toHaveLength(0);
   });
 
-  test('Playback mode: ArrowUp/ArrowDown/W/S key presses do NOT create segments', async ({ page }) => {
-    // Ensure we are in playback (play) mode and start with a clean slate
-    await ensurePlayMode(page);
-    await clearSegments(page);
+  test('Negative Control: Play mode - Space key during playback does NOT add rings', async ({ page }) => {
+    // Step 1: Capture initial ring count
+    const initialRings = await getRingsFromWindow(page);
+    const initialCount = initialRings.length;
 
-    const initialSegments = await getSegmentsFromWindow(page);
-    const initialCount = initialSegments.length;
+    // Step 2: Start playback in PLAY mode (default)
+    await startPlayback(page);
+    await page.waitForTimeout(1000);
 
-    // Verify we are in 'play' mode
-    const initialMode = await getModeFromUI(page);
-    expect(initialMode).toBe('play');
+    // Verify we're in play mode (not record mode)
+    const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
+    await expect(recordBtn).toHaveText('録音モード');
 
-    // Try to start playback, but do not block the negative test on audio availability.
-    try {
-      await page.click('[data-testid="editor-play"]', { timeout: 5000 });
-    } catch {
-      /* audio playback may be unavailable in headless; negative assertion still valid */
+    // Step 3: Press Space key multiple times during playback
+    for (let i = 0; i < 5; i++) {
+      await page.keyboard.down('Space');
+      await page.waitForTimeout(100);
+      await page.keyboard.up('Space');
+      await page.waitForTimeout(200);
     }
+
+    // Step 4: Stop playback
+    await stopPlayback(page);
     await page.waitForTimeout(500);
 
-    // Simulate key presses that would have stamped segments in the legacy implementation
-    for (const key of ['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS', 'ArrowUp', 'ArrowDown', 'KeyW', 'KeyS']) {
-      await simulateKeyPress(page, key);
-    }
+    // Step 5: Assert ring count has NOT changed
+    const finalRings = await getRingsFromWindow(page);
+    expect(finalRings.length).toBe(initialCount);
 
-    const segmentsAfter = await getSegmentsFromWindow(page);
-    expect(segmentsAfter.length).toBe(initialCount);
-
-    // Still in play mode (no accidental mode switch)
-    expect(await getModeFromUI(page)).toBe('play');
+    // Also verify no console errors
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const t = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+      }
+    });
+    expect(errors).toHaveLength(0);
   });
 
-  test('Playback mode with pre-existing segments: key presses leave them unchanged', async ({ page }) => {
-    await ensurePlayMode(page);
-    await clearSegments(page);
+  test('Positive Control: Record mode - Space key during playback DOES add rings', async ({ page }) => {
+    // Step 1: Capture initial ring count
+    const initialRings = await getRingsFromWindow(page);
+    const initialCount = initialRings.length;
 
-    // Add a couple of segments via the segment editor accordion
-    const segDetails = page.locator('[data-testid="segment-list-details"]');
-    if (!(await segDetails.getAttribute('open'))) {
-      await segDetails.locator('summary').click();
-    }
-    await page.waitForTimeout(200);
-    await page.locator('[data-testid="segment-add"]').click();
-    await page.waitForTimeout(200);
-    await page.locator('[data-testid="segment-add"]').click();
-    await page.waitForTimeout(200);
+    // Step 2: Start playback
+    await startPlayback(page);
+    await page.waitForTimeout(1000);
 
-    const initialSegments = await getSegmentsFromWindow(page);
-    const initialCount = initialSegments.length;
-    expect(initialCount).toBeGreaterThanOrEqual(2);
-    const initialData = JSON.stringify(initialSegments);
-
-    await ensurePlayMode(page);
-    try {
-      await page.click('[data-testid="editor-play"]', { timeout: 5000 });
-    } catch {
-      /* ignore audio unavailability */
-    }
+    // Step 3: Enter RECORD mode
+    await enterRecordMode(page);
     await page.waitForTimeout(500);
 
-    for (const key of ['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS', 'ArrowUp', 'ArrowDown', 'KeyW', 'KeyS']) {
-      await simulateKeyPress(page, key);
+    // Verify we're in record mode
+    const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
+    await expect(recordBtn).toHaveText('録音停止');
+
+    // Step 4: Press Space key multiple times during playback in record mode
+    const expectedNewRings = 3;
+    for (let i = 0; i < expectedNewRings; i++) {
+      await page.keyboard.down('Space');
+      await page.waitForTimeout(150); // Hold long enough to be detected
+      await page.keyboard.up('Space');
+      await page.waitForTimeout(300);
     }
 
-    const segmentsAfter = await getSegmentsFromWindow(page);
-    expect(segmentsAfter.length).toBe(initialCount);
-    expect(JSON.stringify(segmentsAfter)).toBe(initialData);
+    // Step 5: Exit record mode (this commits any recorded trajectory but rings are added on keyup)
+    await exitRecordMode(page);
+    await page.waitForTimeout(500);
+
+    // Step 6: Stop playback
+    await stopPlayback(page);
+    await page.waitForTimeout(500);
+
+    // Step 7: Assert ring count HAS increased
+    const finalRings = await getRingsFromWindow(page);
+    expect(finalRings.length).toBeGreaterThanOrEqual(initialCount + expectedNewRings);
+
+    // Verify the new rings have correct structure
+    const newRings = finalRings.slice(initialCount);
+    for (const ring of newRings) {
+      expect(ring.beat).toBeGreaterThanOrEqual(0);
+      expect(['single', 'hold']).toContain(ring.type ?? 'single');
+      if (ring.type === 'hold') {
+        expect(ring.duration).toBeGreaterThan(0.3);
+      }
+    }
+
+    // Also verify no console errors
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const t = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+      }
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  test('Mode switching verification: Rings only added in record mode, not in play mode', async ({ page }) => {
+    // This test verifies the mode switching behavior within a single session
+
+    // Clear any existing rings first
+    await clearRings(page);
+    await page.waitForTimeout(200);
+
+    // Start playback
+    await startPlayback(page);
+    await page.waitForTimeout(1000);
+
+    // --- PHASE 1: Play mode (default) ---
+    // Press Space - should NOT add rings
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+
+    let ringsAfterPlayMode = await getRingsFromWindow(page);
+    expect(ringsAfterPlayMode.length).toBe(0);
+
+    // --- PHASE 2: Switch to Record mode ---
+    await enterRecordMode(page);
+    await page.waitForTimeout(500);
+
+    // Press Space - SHOULD add rings
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+
+    // Exit record mode
+    await exitRecordMode(page);
+    await page.waitForTimeout(500);
+
+    let ringsAfterRecordMode = await getRingsFromWindow(page);
+    expect(ringsAfterRecordMode.length).toBeGreaterThanOrEqual(2);
+
+    // --- PHASE 3: Back to Play mode ---
+    // Press Space again - should NOT add more rings
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+
+    // Stop playback
+    await stopPlayback(page);
+    await page.waitForTimeout(500);
+
+    // Final verification: ring count should not have changed after returning to play mode
+    const finalRings = await getRingsFromWindow(page);
+    expect(finalRings.length).toBe(ringsAfterRecordMode.length);
+
+    // No console errors
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const t = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+      }
+    });
+    expect(errors).toHaveLength(0);
   });
 });

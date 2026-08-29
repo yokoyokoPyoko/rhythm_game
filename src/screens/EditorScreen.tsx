@@ -367,9 +367,11 @@ export default function EditorScreen() {
         tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable === true
       if (editable) return
 
+      // T103: ring stamping via Space is only allowed in record mode.
       if (e.code === 'Space') {
         e.preventDefault()
         if (!isPlayingRef.current) return
+        if (modeRef.current !== 'record') return
         if (keysRef.current.space) return
         const rawBeat = timeline.msToBeat(positionRef.current)
         const snapped = Math.round(rawBeat / snap) * snap
@@ -403,27 +405,30 @@ export default function EditorScreen() {
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW') keysRef.current.up = false
       if (e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS') keysRef.current.down = false
+      // T103: ring stamping via Space is only allowed in record mode.
       if (e.code === 'Space') {
         if (!isPlayingRef.current || !keysRef.current.space) {
           keysRef.current.space = false
           return
         }
-        const rawBeat = timeline.msToBeat(positionRef.current)
-        const snapped = Math.round(rawBeat / snap) * snap
-        const startBeat = spacePressBeatRef.current ?? snapped
-        const rawDuration = snapped - startBeat
-        const duration = Number((Math.round(rawDuration / snap) * snap).toFixed(2))
-        let added = false
-        setRings((prev) => {
-          if (prev.some((r) => Math.abs(r.beat - startBeat) < 0.001)) return prev
-          added = true
-          if (duration > 0.3) {
-            return [...prev, { beat: startBeat, type: 'hold', duration }]
-          } else {
-            return [...prev, { beat: startBeat, type: 'single' }]
-          }
-        })
-        if (added) notify(`リング追加 @beat ${startBeat.toFixed(2)}${duration > 0.3 ? ` (hold ${duration}拍)` : ''}`)
+        if (modeRef.current === 'record') {
+          const rawBeat = timeline.msToBeat(positionRef.current)
+          const snapped = Math.round(rawBeat / snap) * snap
+          const startBeat = spacePressBeatRef.current ?? snapped
+          const rawDuration = snapped - startBeat
+          const duration = Number((Math.round(rawDuration / snap) * snap).toFixed(2))
+          let added = false
+          setRings((prev) => {
+            if (prev.some((r) => Math.abs(r.beat - startBeat) < 0.001)) return prev
+            added = true
+            if (duration > 0.3) {
+              return [...prev, { beat: startBeat, type: 'hold', duration }]
+            } else {
+              return [...prev, { beat: startBeat, type: 'single' }]
+            }
+          })
+          if (added) notify(`リング追加 @beat ${startBeat.toFixed(2)}${duration > 0.3 ? ` (hold ${duration}拍)` : ''}`)
+        }
         keysRef.current.space = false
       }
     }
@@ -756,7 +761,7 @@ export default function EditorScreen() {
             <span>② 基本BPM / 振幅などを設定</span>
             <span>③ 波形上クリックでリング追加・ドラッグで移動・ダブルクリックで削除</span>
             <span>④ 上端ルーラー(↑)クリックでシーク</span>
-            <span>⑤ 再生中 Space=リング追加（両モード共通）</span>
+            <span>⑤ 録音モード中 Space=リング追加（単発/ホールド）</span>
             <span>⑥ 録音モード: ↑↓→(W S D) で玉を操作し軌跡を波形に記録（停止でコミット）</span>
             <span>⑧ 空白ドラッグ=パン / ホイール=ズーム / 「エクスポート」でTOML保存</span>
           </div>
