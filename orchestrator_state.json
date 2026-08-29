@@ -383,8 +383,8 @@
     },
     "T105": {
       "attempts": 2,
-      "status": "passed",
-      "started": 1787979021.1882944,
+      "status": "running",
+      "started": 1787981784.5690453,
       "finished": 1787980862.0,
       "cycles": 1,
       "sessions": {
@@ -395,9 +395,14 @@
       "gate_b_golden": true
     },
     "T106": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1787981649.09574
+      "started": 1787981649.09574,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_fb3fd0960ffepZ7Q4WJLuiM4SK",
+        "postmortem": null
+      }
     },
     "T107": {
       "attempts": 0,

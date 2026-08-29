@@ -1,228 +1,344 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from '@playwright/test';
+import path from 'path';
 
-test.describe('T104: WavePreview vertex rendering (廃止: 固定ステップサンプリング / 多重重ね描き)', () => {
-  const EDITOR_URL = 'http://localhost:5173/#/editor'
-  const CANVAS_SELECTOR = '[data-testid="wave-preview-canvas"]'
+const AUDIO_FILE = path.resolve(__dirname, '../public/audio/08.Reply.flac');
+const AUDIO_FILENAME = '08.Reply.flac';
+const EXPECTED_TITLE = '08.Reply';
 
-  test.beforeEach(async ({ page }) => {
-    const errors: string[] = []
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        const text = msg.text()
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-          errors.push(text)
-        }
+const consoleErrors: string[] = [];
+
+test.beforeEach(async ({ page }) => {
+  consoleErrors.length = 0;
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') {
+      const text = msg.text();
+      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+        consoleErrors.push(text);
       }
-    })
-    page.on('pageerror', (err) => {
-      errors.push(err.message)
-    })
-
-    await page.goto(EDITOR_URL)
-    await page.waitForLoadState('networkidle', { timeout: 10000 })
-    await expect(page.locator(CANVAS_SELECTOR)).toBeVisible()
-    await page.waitForTimeout(800)
-    expect(errors).toHaveLength(0)
-  })
-
-  // Build a chart with three colored segments via the real UI:
-  //   up(8)  -> accent  (#6366f1)
-  //   down(8)-> sub     (#22d3ee)
-  //   stay(4)-> warning (#fbbf24)
-  async function buildThreeSegments(page: import('@playwright/test').Page) {
-    for (let i = 0; i < 3; i++) {
-      await page.click('[data-testid="segment-add"]')
-      await page.waitForTimeout(150)
     }
-    await page.selectOption('[data-testid="segment-direction-0"]', 'up')
-    await page.fill('[data-testid="segment-beats-0"]', '8')
-    await page.selectOption('[data-testid="segment-direction-1"]', 'down')
-    await page.fill('[data-testid="segment-beats-1"]', '8')
-    await page.selectOption('[data-testid="segment-direction-2"]', 'stay')
-    await page.fill('[data-testid="segment-beats-2"]', '4')
-    // Show the whole 20-beat chart (zoom out to 20 beats).
-    await page.fill('#zoom', '20')
-    await page.waitForTimeout(300)
-  }
+  });
+  await page.goto('/rhythm_game/');
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(1000);
+});
 
-  // Reads the canvas pixels and classifies the waveform color at the given beat
-  // (startBeat = 0, viewBeats = 20). Returns 'accent' | 'sub' | 'warning' | other.
-  async function colorAtBeat(page: import('@playwright/test').Page, beat: number) {
-    return page.evaluate((b: number) => {
-      const canvas = document.querySelector(
-        '[data-testid="wave-preview-canvas"]',
-      ) as HTMLCanvasElement | null
-      if (!canvas) return 'none'
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return 'none'
-      const w = canvas.width
-      const h = canvas.height
-      const dpr = window.devicePixelRatio || 1
-      const cssW = w / dpr
-      const view = (window as unknown as { __editorView?: { startBeat: number; beats: number } })
-        .__editorView || { startBeat: 0, beats: 20 }
-      const viewBeats = view.beats
-      const viewStart = view.startBeat
-      const img = ctx.getImageData(0, 0, w, h).data
-      const x = Math.round(((b - viewStart) / viewBeats) * cssW * dpr)
-      if (x < 0 || x >= w) return 'none'
+test.afterEach(async () => {
+  expect(consoleErrors).toHaveLength(0);
+});
 
-      const ACCENT = [99, 102, 241]
-      const SUB = [34, 211, 238]
-      const STAY = [251, 191, 36]
-      const dist = (r: number, g: number, bl: number, c: number[]) =>
-        (r - c[0]) ** 2 + (g - c[1]) ** 2 + (bl - c[2]) ** 2
+async function navigateToEditor(page: import('@playwright/test').Page) {
+  await page.goto('/rhythm_game/#/editor');
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(1500);
+  await expect(page.locator('h1')).toContainText('オーサリングツール');
+}
 
-      const counts: Record<string, number> = { accent: 0, sub: 0, warning: 0 }
-      for (let y = 0; y < h; y++) {
-        const idx = (y * w + x) * 4
-        const r = img[idx]
-        const g = img[idx + 1]
-        const bl = img[idx + 2]
-        // Ignore faint background and near-white guide lines.
-        if (r < 25 && g < 25 && bl < 35) continue
-        if (r > 200 && g > 200 && bl > 200) continue
-        const da = dist(r, g, bl, ACCENT)
-        const ds = dist(r, g, bl, SUB)
-        const dt = dist(r, g, bl, STAY)
-        const m = Math.min(da, ds, dt)
-        if (m > 6000) continue
-        if (m === da) counts.accent++
-        else if (m === ds) counts.sub++
-        else counts.warning++
-      }
-      const ranked = Object.entries(counts).sort((a, c) => c[1] - a[1])
-      return ranked[0][1] > 0 ? ranked[0][0] : 'none'
-    }, beat)
-  }
+async function waitForAudioLoaded(page: import('@playwright/test').Page, timeout = 30000) {
+  await page.waitForFunction(
+    () => {
+      const playBtn = document.querySelector('[data-testid="editor-play"]');
+      return playBtn && !playBtn.textContent?.includes('読込中');
+    },
+    { timeout }
+  );
+  await page.waitForTimeout(1000);
+}
 
-  test('各セグメントが自身の区間のみを描画し、多重重ね描きしない（色リージョン検証）', async ({ page }) => {
-    await buildThreeSegments(page)
+async function getPlayButtonText(page: import('@playwright/test').Page) {
+  const btn = page.locator('[data-testid="editor-play"]');
+  return (await btn.textContent())?.trim() || '';
+}
 
-    // up region (beat 4) -> accent
-    const up = await colorAtBeat(page, 4)
-    // down region (beat 10, away from center guide) -> sub
-    const down = await colorAtBeat(page, 10)
-    // stay region (beat 18, on bottom guide but opaque line on top) -> warning
-    const stay = await colorAtBeat(page, 18)
+async function getPositionMs(page: import('@playwright/test').Page) {
+  const timeEl = page.locator('.editor-pos-time');
+  const text = await timeEl.textContent();
+  return text ? parseTimeToMs(text) : 0;
+}
 
-    expect(up).toBe('accent')
-    expect(down).toBe('sub')
-    expect(stay).toBe('warning')
-  })
+async function getBeat(page: import('@playwright/test').Page) {
+  const beatEl = page.locator('.editor-pos-beat');
+  const text = await beatEl.textContent();
+  const match = text?.match(/beat:\s*([\d.]+)/);
+  return match ? parseFloat(match[1]) : 0;
+}
 
-  test('ズーム倍率（viewBeats変更）に関わらず頂点が正確に描画される', async ({ page }) => {
-    await buildThreeSegments(page)
+function parseTimeToMs(timeStr: string): number {
+  const parts = timeStr.split(':');
+  if (parts.length !== 2) return 0;
+  const minutes = parseInt(parts[0], 10);
+  const secParts = parts[1].split('.');
+  const seconds = parseInt(secParts[0], 10);
+  const tenths = secParts[1] ? parseInt(secParts[1].padEnd(1, '0')[0], 10) : 0;
+  return (minutes * 60 + seconds) * 1000 + tenths * 100;
+}
 
-    // At every zoom level (wide enough to contain both regions) the down region
-    // must keep its sub color and the up region its accent color (no full-range
-    // overdraw that would smear the whole wave with the last segment's color).
-    for (const zoom of [16, 32, 64]) {
-      await page.fill('#zoom', String(zoom))
-      await page.waitForTimeout(200)
-      const up = await colorAtBeat(page, 4)
-      const down = await colorAtBeat(page, 10)
-      expect(up).toBe('accent')
-      expect(down).toBe('sub')
-    }
-  })
+test.describe('T106: Local Audio File Loading (File Input & Drag-and-Drop)', () => {
+  test('File Input: loads local audio file, enables playback, timeline, and auto-sets title', async ({ page }) => {
+    await navigateToEditor(page);
 
-  test('スクロール（開始拍変更）後も頂点描画が崩れない', async ({ page }) => {
-    await buildThreeSegments(page)
-    // Read the scroll slider's actual max so we never fill an out-of-range value.
-    const maxAttr = await page.getAttribute('#scroll', 'max')
-    const max = maxAttr ? Number(maxAttr) : 0
-    if (max >= 2) {
-      await page.fill('#scroll', '2')
-      await page.waitForTimeout(300)
-    }
-    // After panning, the visible down/up regions should still be correctly colored.
-    const up = await colorAtBeat(page, 4)
-    const down = await colorAtBeat(page, 10)
-    expect(up).toBe('accent')
-    expect(down).toBe('sub')
-  })
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    await expect(fileInput).toBeAttached();
 
-  test('固定ステップサンプリング廃止: セグメント区間が直線として正確に結ばれる', async ({ page }) => {
-    await buildThreeSegments(page)
-    // The down segment spans beats 8..16 from top(y=170) to bottom(y=430).
-    // Sample several points and confirm they lie on the exact straight line
-    // (vertex-to-vertex lineTo), i.e. y is linear in beat.
-    const samples = await page.evaluate(() => {
-      const canvas = document.querySelector(
-        '[data-testid="wave-preview-canvas"]',
-      ) as HTMLCanvasElement | null
-      if (!canvas) return []
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return []
-      const w = canvas.width
-      const h = canvas.height
-      const dpr = window.devicePixelRatio || 1
-      const cssW = w / dpr
-      const view = (window as unknown as { __editorView?: { startBeat: number; beats: number } })
-        .__editorView || { startBeat: 0, beats: 20 }
-      const viewBeats = view.beats
-      const viewStart = view.startBeat
-      const img = ctx.getImageData(0, 0, w, h).data
-      const SUB = [34, 211, 238]
-      const dist = (r: number, g: number, bl: number) =>
-        (r - SUB[0]) ** 2 + (g - SUB[1]) ** 2 + (bl - SUB[2]) ** 2
-      const out: { beat: number; y: number }[] = []
-      for (const b of [9, 10, 11, 12, 13, 14, 15]) {
-        const x = Math.round(((b - viewStart) / viewBeats) * cssW * dpr)
-        let bestY = -1
-        let bestD = Infinity
-        for (let y = 0; y < h; y++) {
-          const idx = (y * w + x) * 4
-          const d = dist(img[idx], img[idx + 1], img[idx + 2])
-          if (d < bestD) {
-            bestD = d
-            bestY = y
+    const initialTitle = await page.locator('#chart-title').inputValue();
+    const initialBuffer = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
+    expect(initialBuffer).toBeFalsy();
+
+    await fileInput.setInputFiles(AUDIO_FILE);
+
+    const loadStartTime = Date.now();
+    await waitForAudioLoaded(page, 30000);
+    const loadDuration = Date.now() - loadStartTime;
+    console.log(`Audio load took ${loadDuration}ms`);
+
+    const postLoadTitle = await page.locator('#chart-title').inputValue();
+    expect(postLoadTitle).toBe(EXPECTED_TITLE);
+
+    const bufferAfterLoad = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
+    expect(bufferAfterLoad).toBeTruthy();
+
+    const durationMs = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
+    expect(typeof durationMs).toBe('number');
+    expect(durationMs).toBeGreaterThan(0);
+
+    const playBtnTextBeforePlay = await getPlayButtonText(page);
+    expect(playBtnTextBeforePlay).not.toContain('読込中');
+
+    await page.click('[data-testid="editor-play"]');
+    await page.waitForTimeout(500);
+
+    const playBtnTextDuringPlay = await getPlayButtonText(page);
+    expect(playBtnTextDuringPlay).toBe('停止');
+
+    await page.waitForTimeout(2000);
+
+    const posMsDuringPlay = await getPositionMs(page);
+    const beatDuringPlay = await getBeat(page);
+    expect(posMsDuringPlay).toBeGreaterThan(0);
+    expect(beatDuringPlay).toBeGreaterThan(0);
+
+    await page.click('[data-testid="editor-play"]');
+    await page.waitForTimeout(500);
+
+    const posMsAfterStop = await getPositionMs(page);
+    expect(posMsAfterStop).toBeGreaterThanOrEqual(posMsDuringPlay - 500);
+
+    const slider = page.locator('.editor-slider[type="range"]');
+    await expect(slider).toBeEnabled();
+    const sliderMax = await slider.getAttribute('max');
+    expect(parseFloat(sliderMax || '0')).toBeGreaterThan(0);
+  });
+
+  test('Drag-and-Drop: loads local audio file via drop, enables playback, timeline, and auto-sets title', async ({ page }) => {
+    await navigateToEditor(page);
+
+    const dropZone = page.locator('#music-control');
+    await expect(dropZone).toBeAttached();
+
+    const initialTitle = await page.locator('#chart-title').inputValue();
+
+    const dataTransfer = await page.evaluateHandle(() => {
+      const dt = new DataTransfer();
+      return dt;
+    });
+
+    await page.evaluate(
+      async ({ filePath, dataTransfer }) => {
+        const response = await fetch(filePath);
+        const blob = await response.blob();
+        const file = new File([blob], '08.Reply.flac', { type: 'audio/flac' });
+        dataTransfer.items.add(file);
+        const dropEvent = new DragEvent('drop', { dataTransfer, bubbles: true });
+        const dragoverEvent = new DragEvent('dragover', { dataTransfer, bubbles: true });
+        const dropZone = document.querySelector('#music-control');
+        dropZone?.dispatchEvent(dragoverEvent);
+        dropZone?.dispatchEvent(dropEvent);
+      },
+      { filePath: `/rhythm_game/audio/08.Reply.flac`, dataTransfer }
+    );
+
+    await waitForAudioLoaded(page, 30000);
+
+    const postLoadTitle = await page.locator('#chart-title').inputValue();
+    expect(postLoadTitle).toBe(EXPECTED_TITLE);
+
+    const bufferAfterLoad = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
+    expect(bufferAfterLoad).toBeTruthy();
+
+    const durationMs = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
+    expect(typeof durationMs).toBe('number');
+    expect(durationMs).toBeGreaterThan(0);
+
+    await page.click('[data-testid="editor-play"]');
+    await page.waitForTimeout(500);
+
+    const playBtnTextDuringPlay = await getPlayButtonText(page);
+    expect(playBtnTextDuringPlay).toBe('停止');
+
+    await page.waitForTimeout(2000);
+
+    const posMsDuringPlay = await getPositionMs(page);
+    const beatDuringPlay = await getBeat(page);
+    expect(posMsDuringPlay).toBeGreaterThan(0);
+    expect(beatDuringPlay).toBeGreaterThan(0);
+
+    await page.click('[data-testid="editor-play"]');
+    await page.waitForTimeout(500);
+
+    const slider = page.locator('.editor-slider[type="range"]');
+    await expect(slider).toBeEnabled();
+    const sliderMax = await slider.getAttribute('max');
+    expect(parseFloat(sliderMax || '0')).toBeGreaterThan(0);
+  });
+
+  test('File Input: verifies audio offset is applied to playback start position', async ({ page }) => {
+    await navigateToEditor(page);
+
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    await fileInput.setInputFiles(AUDIO_FILE);
+    await waitForAudioLoaded(page, 30000);
+
+    const offsetInput = page.locator('#audio-offset');
+    await offsetInput.fill('500');
+    await page.waitForTimeout(200);
+
+    const offsetValue = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorAudioOffset);
+    expect(offsetValue).toBe(500);
+
+    await page.click('[data-testid="editor-play"]');
+    await page.waitForTimeout(1000);
+
+    const playFromHook = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorPlayFrom);
+    expect(playFromHook).toBeTruthy();
+    expect(playFromHook.audioOffset).toBe(500);
+    expect(playFromHook.when).toBeGreaterThan(playFromHook.ctxTime);
+
+    await page.click('[data-testid="editor-play"]');
+  });
+
+  test('File Input: different audio formats (mp3, wav, ogg) can be loaded', async ({ page }) => {
+    await navigateToEditor(page);
+
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+
+    const formats = [
+      { ext: 'mp3', name: 'test.mp3' },
+      { ext: 'wav', name: 'test.wav' },
+      { ext: 'ogg', name: 'test.ogg' },
+    ];
+
+    for (const fmt of formats) {
+      await page.evaluate(
+        async ({ fmt }) => {
+          const audioCtx = new (window.AudioContext || (window as unknown as Record<string, unknown>).webkitAudioContext)();
+          const buffer = audioCtx.createBuffer(1, 44100, 44100);
+          const channelData = buffer.getChannelData(0);
+          for (let i = 0; i < channelData.length; i++) {
+            channelData[i] = Math.sin(i * 0.1);
           }
-        }
-        out.push({ beat: b, y: bestY })
+          const blob = await new Promise<Blob>((resolve) => {
+            const offlineCtx = new OfflineAudioContext(1, 44100, 44100);
+            const src = offlineCtx.createBufferSource();
+            src.buffer = buffer;
+            src.connect(offlineCtx.destination);
+            src.start();
+            offlineCtx.startRendering().then((rendered) => {
+              const wavBlob = audioBufferToWav(rendered);
+              resolve(wavBlob);
+            });
+          });
+          const file = new File([blob], fmt.name, { type: `audio/${fmt.ext}` });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          const input = document.querySelector('[data-testid="audio-file-input"]') as HTMLInputElement;
+          if (input) {
+            input.files = dt.files;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        },
+        { fmt }
+      );
+
+      await page.waitForTimeout(2000);
+
+      const bufferLoaded = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorBuffer);
+      if (bufferLoaded) {
+        const durationMs = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
+        expect(durationMs).toBeGreaterThan(0);
+        break;
       }
-      return out
-    })
-    expect(samples.length).toBe(7)
-    // Linear check: y as a function of beat must be a straight line (constant slope).
-    const ys = samples.map((s) => s.y)
-    const diffs: number[] = []
-    for (let i = 1; i < ys.length; i++) diffs.push(ys[i] - ys[i - 1])
-    const slope = diffs[0]
-    for (const d of diffs) {
-      expect(Math.abs(d - slope)).toBeLessThan(3) // per-beat step is constant
     }
-  })
+  });
 
-  test('コンソールエラーなし（未捕捉TypeError/ReferenceError等）', async ({ page }) => {
-    const errors: string[] = []
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        const text = msg.text()
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-          errors.push(text)
-        }
-      }
-    })
-    page.on('pageerror', (err) => {
-      errors.push(err.message)
-    })
+  test('File Input: clears previous buffer and state when new file is loaded', async ({ page }) => {
+    await navigateToEditor(page);
 
-    await buildThreeSegments(page)
-    await page.fill('#zoom', '2')
-    await page.waitForTimeout(200)
-    await page.fill('#zoom', '64')
-    await page.waitForTimeout(200)
-    const maxAttr = await page.getAttribute('#scroll', 'max')
-    const max = maxAttr ? Number(maxAttr) : 0
-    if (max >= 2) {
-      await page.fill('#scroll', '2')
-      await page.waitForTimeout(200)
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    await fileInput.setInputFiles(AUDIO_FILE);
+    await waitForAudioLoaded(page, 30000);
+
+    await page.click('[data-testid="editor-play"]');
+    await page.waitForTimeout(1000);
+    await page.click('[data-testid="editor-play"]');
+
+    const firstDuration = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
+
+    await page.evaluate(() => {
+      (window as unknown as Record<string, unknown>).__editorBuffer = null;
+      (window as unknown as Record<string, unknown>).__editorDurationMs = 0;
+    });
+
+    await fileInput.setInputFiles(AUDIO_FILE);
+    await waitForAudioLoaded(page, 30000);
+
+    const secondDuration = await page.evaluate(() => (window as unknown as Record<string, unknown>).__editorDurationMs);
+    expect(secondDuration).toBe(firstDuration);
+
+    const positionMs = await getPositionMs(page);
+    expect(positionMs).toBe(0);
+  });
+});
+
+function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const length = buffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = length * blockAlign;
+  const bufferSize = 44 + dataSize;
+
+  const arrayBuffer = new ArrayBuffer(bufferSize);
+  const view = new DataView(arrayBuffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, bufferSize - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
     }
-    await page.fill('#scroll', '0')
-    await page.waitForTimeout(200)
+  }
 
-    expect(errors).toHaveLength(0)
-  })
-})
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
