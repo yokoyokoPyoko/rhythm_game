@@ -86,6 +86,10 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
     await expect(recordBtn).toHaveText('録音モード');
 
+    // Focus the canvas to ensure keyboard events are captured
+    await page.locator('[data-testid="wave-preview-canvas"]').click({ position: { x: 10, y: 10 } });
+    await page.waitForTimeout(200);
+
     // Step 3: Press Space key multiple times during playback
     for (let i = 0; i < 5; i++) {
       await page.keyboard.down('Space');
@@ -129,6 +133,10 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     // Verify we're in record mode
     const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
     await expect(recordBtn).toHaveText('録音停止');
+
+    // Focus the canvas to ensure keyboard events are captured
+    await page.locator('[data-testid="wave-preview-canvas"]').click({ position: { x: 10, y: 10 } });
+    await page.waitForTimeout(200);
 
     // Step 4: Press Space key multiple times during playback in record mode
     const expectedNewRings = 3;
@@ -182,6 +190,10 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     // Start playback
     await startPlayback(page);
     await page.waitForTimeout(1000);
+
+    // Focus the canvas
+    await page.locator('[data-testid="wave-preview-canvas"]').click({ position: { x: 10, y: 10 } });
+    await page.waitForTimeout(200);
 
     // --- PHASE 1: Play mode (default) ---
     // Press Space - should NOT add rings

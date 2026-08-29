@@ -356,16 +356,16 @@
       "gate_b_golden": true
     },
     "T103": {
-      "attempts": 18,
+      "attempts": 19,
       "status": "running",
       "started": 1787975658.0767493,
-      "cycles": 3,
+      "cycles": 1,
       "sessions": {
-        "qa": "ses_fb45d83f1ffeQsm1DKBj3O1mMD",
+        "qa": "ses_fb45877fbffePcBBobDCUi3R8L",
         "postmortem": "ses_fb45de4d2fferO543o2ly8lYOp",
         "coder": "ses_fb47120c2ffefL8bq26XVkNFz3"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     },
     "T104": {
       "attempts": 0,
