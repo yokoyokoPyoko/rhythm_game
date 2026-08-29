@@ -401,12 +401,12 @@
       "gate_b_golden": true
     },
     "T106": {
-      "attempts": 3,
+      "attempts": 4,
       "status": "running",
-      "started": 1788020676.2071502,
+      "started": 1788021135.724158,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_fb347840fffeEUbwYjCfa6i3vx",
+        "qa": null,
         "postmortem": "ses_fb3356d4bffevJfeBxvJB1HsHI",
         "coder": null
       },
