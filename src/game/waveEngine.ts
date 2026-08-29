@@ -69,6 +69,10 @@ export class WaveEngine {
     return points;
   }
 
+  getPoints(): WavePoint[] {
+    return this.points;
+  }
+
   waveYAt(beat: number): number {
     const waveTop = TW_CENTER_Y - this.amplitude;
     if (!Number.isFinite(beat)) {

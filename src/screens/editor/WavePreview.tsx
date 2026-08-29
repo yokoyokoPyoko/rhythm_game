@@ -177,29 +177,39 @@ export default function WavePreview({
     ctx.font = '10px Inter, system-ui, sans-serif'
     ctx.fillText('START', 6, RULER_H + 4)
 
-    // Segment color coding (up = accent, down = sub, stay = warning)
+    // Segment color coding (up = accent, down = sub, stay = warning).
+    // Vertex-direct rendering: each segment's own interval [b0, b1] is drawn by
+    // connecting its endpoints (vertices) directly via lineTo — no fixed-step
+    // resampling, so corners stay sharp at any zoom. Each segment is drawn only
+    // within its own beat range, eliminating the previous whole-wave multi-draw.
     const drawRangeEnd = viewStart + viewBeats
-    const subSteps = Math.max(20, Math.round((drawRangeEnd - viewStart) * 8))
-    let currentBeat = 0
-    for (const seg of segments) {
-      const segEnd = currentBeat + seg.beats
-      if (segEnd < viewStart || currentBeat > drawRangeEnd) {
-        currentBeat = segEnd
-        continue
-      }
-      ctx.strokeStyle =
-        seg.direction === 'up' ? ACCENT_COLOR : seg.direction === 'down' ? SUB_COLOR : STAY_COLOR
+    const points = engine.getPoints()
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i]
+      const p1 = points[i + 1]
+      const seg = segments[i]
+      const color =
+        seg && seg.direction === 'down'
+          ? SUB_COLOR
+          : seg && seg.direction === 'stay'
+            ? STAY_COLOR
+            : ACCENT_COLOR
+
+      // Visible span of this segment's interval within the current view.
+      const segStartB = Math.max(p0.beat, viewStart)
+      const segEndB = Math.min(p1.beat, drawRangeEnd)
+      if (segEndB <= segStartB) continue
+
+      const x0 = beatToX(segStartB)
+      const y0 = mapY(engine.waveYAt(segStartB))
+      const x1 = beatToX(segEndB)
+      const y1 = mapY(engine.waveYAt(segEndB))
+      ctx.strokeStyle = color
       ctx.lineWidth = 2.5
       ctx.beginPath()
-      for (let s = 0; s <= subSteps; s++) {
-        const b = viewStart + (s / subSteps) * (drawRangeEnd - viewStart)
-        const x = beatToX(b)
-        const y = mapY(engine.waveYAt(b))
-        if (s === 0) ctx.moveTo(x, y)
-        else ctx.lineTo(x, y)
-      }
+      ctx.moveTo(x0, y0)
+      ctx.lineTo(x1, y1)
       ctx.stroke()
-      currentBeat = segEnd
     }
 
     if (segments.length === 0) {
