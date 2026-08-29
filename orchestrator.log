@@ -3375,3 +3375,5 @@
 2026-08-29 12:56:44,775 [WARNING] [T105] Blocked by incomplete dependency: T104 (blocked)
 2026-08-29 12:56:44,776 [WARNING] [T106] Blocked by incomplete dependency: T105 (blocked)
 2026-08-29 12:56:44,777 [WARNING] [T107] Blocked by incomplete dependency: T106 (blocked)
+2026-08-29 13:38:04,755 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-29 13:38:09,869 [INFO] Orchestrator range execution: 4 tasks (from=T104, to=T107, budget=600m)
