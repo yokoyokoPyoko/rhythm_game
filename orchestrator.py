@@ -946,7 +946,38 @@ def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int | None 
 REVIEWER_QUORUM = 3  # Independent Gate C review sessions; UNANIMOUS PASS required.
 
 
-def _build_reviewer_prompt(task: Task, spec: str, run_index: int) -> str:
+def _build_reviewer_prompt(task: Task, spec: str, run_index: int, is_red_audit: bool = False) -> str:
+    if is_red_audit:
+        return f"""You are an Uncompromising Senior Product Director and Strict Quality Auditor performing a ZERO-CODER PRE-IMPLEMENTATION AUDIT on the browser execution video for task {task.id} ({task.desc}).
+
+🚨 CRITICAL AUDIT CONTEXT (READ CAREFULLY):
+This task was executed in TDD Pre-Implementation phase (Red Check), and ALL automated tests PASSED on the existing code WITHOUT ANY CODE CHANGES.
+
+In 99% of cases, this is a FALSE-POSITIVE caused by superficial, weak test assertions (e.g. asserting only that an element is visible or testing trivial baseline state).
+Your DEFAULT ASSUMPTION must be that this is a FALSE-POSITIVE and the feature is NOT actually implemented or functioning as required.
+
+However, to avoid breaking already working code, there is a small possibility that this feature was ALREADY PERFECTLY IMPLEMENTED in earlier tasks (Already Implemented).
+
+YOUR MISSION:
+Scrutinize the browser video with EXTREME SKEPTICISM.
+- You must find concrete, timestamped, falsifiable visual evidence [00:XX] that the required feature was ACTUALLY INTERACTED WITH and WORKED AS SPECIFIED.
+- If the feature was not exercised, not rendered, merely mounted without interaction, or if the evidence is ambiguous -> IMMEDIATELY REJECT with verdict "FAIL" (Score < 50) and label it a False-Positive.
+- ONLY if the video provides IRREFUTABLE, UNAMBIGUOUS PROOF that every single requirement is ALREADY FULLY FUNCTIONAL and VISUALLY POLISHED in the UI -> you may verdict "PASS" (Score >= 80).
+
+Specification & Requirements to Audit:
+{spec}
+
+MANDATORY EVIDENCE PROTOCOL (Strict — no exceptions):
+You MUST evaluate EVERY requirement listed above, one by one. For each requirement provide a CONCRETE, FALSIFIABLE piece of evidence observed in the video (a timestamp + exactly what was seen/clicked/rendered).
+- If ANY requirement is status "UNMET" or lacks concrete interaction proof in the video -> verdict MUST be "FAIL".
+
+Output JSON only, with this exact schema:
+{{"score": 90, "verdict": "PASS", "evidence": [{{"requirement": "<verbatim req>", "status": "MET", "proof": "00:03 clicked slider, 00:04 wave height changed noticeably as expected"}}], "comment": "Verified that this feature is genuinely ALREADY IMPLEMENTED."}}
+
+If rejecting as false-positive:
+{{"score": 30, "verdict": "FAIL", "evidence": [{{"requirement": "<req>", "status": "UNMET", "proof": "no observable interaction or visual proof of the feature working in video"}}], "comment": "Rejected as False-Positive. Automated test passed without actually exercising the required feature."}}
+"""
+
     return f"""You are an Uncompromising Product Director and Senior UX/UI Critic inspecting the browser execution video recording for task {task.id} ({task.desc}).
 
 You are INDEPENDENT reviewer #{run_index + 1} of {REVIEWER_QUORUM}. Be especially skeptical — most submissions are superficial. Only PASS if you can cite concrete proof for EVERY requirement.
@@ -1006,22 +1037,23 @@ def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
         return False, "Reviewer output JSON parse failed."
 
 
-def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
+def check_gate_c(task: Task, reviewer_model: str, is_red_audit: bool = False) -> GateResult:
+    gate_name = "Gate C (Already Implemented Audit)" if is_red_audit else "Gate C (Dynamic Review)"
     if not task.ui or not has_dev_script():
-        return GateResult("Gate C (Dynamic Review)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic review")
+        return GateResult(gate_name, True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic review")
 
     videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
     if not videos:
         log.error("No gameplay video recording (.webm) found for Gate C.")
-        return GateResult("Gate C (Dynamic Review)", False, "No gameplay video recorded")
+        return GateResult(gate_name, False, "No gameplay video recorded")
 
     latest_video = videos[-1]
     spec = extract_compact_spec(task.id)
 
     results: list[tuple[bool, str]] = []
     for i in range(REVIEWER_QUORUM):
-        prompt = _build_reviewer_prompt(task, spec, i)
-        log.info("Reviewer session %d/%d (independent) analyzing video: %s...", i + 1, REVIEWER_QUORUM, latest_video.name)
+        prompt = _build_reviewer_prompt(task, spec, i, is_red_audit=is_red_audit)
+        log.info("Reviewer session %d/%d (%s) analyzing video: %s...", i + 1, REVIEWER_QUORUM, "audit" if is_red_audit else "independent", latest_video.name)
         code, out = run_llm_cli_video_review(latest_video, prompt, timeout=None)
         if code != 0:
             results.append((False, f"session {i+1}: model execution failed (exit={code})"))
@@ -1033,12 +1065,12 @@ def check_gate_c(task: Task, reviewer_model: str) -> GateResult:
 
     passed = sum(1 for ok, _ in results if ok)
     if passed == REVIEWER_QUORUM:
-        return GateResult("Gate C (Dynamic Review)", True, f"Unanimous PASS ({passed}/{REVIEWER_QUORUM} independent reviews)")
+        return GateResult(gate_name, True, f"Unanimous PASS ({passed}/{REVIEWER_QUORUM} independent reviews)")
 
     fails = [reason for ok, reason in results if not ok]
     detail = "; ".join(fails)
-    log.error("[%s] Gate C quorum FAILED: %d/%d independent reviews passed.", task.id, passed, REVIEWER_QUORUM)
-    return GateResult("Gate C (Dynamic Review)", False, f"Quorum FAIL ({passed}/{REVIEWER_QUORUM} passed): {detail}")
+    log.error("[%s] %s quorum FAILED: %d/%d independent reviews passed.", task.id, gate_name, passed, REVIEWER_QUORUM)
+    return GateResult(gate_name, False, f"Quorum FAIL ({passed}/{REVIEWER_QUORUM} passed): {detail}")
 
 
 def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
@@ -1138,6 +1170,23 @@ def git_checkpoint(message: str) -> None:
     run_cmd_pgid_stream(["git", "commit", "-m", message, "--allow-empty"])
 
 
+def deploy_to_github_pages(task_id: str) -> None:
+    """Build production dist and push to origin main for live GitHub Pages preview."""
+    log.info("[%s] Building docs/ dist for GitHub Pages...", task_id)
+    code, _, _ = run_cmd_pgid_stream(["npm", "run", "build"], timeout=60)
+    if code == 0:
+        run_cmd_pgid_stream(["git", "add", "docs"])
+        run_cmd_pgid_stream(["git", "commit", "-m", f"build(docs): update GitHub Pages for {task_id}", "--allow-empty"])
+        log.info("[%s] Pushing latest build to GitHub...", task_id)
+        p_code, _, _ = run_cmd_pgid_stream(["git", "push", "origin", "main"], timeout=30)
+        if p_code == 0:
+            log.info("[%s] %sSuccessfully deployed to GitHub Pages!%s", task_id, GREEN, RESET)
+        else:
+            log.warning("[%s] git push to origin main skipped or failed (check network/credentials).", task_id)
+    else:
+        log.warning("[%s] npm run build failed during GitHub Pages deploy.", task_id)
+
+
 def git_rollback(commit_hash: str) -> None:
     log.warning("Task failed. Rolling back to commit %s", commit_hash)
     run_cmd_pgid_stream(["git", "reset", "--hard", commit_hash])
@@ -1224,6 +1273,31 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
             red_passed, red_out = run_dynamic_test_red(task)
             if red_passed:
+                log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
+                # Check if existing code builds cleanly (Gate A)
+                ga_result = check_gate_a()
+                if ga_result.passed:
+                    # Run strict Zero-Coder Gate C review on the test execution video
+                    gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
+                    if gc_audit.passed:
+                        log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
+                        golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
+                        try:
+                            import shutil
+                            shutil.copy(DYNAMIC_SPEC_FILE, golden_file)
+                            if state and task.id in state.get("tasks", {}):
+                                state["tasks"][task.id]["gate_b_golden"] = True
+                                save_state(state)
+                        except Exception:
+                            pass
+                        git_checkpoint(f"feat({task.id}): complete (already implemented)")
+                        deploy_to_github_pages(task.id)
+                        return True
+                    else:
+                        log.error("[%s] Gate C Audit rejected Zero-Coder pass (confirmed FALSE-POSITIVE): %s", task.id, gc_audit.detail)
+                else:
+                    log.error("[%s] Existing code fails Gate A (tsc). Cannot be Already Implemented.", task.id)
+
                 log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
                 passed_lines = [l.strip() for l in red_out.splitlines() if "passed" in l or "✓" in l or "›" in l]
                 sample_passed = "\n".join(passed_lines[:6]) if passed_lines else red_out[-400:]
@@ -1342,6 +1416,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
         # Complete
         git_checkpoint(f"feat({task.id}): complete")
+        deploy_to_github_pages(task.id)
         st["status"] = "passed"
         st["finished"] = time.time()
         state["consecutive_no_action"] = 0
