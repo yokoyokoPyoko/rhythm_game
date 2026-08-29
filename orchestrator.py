@@ -1312,10 +1312,10 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
                 # Check if existing code builds cleanly (Gate A)
                 ga_result = check_gate_a()
-                if ga_result.passed:
+                if ga_result.ok:
                     # Run strict Zero-Coder Gate C review on the test execution video
                     gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
-                    if gc_audit.passed:
+                    if gc_audit.ok:
                         log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
                         golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
                         try:

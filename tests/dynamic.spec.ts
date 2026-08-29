@@ -54,8 +54,10 @@ async function clearRings(page: any): Promise<void> {
 }
 
 test.describe('T103: レガシー再生中リングスタンプ完全削除', () => {
+  let errors: string[] = [];
+
   test.beforeEach(async ({ page }) => {
-    const errors: string[] = [];
+    errors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         const t = msg.text();
@@ -73,12 +75,18 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     expect(errors).toHaveLength(0);
   });
 
+  test.afterEach(() => {
+    expect(errors).toHaveLength(0);
+  });
+
   test('Negative Control: Play mode - Space key during playback does NOT add rings', async ({ page }) => {
-    // Step 1: Capture initial ring count
+    // Step 1: Capture Initial State
+    await clearRings(page);
     const initialRings = await getRingsFromWindow(page);
     const initialCount = initialRings.length;
+    expect(initialCount).toBe(0);
 
-    // Step 2: Start playback in PLAY mode (default)
+    // Step 2: Perform User Interaction - Start playback in PLAY mode (default)
     await startPlayback(page);
     await page.waitForTimeout(1000);
 
@@ -86,7 +94,7 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
     await expect(recordBtn).toHaveText('録音モード');
 
-    // Step 3: Press Space key multiple times during playback
+    // Press Space key multiple times during playback
     for (let i = 0; i < 5; i++) {
       await page.keyboard.down('Space');
       await page.waitForTimeout(100);
@@ -94,31 +102,23 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
       await page.waitForTimeout(200);
     }
 
-    // Step 4: Stop playback
+    // Stop playback
     await stopPlayback(page);
     await page.waitForTimeout(500);
 
-    // Step 5: Assert ring count has NOT changed
+    // Step 3: Assert Resulting Transition - ring count has NOT changed
     const finalRings = await getRingsFromWindow(page);
     expect(finalRings.length).toBe(initialCount);
-
-    // Also verify no console errors
-    const errors: string[] = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        const t = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
-      }
-    });
-    expect(errors).toHaveLength(0);
   });
 
   test('Positive Control: Record mode - Space key during playback DOES add rings', async ({ page }) => {
-    // Step 1: Capture initial ring count
+    // Step 1: Capture Initial State
+    await clearRings(page);
     const initialRings = await getRingsFromWindow(page);
     const initialCount = initialRings.length;
+    expect(initialCount).toBe(0);
 
-    // Step 2: Start playback
+    // Step 2: Perform User Interaction - Start playback
     await startPlayback(page);
     await page.waitForTimeout(1000);
 
@@ -130,24 +130,24 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
     await expect(recordBtn).toHaveText('録音停止');
 
-    // Step 4: Press Space key multiple times during playback in record mode
+    // Press Space key multiple times during playback in record mode
     const expectedNewRings = 3;
     for (let i = 0; i < expectedNewRings; i++) {
       await page.keyboard.down('Space');
-      await page.waitForTimeout(150); // Hold long enough to be detected
+      await page.waitForTimeout(150);
       await page.keyboard.up('Space');
       await page.waitForTimeout(300);
     }
 
-    // Step 5: Exit record mode (this commits any recorded trajectory but rings are added on keyup)
+    // Exit record mode (this commits any recorded trajectory but rings are added on keyup)
     await exitRecordMode(page);
     await page.waitForTimeout(500);
 
-    // Step 6: Stop playback
+    // Stop playback
     await stopPlayback(page);
     await page.waitForTimeout(500);
 
-    // Step 7: Assert ring count HAS increased
+    // Step 4: Assert Resulting Transition - ring count HAS increased
     const finalRings = await getRingsFromWindow(page);
     expect(finalRings.length).toBeGreaterThanOrEqual(initialCount + expectedNewRings);
 
@@ -160,26 +160,15 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
         expect(ring.duration).toBeGreaterThan(0.3);
       }
     }
-
-    // Also verify no console errors
-    const errors: string[] = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        const t = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
-      }
-    });
-    expect(errors).toHaveLength(0);
   });
 
   test('Mode switching verification: Rings only added in record mode, not in play mode', async ({ page }) => {
-    // This test verifies the mode switching behavior within a single session
-
-    // Clear any existing rings first
+    // Step 1: Capture Initial State
     await clearRings(page);
-    await page.waitForTimeout(200);
+    let initialRings = await getRingsFromWindow(page);
+    expect(initialRings.length).toBe(0);
 
-    // Start playback
+    // Step 2: Start playback
     await startPlayback(page);
     await page.waitForTimeout(1000);
 
@@ -236,18 +225,8 @@ test.describe('T103: レガシー再生中リングスタンプ完全削除', ()
     await stopPlayback(page);
     await page.waitForTimeout(500);
 
-    // Final verification: ring count should not have changed after returning to play mode
+    // Step 3: Assert Resulting Transition - ring count should not have changed after returning to play mode
     const finalRings = await getRingsFromWindow(page);
     expect(finalRings.length).toBe(ringsAfterRecordMode.length);
-
-    // No console errors
-    const errors: string[] = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        const t = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
-      }
-    });
-    expect(errors).toHaveLength(0);
   });
 });
