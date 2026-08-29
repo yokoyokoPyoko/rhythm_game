@@ -1348,12 +1348,19 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                             shutil.copy(DYNAMIC_SPEC_FILE, golden_file)
                             if state and task.id in state.get("tasks", {}):
                                 state["tasks"][task.id]["gate_b_golden"] = True
-                                save_state(state)
                         except Exception:
                             pass
                         git_checkpoint(f"feat({task.id}): complete (already implemented)")
                         deploy_to_github_pages(task.id)
-                        return True
+                        st["status"] = "passed"
+                        st["finished"] = time.time()
+                        state["consecutive_no_action"] = 0
+                        save_state(state)
+                        ctx = load_task_context(task.id)
+                        ctx["status"] = "passed"
+                        save_task_context(task.id, ctx)
+                        print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (Already Implemented, duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
+                        return "passed"
                     else:
                         log.error("[%s] Gate C Audit rejected Zero-Coder pass (confirmed FALSE-POSITIVE): %s", task.id, gc_audit.detail)
                 else:
