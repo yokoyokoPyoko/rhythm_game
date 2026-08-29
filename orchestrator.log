@@ -3441,3 +3441,5 @@ Error: No tests found.
 2026-08-29 14:35:38,724 [INFO] RateLimit sleep: 5s...
 2026-08-29 14:35:43,724 [INFO] Dispatching [1mPostmortem[0m (model=[90mopencode/nemotron-3-ultra-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T106] Postmortem 55678e3d)
 2026-08-29 14:36:24,568 [INFO] Orchestrator range execution: 5 tasks (from=T105, to=T109, budget=600m)
+2026-08-29 17:02:56,276 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-29 17:03:01,669 [INFO] Orchestrator range execution: 5 tasks (from=T105, to=T109, budget=600m)
