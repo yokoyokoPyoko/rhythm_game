@@ -98,12 +98,41 @@ BACKOFF_DELAYS = [5, 10, 30, 60, 120]
 log = logging.getLogger("orchestrator")
 
 
+def resolve_model_id(val: str) -> str:
+    """Resolve a catalog short-key or full model ID."""
+    if not val:
+        return ""
+    if val in MODEL_CATALOG:
+        return MODEL_CATALOG[val][2]
+    for key, (name, provider, mid) in MODEL_CATALOG.items():
+        if val.lower() == mid.lower() or val.lower() == key.lower():
+            return mid
+    return val
+
+
 @dataclass
 class FlowModels:
-    coder: str = MODEL_CATALOG["qwen38"][2]
-    qa: str = MODEL_CATALOG["qwen38"][2]
+    coder: str = MODEL_CATALOG["laguna_free"][2]
+    qa: str = MODEL_CATALOG["nemotron_ultra"][2]
     reviewer: str = MODEL_CATALOG["gemini_flash_lite"][2]
     postmortem: str = MODEL_CATALOG["nemotron_ultra"][2]
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "coder": self.coder,
+            "qa": self.qa,
+            "reviewer": self.reviewer,
+            "postmortem": self.postmortem,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FlowModels":
+        return cls(
+            coder=resolve_model_id(data.get("coder", MODEL_CATALOG["laguna_free"][2])),
+            qa=resolve_model_id(data.get("qa", MODEL_CATALOG["nemotron_ultra"][2])),
+            reviewer=resolve_model_id(data.get("reviewer", MODEL_CATALOG["gemini_flash_lite"][2])),
+            postmortem=resolve_model_id(data.get("postmortem", MODEL_CATALOG["nemotron_ultra"][2])),
+        )
 
 
 @dataclass
@@ -1535,6 +1564,7 @@ def detect_concurrent_orchestrators() -> list[int]:
     which would otherwise fight over port 5173.
     """
     me = os.getpid()
+    ppid = os.getppid()
     others: list[int] = []
     proc_root = Path("/proc")
     if not proc_root.exists():
@@ -1544,7 +1574,7 @@ def detect_concurrent_orchestrators() -> list[int]:
         if not name.isdigit():
             continue
         pid = int(name)
-        if pid == me:
+        if pid == me or pid == ppid:
             continue
         try:
             cmdline = (entry / "cmdline").read_bytes()
@@ -1552,7 +1582,8 @@ def detect_concurrent_orchestrators() -> list[int]:
             continue
         if not cmdline:
             continue
-        if any(b"orchestrator.py" in part for part in cmdline.split(b"\x00")):
+        parts = [p.decode("utf-8", errors="ignore") for p in cmdline.split(b"\x00") if p]
+        if any("orchestrator.py" in part for part in parts) and any("python" in part for part in parts):
             others.append(pid)
     return others
 
@@ -1568,26 +1599,28 @@ def main() -> None:
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="Total budget in minutes")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive model selector")
     parser.add_argument("--fresh-sessions", action="store_true", help="Always create fresh OpenCode sessions for tasks (ignoring past sessions)")
+    parser.add_argument("--coder", help="Override Coder model ID or short key (e.g. laguna_free, nemotron_ultra, qwen38)")
+    parser.add_argument("--qa", help="Override QA model ID or short key")
+    parser.add_argument("--reviewer", help="Override Reviewer model ID or short key")
+    parser.add_argument("--postmortem", help="Override Postmortem model ID or short key")
     args = parser.parse_args()
 
     setup_logging()
     LOG_DIR.mkdir(exist_ok=True)
 
-    concurrent = detect_concurrent_orchestrators()
-    if concurrent:
-        log.warning(
-            "⚠ 別の orchestrator.py が既に稼働中です (PID: %s)。"
-            "同時実行は port 5173 の奪い合い等を引き起こします。",
-            concurrent,
-        )
-        if not sys.stdin.isatty():
-            log.error("非対話環境のため中止します。")
-            sys.exit(1)
-        ans = input("他の orchestrator が稼働中です。[A]bort / [C]ontinue ? ").strip().lower()
-        if ans != "c":
-            log.info("ユーザーが中止を選択しました。")
-            sys.exit(1)
-        log.info("続行します。")
+    if not args.dry_run:
+        concurrent = detect_concurrent_orchestrators()
+        if concurrent:
+            log.warning(
+                "⚠ 別の orchestrator.py が稼働中の可能性があります (PID: %s)。",
+                concurrent,
+            )
+            if not args.non_interactive and sys.stdin.isatty():
+                ans = input("他の orchestrator が稼働中です。[A]bort / [C]ontinue ? ").strip().lower()
+                if ans != "c":
+                    log.info("ユーザーが中止を選択しました。")
+                    sys.exit(1)
+            log.info("続行します。")
 
     if args.reset_state and STATE_FILE.exists():
         STATE_FILE.unlink()
@@ -1640,10 +1673,28 @@ def main() -> None:
         if cont != "y":
             sys.exit(1)
 
+    # Determine FlowModels (interactive vs persisted/non-interactive vs CLI override)
     if args.non_interactive or args.dry_run:
-        models = FlowModels()
+        if "models" in state and isinstance(state["models"], dict):
+            models = FlowModels.from_dict(state["models"])
+        else:
+            models = FlowModels()
     else:
         models = interactive_model_selection()
+
+    # Apply CLI overrides if provided
+    if args.coder:
+        models.coder = resolve_model_id(args.coder)
+    if args.qa:
+        models.qa = resolve_model_id(args.qa)
+    if args.reviewer:
+        models.reviewer = resolve_model_id(args.reviewer)
+    if args.postmortem:
+        models.postmortem = resolve_model_id(args.postmortem)
+
+    # Persist active models into state
+    state["models"] = models.to_dict()
+    save_state(state)
 
     print(f"\n{GRAY}─── Active AI Configuration ────────────────────────────────────────{RESET}")
     print(f"  {BOLD}1. Coder{RESET}      : {CYAN}{get_model_display(models.coder)}{RESET}")
