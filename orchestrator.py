@@ -937,9 +937,17 @@ def run_gate_b_test(state: dict[str, Any] | None, task: Task) -> GateResult:
 def run_llm_cli_video_review(video_path: Path, prompt: str, timeout: int | None = None) -> tuple[int, str]:
     cmd = ["llm", "-m", "gemini-3.5-flash-lite", "-o", "thinking_level", "high", "-a", str(video_path), prompt]
     log.info("Dispatching Video Review via Simon Willison's llm CLI (model=gemini-3.5-flash-lite, video=%s)...", video_path.name)
-    print(f"  {GRAY}┌─ Start: llm CLI Video Review ──────────────────────────────{RESET}", flush=True)
-    code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
-    print(f"  {GRAY}└─ End: llm CLI Video Review (exit={code}) ────────────────────────{RESET}", flush=True)
+    code = 1
+    out = ""
+    for attempt, delay in enumerate(BACKOFF_DELAYS, start=1):
+        print(f"  {GRAY}┌─ Start: llm CLI Video Review (attempt {attempt}/{len(BACKOFF_DELAYS)}) ──────────────────────{RESET}", flush=True)
+        code, out, timed_out = run_cmd_pgid_stream(cmd, timeout=timeout, prefix=f"{CYAN}::{RESET} ")
+        print(f"  {GRAY}└─ End: llm CLI Video Review (exit={code}) ────────────────────────{RESET}", flush=True)
+        if code == 0:
+            return code, out
+        if attempt < len(BACKOFF_DELAYS):
+            log.warning("Video Review attempt %d failed (exit=%d). Backoff %ds...", attempt, code, delay)
+            time.sleep(delay)
     return code, out
 
 
@@ -1080,27 +1088,55 @@ def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
 
 
 def _extract_postmortem_json(out: str) -> dict | None:
-    m = re.search(r'\{[^{}]*"retry_from"[^{}]*\}', out, re.S)
+    # 1. Look for markdown json code block
+    m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', out, re.S)
     if m:
         try:
-            return json.loads(m.group(0))
+            return json.loads(m.group(1))
         except Exception:
             pass
-    for m in re.findall(r'\{.*?\}', out, re.S):
-        try:
-            d = json.loads(m)
-            if isinstance(d, dict) and "retry_from" in d:
-                return d
-        except Exception:
-            continue
-    idx = out.find('"retry_from"')
-    if idx != -1:
-        s, e = out.rfind('{', 0, idx), out.find('}', idx)
-        if s != -1 and e != -1:
+
+    # 2. Balanced bracket parser (handles nested braces inside strings/code)
+    first_brace = out.find('{')
+    if first_brace != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        end_idx = -1
+        for i in range(first_brace, len(out)):
+            char = out[i]
+            if escape:
+                escape = False
+                continue
+            if char == '\\':
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = i
+                        break
+        if end_idx != -1:
             try:
-                return json.loads(out[s:e + 1])
+                candidate = out[first_brace:end_idx + 1]
+                return json.loads(candidate)
             except Exception:
                 pass
+
+    # 3. Fallback: widest outer braces
+    last_brace = out.rfind('}')
+    if first_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(out[first_brace:last_brace + 1])
+        except Exception:
+            pass
+
     return None
 
 
