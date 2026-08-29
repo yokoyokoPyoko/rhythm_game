@@ -769,7 +769,19 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
-### [T106] 波形上下表示領域拡張
+### [T106] ローカル音声ファイル読込機能（File Input & Drag-and-Drop）
+
+`src/audio/loader.ts` + `src/screens/EditorScreen.tsx`:
+- **ローカルファイルデコード**: `loadAudioFromFile(file: File, audioCtx: AudioContext): Promise<AudioBuffer | null>` を追加。`file.arrayBuffer()` を `audioCtx.decodeAudioData()` でブラウザローカルだけでデコード。
+- **UI統合**:
+  - エディタ画面の左ペインに「ファイル選択（`<input type="file" accept="audio/*" data-testid="audio-file-input">`）」ボタンを追加。
+  - エディタ画面全体または専用エリアへのドラッグ＆ドロップ（`dragover`/`drop` イベント）による音声ファイル読み込みに対応。
+  - ファイル読み込み成功時、ファイル名（拡張子除く）を自動で楽曲タイトル（`title`）に反映。
+- 完了条件: Playwright で `<input type="file">` に音声ファイルを `setInputFiles`（またはドロップ）した際、エラーなくオーディオバッファがロードされ、再生・タイムラインが利用可能になることを自動テストで検証。
+
+---
+
+### [T107] 波形上下表示領域拡張
 
 `src/screens/editor/WavePreview.tsx`:
 - canvas の縦マップを広げ、波形の上下表示領域を拡張（SCORE/COMBO/操作ヒントに侵食しない範囲）。`amplitude` 反映を維持。
@@ -777,7 +789,7 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
-### [T107] Canvasホイールズームでページスクロール防止
+### [T108] Canvasホイールズームでページスクロール防止
 
 `src/screens/editor/WavePreview.tsx`:
 - ホイールイベントハンドラ（`onWheel`）で `e.preventDefault()` を確実に呼び、ページがスクロールしないようにする（非 passive リスナ）。
@@ -785,7 +797,7 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
-### [T108] 録音上書き範囲の限定
+### [T109] 録音上書き範囲の限定
 
 `src/screens/EditorScreen.tsx` (`finishRecording`):
 - 録音停止時のコミットで、開始 beat（`startBeat`）〜終了 beat（`endBeat`）の範囲のみを上書きし、それ以降のセグメントを維持。
