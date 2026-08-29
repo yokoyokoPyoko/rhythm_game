@@ -1,232 +1,300 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '@playwright/test'
 
-async function waitForAudioReady(page: any, timeout = 120000): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const btn = document.querySelector('[data-testid="editor-play"]');
-      return btn && !btn.textContent?.includes('読込中');
-    },
-    { timeout }
-  );
-}
-
-async function startPlayback(page: any): Promise<void> {
-  await page.click('[data-testid="editor-play"]');
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-play"]');
-    return btn && btn.textContent?.includes('停止');
-  }, { timeout: 15000 });
-}
-
-async function stopPlayback(page: any): Promise<void> {
-  await page.click('[data-testid="editor-play"]');
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-play"]');
-    return btn && !btn.textContent?.includes('停止');
-  }, { timeout: 5000 });
-}
-
-async function enterRecordMode(page: any): Promise<void> {
-  await page.click('[data-testid="editor-record-toggle"]');
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
-    return btn && btn.textContent?.includes('録音停止');
-  }, { timeout: 5000 });
-}
-
-async function exitRecordMode(page: any): Promise<void> {
-  await page.click('[data-testid="editor-record-toggle"]');
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-record-toggle"]');
-    return btn && btn.textContent?.includes('録音モード');
-  }, { timeout: 5000 });
-}
-
-async function getRingsFromWindow(page: any): Promise<Array<{ beat: number; type?: string; duration?: number }>> {
-  return await page.evaluate(() => (window as any).__editorRings ?? []);
-}
-
-async function clearRings(page: any): Promise<void> {
-  await page.evaluate(() => {
-    (window as any).__editorRings = [];
-  });
-  await page.waitForTimeout(200);
-}
-
-test.describe('T103: レガシー再生中リングスタンプ完全削除', () => {
-  let errors: string[] = [];
-
-  test.beforeEach(async ({ page }) => {
-    errors = [];
+test.describe('T103: Legacy ring stamping removed in play mode, allowed in record mode', () => {
+  test('Space key ring stamping is blocked in play mode, allowed in record mode', async ({ page }) => {
+    const consoleErrors: string[] = []
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
-        const t = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+        const text = msg.text()
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+          consoleErrors.push(text)
+        }
       }
-    });
+    })
     page.on('pageerror', (err) => {
-      errors.push(err.message);
-    });
+      consoleErrors.push(err.message)
+    })
 
-    await page.goto('http://localhost:5173/#/editor');
-    await page.waitForLoadState('networkidle', { timeout: 10000 });
-    await waitForAudioReady(page);
-    await page.waitForTimeout(1000);
-    expect(errors).toHaveLength(0);
-  });
+    await page.goto('/#/editor')
+    await page.waitForLoadState('networkidle', { timeout: 15000 })
+    await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
 
-  test.afterEach(() => {
-    expect(errors).toHaveLength(0);
-  });
+    // Wait for initial render and canvas to be ready
+    await page.waitForTimeout(2000)
 
-  test('Negative Control: Play mode - Space key during playback does NOT add rings', async ({ page }) => {
-    // Step 1: Capture Initial State
-    await clearRings(page);
-    const initialRings = await getRingsFromWindow(page);
-    const initialCount = initialRings.length;
-    expect(initialCount).toBe(0);
+    // --- Step 1: Start from a clean chart ---
+    await page.locator('[data-testid="editor-clear"]').click()
+    await page.waitForTimeout(500)
 
-    // Step 2: Perform User Interaction - Start playback in PLAY mode (default)
-    await startPlayback(page);
-    await page.waitForTimeout(1000);
-
-    // Verify we're in play mode (not record mode)
-    const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
-    await expect(recordBtn).toHaveText('録音モード');
-
-    // Press Space key multiple times during playback
-    for (let i = 0; i < 5; i++) {
-      await page.keyboard.down('Space');
-      await page.waitForTimeout(100);
-      await page.keyboard.up('Space');
-      await page.waitForTimeout(200);
+    const getRingsLength = async () => {
+      return await page.evaluate(() => (window as any).__editorRings?.length ?? -1)
     }
 
-    // Stop playback
-    await stopPlayback(page);
-    await page.waitForTimeout(500);
-
-    // Step 3: Assert Resulting Transition - ring count has NOT changed
-    const finalRings = await getRingsFromWindow(page);
-    expect(finalRings.length).toBe(initialCount);
-  });
-
-  test('Positive Control: Record mode - Space key during playback DOES add rings', async ({ page }) => {
-    // Step 1: Capture Initial State
-    await clearRings(page);
-    const initialRings = await getRingsFromWindow(page);
-    const initialCount = initialRings.length;
-    expect(initialCount).toBe(0);
-
-    // Step 2: Perform User Interaction - Start playback
-    await startPlayback(page);
-    await page.waitForTimeout(1000);
-
-    // Step 3: Enter RECORD mode
-    await enterRecordMode(page);
-    await page.waitForTimeout(500);
-
-    // Verify we're in record mode
-    const recordBtn = page.locator('[data-testid="editor-record-toggle"]');
-    await expect(recordBtn).toHaveText('録音停止');
-
-    // Press Space key multiple times during playback in record mode
-    const expectedNewRings = 3;
-    for (let i = 0; i < expectedNewRings; i++) {
-      await page.keyboard.down('Space');
-      await page.waitForTimeout(150);
-      await page.keyboard.up('Space');
-      await page.waitForTimeout(300);
+    const getMode = async () => {
+      return await page.evaluate(() => (window as any).__editorMode ?? 'unknown')
     }
 
-    // Exit record mode (this commits any recorded trajectory but rings are added on keyup)
-    await exitRecordMode(page);
-    await page.waitForTimeout(500);
+    const getIsPlaying = async () => {
+      return await page.evaluate(() => (window as any).__editorIsPlaying ?? false)
+    }
 
-    // Stop playback
-    await stopPlayback(page);
-    await page.waitForTimeout(500);
+    let ringsBefore = await getRingsLength()
+    expect(ringsBefore).toBe(0)
 
-    // Step 4: Assert Resulting Transition - ring count HAS increased
-    const finalRings = await getRingsFromWindow(page);
-    expect(finalRings.length).toBeGreaterThanOrEqual(initialCount + expectedNewRings);
+    // --- Step 2: Start playback (play mode) ---
+    // Click the play button and wait for it to change to "停止"
+    await page.locator('[data-testid="editor-play"]').click()
 
-    // Verify the new rings have correct structure
-    const newRings = finalRings.slice(initialCount);
-    for (const ring of newRings) {
-      expect(ring.beat).toBeGreaterThanOrEqual(0);
-      expect(['single', 'hold']).toContain(ring.type ?? 'single');
-      if (ring.type === 'hold') {
-        expect(ring.duration).toBeGreaterThan(0.3);
+    // Wait for playback to start - button text changes to 停止
+    await expect(page.locator('[data-testid="editor-play"]')).toHaveText(/停止/, { timeout: 30000 })
+    await page.waitForTimeout(1000)
+
+    // Verify we're in play mode and playing
+    expect(await getMode()).toBe('play')
+    expect(await getIsPlaying()).toBe(true)
+
+    // --- Step 3: NEGATIVE CONTROL - In play mode, Space must NOT add rings ---
+    // Focus the canvas so keyboard events are captured
+    const canvas = page.locator('[data-testid="wave-preview-canvas"]')
+    await canvas.click({ position: { x: 100, y: 200 } })
+    await page.waitForTimeout(300)
+
+    const ringsBeforePlayMode = await getRingsLength()
+
+    // Press Space multiple times
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.down('Space')
+      await page.waitForTimeout(50)
+      await page.keyboard.up('Space')
+      await page.waitForTimeout(200)
+    }
+
+    await page.waitForTimeout(800)
+    const ringsAfterPlayMode = await getRingsLength()
+
+    // Rings should NOT have changed in play mode
+    expect(ringsAfterPlayMode).toBe(ringsBeforePlayMode)
+
+    // --- Step 4: Switch to record mode ---
+    await page.locator('[data-testid="editor-record-toggle"]').click()
+    await expect(page.locator('[data-testid="editor-record-toggle"]')).toHaveClass(/editor-record-active/, { timeout: 5000 })
+    await page.waitForTimeout(500)
+
+    // Verify mode changed to record while still playing
+    expect(await getMode()).toBe('record')
+    expect(await getIsPlaying()).toBe(true)
+
+    // Re-focus canvas
+    await canvas.click({ position: { x: 100, y: 200 } })
+    await page.waitForTimeout(300)
+
+    // --- Step 5: POSITIVE CONTROL - In record mode, Space MUST add rings ---
+    const ringsBeforeRecordMode = await getRingsLength()
+
+    // Press and hold Space briefly (simulating a tap)
+    await page.keyboard.down('Space')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('Space')
+    await page.waitForTimeout(600)
+
+    const ringsAfterFirstRing = await getRingsLength()
+
+    // One ring should have been added
+    expect(ringsAfterFirstRing).toBe(ringsBeforeRecordMode + 1)
+
+    // Add another ring at a different position
+    await page.keyboard.down('Space')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('Space')
+    await page.waitForTimeout(600)
+
+    const ringsAfterSecondRing = await getRingsLength()
+    expect(ringsAfterSecondRing).toBe(ringsBeforeRecordMode + 2)
+
+    // --- Step 6: Switch back to play mode ---
+    await page.locator('[data-testid="editor-record-toggle"]').click()
+    await expect(page.locator('[data-testid="editor-record-toggle"]')).not.toHaveClass(/editor-record-active/)
+    await page.waitForTimeout(500)
+
+    // Verify mode changed back to play
+    expect(await getMode()).toBe('play')
+    expect(await getIsPlaying()).toBe(true)
+
+    // Re-focus canvas
+    await canvas.click({ position: { x: 100, y: 200 } })
+    await page.waitForTimeout(300)
+
+    // --- Step 7: NEGATIVE CONTROL again - In play mode, Space must NOT add rings ---
+    const ringsBeforePlayMode2 = await getRingsLength()
+
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.down('Space')
+      await page.waitForTimeout(50)
+      await page.keyboard.up('Space')
+      await page.waitForTimeout(200)
+    }
+
+    await page.waitForTimeout(800)
+    const ringsAfterPlayMode2 = await getRingsLength()
+
+    // Rings should NOT have changed
+    expect(ringsAfterPlayMode2).toBe(ringsBeforePlayMode2)
+
+    // --- Final verification ---
+    expect(consoleErrors).toHaveLength(0)
+  })
+
+  test('record mode toggle works correctly when not playing', async ({ page }) => {
+    const consoleErrors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const text = msg.text()
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+          consoleErrors.push(text)
+        }
       }
+    })
+    page.on('pageerror', (err) => {
+      consoleErrors.push(err.message)
+    })
+
+    await page.goto('/#/editor')
+    await page.waitForLoadState('networkidle', { timeout: 15000 })
+    await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
+    await page.waitForTimeout(2000)
+
+    await page.locator('[data-testid="editor-clear"]').click()
+    await page.waitForTimeout(500)
+
+    const getRingsLength = async () => {
+      return await page.evaluate(() => (window as any).__editorRings?.length ?? -1)
     }
-  });
 
-  test('Mode switching verification: Rings only added in record mode, not in play mode', async ({ page }) => {
-    // Step 1: Capture Initial State
-    await clearRings(page);
-    let initialRings = await getRingsFromWindow(page);
-    expect(initialRings.length).toBe(0);
+    const getMode = async () => {
+      return await page.evaluate(() => (window as any).__editorMode ?? 'unknown')
+    }
 
-    // Step 2: Start playback
-    await startPlayback(page);
-    await page.waitForTimeout(1000);
+    // Without playback, pressing record toggle should NOT allow Space to add rings
+    // (because isPlayingRef.current is false)
+    await page.locator('[data-testid="editor-record-toggle"]').click()
+    await expect(page.locator('[data-testid="editor-record-toggle"]')).toHaveClass(/editor-record-active/)
+    await page.waitForTimeout(500)
 
-    // --- PHASE 1: Play mode (default) ---
-    // Press Space - should NOT add rings
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(150);
-    await page.keyboard.up('Space');
-    await page.waitForTimeout(300);
+    expect(await getMode()).toBe('record')
 
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(150);
-    await page.keyboard.up('Space');
-    await page.waitForTimeout(300);
+    const canvas = page.locator('[data-testid="wave-preview-canvas"]')
+    await canvas.click({ position: { x: 100, y: 200 } })
+    await page.waitForTimeout(300)
 
-    let ringsAfterPlayMode = await getRingsFromWindow(page);
-    expect(ringsAfterPlayMode.length).toBe(0);
+    const ringsBefore = await getRingsLength()
 
-    // --- PHASE 2: Switch to Record mode ---
-    await enterRecordMode(page);
-    await page.waitForTimeout(500);
+    // Try pressing Space - should NOT add rings because not playing
+    await page.keyboard.down('Space')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('Space')
+    await page.waitForTimeout(600)
 
-    // Press Space - SHOULD add rings
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(150);
-    await page.keyboard.up('Space');
-    await page.waitForTimeout(300);
+    const ringsAfter = await getRingsLength()
+    expect(ringsAfter).toBe(ringsBefore)
 
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(150);
-    await page.keyboard.up('Space');
-    await page.waitForTimeout(300);
+    // Now start playback
+    await page.locator('[data-testid="editor-play"]').click()
+    await expect(page.locator('[data-testid="editor-play"]')).toHaveText(/停止/, { timeout: 30000 })
+    await page.waitForTimeout(1000)
 
-    // Exit record mode
-    await exitRecordMode(page);
-    await page.waitForTimeout(500);
+    expect(await getMode()).toBe('record')
+    expect(await getIsPlaying()).toBe(true)
 
-    let ringsAfterRecordMode = await getRingsFromWindow(page);
-    expect(ringsAfterRecordMode.length).toBeGreaterThanOrEqual(2);
+    // Re-focus canvas
+    await canvas.click({ position: { x: 100, y: 200 } })
+    await page.waitForTimeout(300)
 
-    // --- PHASE 3: Back to Play mode ---
-    // Press Space again - should NOT add more rings
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(150);
-    await page.keyboard.up('Space');
-    await page.waitForTimeout(300);
+    // Now Space SHOULD add rings
+    await page.keyboard.down('Space')
+    await page.waitForTimeout(100)
+    await page.keyboard.up('Space')
+    await page.waitForTimeout(600)
 
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(150);
-    await page.keyboard.up('Space');
-    await page.waitForTimeout(300);
+    const ringsAfterPlaying = await getRingsLength()
+    expect(ringsAfterPlaying).toBe(ringsBefore + 1)
 
-    // Stop playback
-    await stopPlayback(page);
-    await page.waitForTimeout(500);
+    expect(consoleErrors).toHaveLength(0)
+  })
 
-    // Step 3: Assert Resulting Transition - ring count should not have changed after returning to play mode
-    const finalRings = await getRingsFromWindow(page);
-    expect(finalRings.length).toBe(ringsAfterRecordMode.length);
-  });
-});
+  test('hold ring creation with sustained Space press in record mode', async ({ page }) => {
+    const consoleErrors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const text = msg.text()
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
+          consoleErrors.push(text)
+        }
+      }
+    })
+    page.on('pageerror', (err) => {
+      consoleErrors.push(err.message)
+    })
+
+    await page.goto('/#/editor')
+    await page.waitForLoadState('networkidle', { timeout: 15000 })
+    await expect(page.locator('[data-testid="wave-preview"]')).toBeVisible()
+    await page.waitForTimeout(2000)
+
+    await page.locator('[data-testid="editor-clear"]').click()
+    await page.waitForTimeout(500)
+
+    const getRingsLength = async () => {
+      return await page.evaluate(() => (window as any).__editorRings?.length ?? -1)
+    }
+
+    const getRingsDetail = async () => {
+      return await page.evaluate(() => (window as any).__editorRings ?? [])
+    }
+
+    const getMode = async () => {
+      return await page.evaluate(() => (window as any).__editorMode ?? 'unknown')
+    }
+
+    const getIsPlaying = async () => {
+      return await page.evaluate(() => (window as any).__editorIsPlaying ?? false)
+    }
+
+    // Start playback
+    await page.locator('[data-testid="editor-play"]').click()
+    await expect(page.locator('[data-testid="editor-play"]')).toHaveText(/停止/, { timeout: 30000 })
+    await page.waitForTimeout(1000)
+
+    // Switch to record mode
+    await page.locator('[data-testid="editor-record-toggle"]').click()
+    await expect(page.locator('[data-testid="editor-record-toggle"]')).toHaveClass(/editor-record-active/)
+    await page.waitForTimeout(500)
+
+    expect(await getMode()).toBe('record')
+    expect(await getIsPlaying()).toBe(true)
+
+    const canvas = page.locator('[data-testid="wave-preview-canvas"]')
+    await canvas.click({ position: { x: 100, y: 200 } })
+    await page.waitForTimeout(300)
+
+    const ringsBefore = await getRingsLength()
+
+    // Press and HOLD Space for longer than 0.3 beats worth of time
+    // At 120 BPM, 1 beat = 500ms, so 0.3 beats = 150ms
+    // We'll hold for 400ms to trigger hold ring
+    await page.keyboard.down('Space')
+    await page.waitForTimeout(400)
+    await page.keyboard.up('Space')
+    await page.waitForTimeout(800)
+
+    const ringsAfter = await getRingsLength()
+    expect(ringsAfter).toBe(ringsBefore + 1)
+
+    // Verify the ring is a hold type with duration
+    const ringsDetail = await getRingsDetail()
+    const newRing = ringsDetail[ringsDetail.length - 1]
+    expect(newRing.type).toBe('hold')
+    expect(newRing.duration).toBeGreaterThan(0.3)
+
+    expect(consoleErrors).toHaveLength(0)
+  })
+})
