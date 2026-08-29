@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { BpmTimeline } from '../audio/bpmTimeline'
-import { loadAudio } from '../audio/loader'
+import { loadAudio, loadAudioFromFile } from '../audio/loader'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
@@ -235,6 +235,38 @@ export default function EditorScreen() {
       }
     }
   }, [])
+
+  const loadLocalFile = useCallback(async (file: File) => {
+    const mgr = AudioManager.getInstance()
+    await mgr.ensure()
+    const ctx = mgr.ctx
+    setLoadingAudio(true)
+    const buf = await loadAudioFromFile(file, ctx)
+    setLoadingAudio(false)
+    if (buf) {
+      if (sourceRef.current) {
+        try {
+          sourceRef.current.stop()
+        } catch {
+          /* already ended */
+        }
+        sourceRef.current.disconnect()
+        sourceRef.current = null
+        setPlaying(false)
+      }
+      setBuffer(buf)
+      setDurationMs(buf.duration * 1000)
+      setPositionMs(0)
+      positionRef.current = 0
+      const name = file.name.replace(/\.[^.]+$/, '')
+      if (name) setTitle(name)
+      setUrl(file.name)
+      setError(null)
+      notify(`${file.name} を読み込みました`)
+    } else {
+      setError('ローカル音声ファイルのデコードに失敗しました')
+    }
+  }, [notify])
 
   const playFrom = async (fromMs: number) => {
     const mgr = AudioManager.getInstance()
@@ -680,6 +712,38 @@ export default function EditorScreen() {
                   setPositionMs(0)
                 }}
               />
+            </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="audio-file-input">
+                ローカルファイル読込
+              </label>
+              <input
+                id="audio-file-input"
+                className="editor-file-input"
+                type="file"
+                accept="audio/*"
+                data-testid="audio-file-input"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void loadLocalFile(file)
+                  e.target.value = ''
+                }}
+              />
+            </div>
+            <div
+              className="editor-dropzone"
+              data-testid="editor-dropzone"
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'copy'
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                const file = e.dataTransfer.files?.[0]
+                if (file) void loadLocalFile(file)
+              }}
+            >
+              ここに音声ファイルをドラッグ＆ドロップ
             </div>
             <div className="editor-controls">
               <button type="button" onClick={toggle} disabled={loadingAudio} data-testid="editor-play">

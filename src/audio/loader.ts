@@ -12,3 +12,13 @@ export async function loadAudio(url: string, audioCtx: AudioContext): Promise<Au
     return null;
   }
 }
+
+export async function loadAudioFromFile(file: File, audioCtx: AudioContext): Promise<AudioBuffer | null> {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    return await audioCtx.decodeAudioData(arrayBuffer);
+  } catch (err) {
+    console.warn(`[audio] failed to decode local file ${file.name}`, err);
+    return null;
+  }
+}
