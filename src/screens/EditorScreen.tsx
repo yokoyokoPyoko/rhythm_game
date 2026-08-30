@@ -168,6 +168,14 @@ export default function EditorScreen() {
       // If loop finished without break, endIdx stays at segments.length (all overwritten)
       // Edge: if endBeat is exactly at a boundary, cum at that boundary == endBeat, so we correctly start from that index
       const keptAfter = segments.slice(endIdx)
+      ;(window as unknown as Record<string, unknown>).__lastFinishRecording = {
+        startBeat,
+        endBeat,
+        keptBefore,
+        newSegs,
+        keptAfter,
+        final: [...keptBefore, ...newSegs, ...keptAfter],
+      }
 
       setSegments([...keptBefore, ...newSegs, ...keptAfter])
       notify(`波形を記録 (${newSegs.length}セグメント)`)
@@ -347,7 +355,12 @@ export default function EditorScreen() {
   }
 
   const startRecording = useCallback(() => {
-    const rawStartBeat = timeline.msToBeat(positionMs)
+    let rawStartBeat: number
+    if (lastSeekBeatRef.current !== null && performance.now() - lastSeekTimeRef.current < 2000) {
+      rawStartBeat = lastSeekBeatRef.current
+    } else {
+      rawStartBeat = timeline.msToBeat(positionRef.current)
+    }
     const startBeat = quantizeBeat(rawStartBeat, snap)
     recStartBeatRef.current = startBeat
     const engine = new WaveEngine(segments, timeline, amplitude)
@@ -531,10 +544,14 @@ export default function EditorScreen() {
     )
   }
 
+  const lastSeekBeatRef = useRef<number | null>(null)
+  const lastSeekTimeRef = useRef(0)
   const seekTo = (ms: number) => {
     const clamped = Math.max(0, Math.min(ms, durationMs || ms))
     setPositionMs(clamped)
     positionRef.current = clamped
+    lastSeekBeatRef.current = timeline.msToBeat(clamped)
+    lastSeekTimeRef.current = performance.now()
     if (isPlaying) {
       void playFrom(clamped)
     }
