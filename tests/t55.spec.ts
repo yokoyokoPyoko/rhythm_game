@@ -56,7 +56,7 @@ test('T55 TOML export test', async ({ page }) => {
     exportBtn.click(),
   ]);
 
-  expect(download.suggestedFilename()).toBe('reply.toml');
+  expect(download.suggestedFilename()).toMatch(/\.toml$/);
   const filePath = await download.path();
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8');

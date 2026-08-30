@@ -55,10 +55,19 @@ function truncateSegmentsTo(
   return { kept, startY }
 }
 
+const slugify = (str: string): string => {
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 export default function EditorScreen() {
-  const [title, setTitle] = useState('Reply')
+  const [title, setTitle] = useState('')
   const [artist, setArtist] = useState('')
-  const [url, setUrl] = useState('/rhythm_game/audio/08.Reply.flac')
+  const [url, setUrl] = useState('')
   const [bpm, setBpm] = useState(120)
   const [amplitude, setAmplitude] = useState(1.0)
   const [scrollSpeed, setScrollSpeed] = useState(110)
@@ -602,7 +611,7 @@ export default function EditorScreen() {
       title: title.trim() || 'Untitled',
       artist: artist.trim(),
       bpm: safeBpm,
-      audio: url.trim() || '/rhythm_game/audio/08.Reply.flac',
+      audio: url.trim(),
       audio_offset: safeOffset,
       scroll_speed: safeScroll,
       amplitude: safeAmp,
@@ -613,14 +622,15 @@ export default function EditorScreen() {
   }, [safeBpm, url, audioOffset, scrollSpeed, amplitude, bpmChanges, segments, rings])
 
   const exportChart = () => {
+    const slug = slugify(title) || 'untitled'
     const toml = chartToToml(buildChart())
     const blob = new Blob([toml], { type: 'text/toml' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = 'reply.toml'
+    link.download = `${slug}.toml`
     link.click()
     URL.revokeObjectURL(link.href)
-    notify('reply.toml をエクスポートしました')
+    notify(`${slug}.toml をエクスポートしました`)
   }
 
   const importChart = useCallback((chart: Chart) => {
@@ -889,7 +899,7 @@ export default function EditorScreen() {
               プレイテスト
             </button>
             </div>
-            <p className="editor-hint">現在の状態をTOMLとして reply.toml に書き出し。プレイテストはエクスポートせずその場で確認</p>
+            <p className="editor-hint">現在の状態をTOMLとしてファイルに書き出し。プレイテストはエクスポートせずその場で確認</p>
           </section>
         </aside>
 

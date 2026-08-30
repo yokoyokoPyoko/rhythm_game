@@ -155,7 +155,7 @@ test('T99 Audio Offset: Music Control pane placement & playFrom behavioral refle
     page.waitForEvent('download'),
     exportBtn.click(),
   ])
-  expect(download.suggestedFilename()).toBe('reply.toml')
+  expect(download.suggestedFilename()).toMatch(/\.toml$/)
   const filePath = await download.path()
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8')

@@ -120,7 +120,7 @@ test('T100 Playwright test: Hold ring generation during recording (Space hold cr
     exportBtn.click(),
   ]);
 
-  expect(download.suggestedFilename()).toBe('reply.toml');
+  expect(download.suggestedFilename()).toMatch(/\.toml$/);
   const filePath = await download.path();
   if (filePath) {
     const fs = await import('fs');

@@ -466,7 +466,7 @@ test('T98 Wave Model Unification + Editor Recording Mode + DAW-style Zoom/Pan', 
     page.waitForEvent('download'),
     exportBtn.click(),
   ])
-  expect(download.suggestedFilename()).toBe('reply.toml')
+  expect(download.suggestedFilename()).toMatch(/\.toml$/)
   const filePath = await download.path()
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8')

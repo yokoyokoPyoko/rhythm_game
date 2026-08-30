@@ -63,7 +63,7 @@ test('T93 Playwright test: Chart settings extension (amplitude, scroll_speed, au
     exportBtn.click(),
   ]);
 
-  expect(download.suggestedFilename()).toBe('reply.toml');
+  expect(download.suggestedFilename()).toMatch(/\.toml$/);
   const filePath = await download.path();
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8');

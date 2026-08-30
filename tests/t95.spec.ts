@@ -95,7 +95,7 @@ test('T95 Playwright test: Hold ring (long press note) addition, editor configur
     exportBtn.click(),
   ]);
 
-  expect(download.suggestedFilename()).toBe('reply.toml');
+  expect(download.suggestedFilename()).toMatch(/\.toml$/);
   const filePath = await download.path();
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8');

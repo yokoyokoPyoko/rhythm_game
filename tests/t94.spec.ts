@@ -99,7 +99,7 @@ test('T94 Playwright test: Segment direction "stay" (horizontal hold) & real-tim
     exportBtn.click(),
   ]);
 
-  expect(download.suggestedFilename()).toBe('reply.toml');
+  expect(download.suggestedFilename()).toMatch(/\.toml$/);
   const filePath = await download.path();
   if (filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf8');

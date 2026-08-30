@@ -77,7 +77,7 @@ test('editor full workflow: import -> bpm/segment -> ring -> preview -> export -
     page.waitForEvent('download'),
     page.locator('[data-testid="editor-export"]').click(),
   ])
-  expect(download.suggestedFilename()).toBe('reply.toml')
+  expect(download.suggestedFilename()).toMatch(/\.toml$/)
   await expect(page.locator('[data-testid="editor-toast"]')).toContainText('エクスポートしました')
 
   // ⑥ プレイテストで内容確認
