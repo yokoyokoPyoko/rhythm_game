@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
+import { AudioCache, getBasename } from '../audio/AudioCache'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio, loadAudioFromFile } from '../audio/loader'
 import { parseChartText } from '../chart/loader'
@@ -71,7 +72,7 @@ export default function EditorScreen() {
   const [rings, setRings] = useState<RingDef[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
-  const [playtest, setPlaytest] = useState<Chart | null>(null)
+  const [playtest, setPlaytest] = useState<{ chart: Chart; buffer: AudioBuffer | null } | null>(null)
   const [selectedRing, setSelectedRing] = useState<number | null>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
@@ -269,6 +270,7 @@ export default function EditorScreen() {
       const name = file.name.replace(/\.[^.]+$/, '')
       if (name) setTitle(name)
       setUrl(file.name)
+      AudioCache.set(getBasename(file.name), buf)
       setError(null)
       notify(`${file.name} を読み込みました`)
     } else {
@@ -289,9 +291,12 @@ export default function EditorScreen() {
       if (buf) {
         setBuffer(buf)
         setDurationMs(buf.duration * 1000)
+        AudioCache.set(getBasename(url), buf)
       } else {
         audioFailed = true
       }
+    } else {
+      AudioCache.set(getBasename(url), buf)
     }
     if (sourceRef.current) {
       try {
@@ -875,7 +880,11 @@ export default function EditorScreen() {
             <button type="button" onClick={() => {
               if (isPlaying) stop()
               playtestActiveRef.current = true
-              setPlaytest(buildChart())
+              const chart = buildChart()
+              if (buffer) {
+                AudioCache.set(getBasename(chart.audio), buffer)
+              }
+              setPlaytest({ chart, buffer })
             }} data-testid="editor-playtest">
               プレイテスト
             </button>
@@ -1048,7 +1057,7 @@ export default function EditorScreen() {
 
       {playtest && (
         <div className="playtest-overlay">
-          <GameScreen playtestChart={playtest} onExit={closePlaytest} />
+          <GameScreen playtest={playtest} onExit={closePlaytest} />
         </div>
       )}
     </div>

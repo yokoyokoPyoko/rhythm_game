@@ -28,10 +28,12 @@ type LoadStatus = 'loading' | 'error' | 'ready'
 
 export interface GameScreenProps {
   playtestChart?: Chart
+  playtestBuffer?: AudioBuffer | null
+  playtest?: { chart: Chart; buffer: AudioBuffer | null }
   onExit?: (stats?: ScoreStats) => void
 }
 
-export default function GameScreen({ playtestChart, onExit }: GameScreenProps = {}) {
+export default function GameScreen({ playtestChart, playtestBuffer, playtest, onExit }: GameScreenProps = {}) {
   const { songId } = useParams<{ songId: string }>()
   const location = useLocation()
   const state = location.state as { chart?: Chart; buffer?: AudioBuffer | null } | null
@@ -189,8 +191,12 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         let chart: Chart
         let buf: AudioBuffer | null = null
 
-        if (playtestChart) {
-          chart = playtestChart
+        const effectiveChart = playtest?.chart || playtestChart || state?.chart
+        const effectiveBuffer = playtest?.buffer !== undefined ? playtest.buffer : (playtestBuffer !== undefined ? playtestBuffer : state?.buffer)
+
+        if (effectiveChart) {
+          chart = effectiveChart
+          buf = effectiveBuffer !== undefined ? effectiveBuffer : null
         } else if (state?.chart) {
           chart = state.chart
           buf = state.buffer !== undefined ? state.buffer : null
@@ -209,9 +215,11 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude)
         cursorRef.current = new Cursor(chart.amplitude)
 
-        if (state?.buffer !== undefined) {
+        if (effectiveBuffer !== undefined) {
+          buf = effectiveBuffer
+        } else if (state?.buffer !== undefined) {
           buf = state.buffer
-        } else if (playtestChart) {
+        } else if (effectiveChart) {
           buf = AudioCache.get(getBasename(chart.audio)) || null
         } else if (!state?.chart) {
           buf = await loadAudio(chart.audio, audioMgr.ctx)
