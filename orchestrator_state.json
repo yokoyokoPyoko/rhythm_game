@@ -499,17 +499,12 @@
       "finished": 1788092710.4371612
     },
     "T114": {
-      "attempts": 10,
+      "attempts": 15,
       "status": "running",
-      "started": 1788104531.824973,
+      "started": 1788107261.293073,
       "cycles": 2,
       "gate_b_golden": false,
-      "sessions": {
-        "coder": "ses_facc717f1ffecR2I1lmBh1tXH9",
-        "postmortem": "ses_facc4c4d0ffefVu8O8dCQ9Yawd",
-        "reviewer": "ses_fad262655ffe5HZ9ez1hiCMS3X",
-        "qa": "ses_facc31c54ffeIxpaniw1io1FWI"
-      }
+      "sessions": {}
     }
   },
   "consecutive_no_action": 0

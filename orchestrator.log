@@ -4596,3 +4596,5 @@ Changes not staged for commit:
 2026-08-31 00:40:09,263 [INFO]   Plan: T122 <- 振幅(amplitude)1以上の設定対応とローダー閾値修正: BpmEditorの振幅入力上限(1.0)を撤廃し1以上を設定可能にする。またloader.tsの旧px値判定閾値を1.5から10に修正し、1以上の正規化振幅が誤ってピクセル値として除算されるバグを防止する。
 2026-08-31 00:42:10,823 [WARNING] Timeout reached (40s). Terminating process.
 2026-08-31 00:42:11,824 [INFO] Orchestrator range execution: 9 tasks (from=T114, to=T122, budget=600m)
+2026-08-31 01:27:40,290 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-31 01:27:41,292 [INFO] Orchestrator range execution: 9 tasks (from=T114, to=T122, budget=600m)
