@@ -415,7 +415,7 @@
     },
     "T107": {
       "attempts": 4,
-      "status": "running",
+      "status": "passed",
       "started": 1788053139.1163266,
       "cycles": 1,
       "sessions": {
@@ -423,11 +423,13 @@
         "postmortem": "ses_fafa8f83effeZyRGhXfFNWYVzO",
         "coder": "ses_fafb6b647ffetBcDjPkUAOkG56"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true,
+      "finished": 1788054456.3164477
     },
     "T108": {
       "attempts": 0,
-      "status": "pending"
+      "status": "running",
+      "started": 1788054456.3175628
     },
     "T109": {
       "attempts": 0,
