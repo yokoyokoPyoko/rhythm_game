@@ -467,7 +467,8 @@
       "gate_b_golden": false,
       "sessions": {
         "coder": "ses_fad8d0604ffey42OdigSDwYtA7",
-        "postmortem": "ses_fad8d452dffee2PcwGx8zA2Qnl"
+        "postmortem": "ses_fad8d452dffee2PcwGx8zA2Qnl",
+        "reviewer": "ses_fad8a01f2ffeE9444tm3m65ZAl"
       }
     }
   },
