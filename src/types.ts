@@ -10,6 +10,7 @@ export interface Chart {
   audio_offset: number;
   scroll_speed: number;
   amplitude: number;
+  start_position: number;
   bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
 }
 export interface SongEntry {

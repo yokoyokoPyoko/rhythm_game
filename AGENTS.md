@@ -919,6 +919,21 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T121] スクロール速度 (`scroll_speed`) のゲームプレイ反映修正
+
+`src/game/ringSpawner.ts` + `src/screens/GameScreen.tsx`:
+- **動的スクロール速度適用**: `RingSpawner` 内等でハードコードされていた定数 `TW_SCROLL` を廃止し、チャートの `scroll_speed` を動的に反映させてノーツのスクロール速度を正しく制御・描画する。
+
+---
+
+### [T122] 振幅 (`amplitude`) 1以上の設定対応とローダー閾値修正
+
+`src/screens/editor/BpmEditor.tsx` + `src/chart/loader.ts`:
+- **振幅入力制限撤廃**: `BpmEditor` の振幅入力上限（`max={1.0}`）を撤廃し、1以上（例: `max={5.0}`等）を設定可能にする。
+- **ローダー閾値修正**: `chart/loader.ts` の旧ピクセル値判定閾値を `>1.5` から `>10` に修正し、1以上の正規化振幅が誤ってピクセル値として除算されないようにする。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
