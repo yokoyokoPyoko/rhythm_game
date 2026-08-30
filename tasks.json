@@ -507,5 +507,37 @@
       "T108"
     ],
     "ui": true
+  },
+  {
+    "id": "T110",
+    "desc": "ホーム画面ローカル譜面・音源DnD（文化祭GDriveワークフロー対応）: SelectScreenに譜面TOMLと音源ファイルの個別ドラッグ＆ドロップ＋ファイル選択UIを追加。TOML内audioはファイル名のみで統一し、basename一致で紐付け。GameScreenは /play/custom で {chart, buffer} をin-memory受け取り、ChartCache/AudioCache(Map<basename,AudioBuffer>)で共有。順不同・片方のみでもメトロノームでプレイ可。pairが揃ったら「この譜面でプレイ」活性化。",
+    "depends_on": [
+      "T109"
+    ],
+    "ui": true
+  },
+  {
+    "id": "T111",
+    "desc": "プレイテスト音源共有の修正: EditorScreenのplaytestを {chart, buffer} 直渡しにし、T110のAudioCacheを再利用してGameScreenがloadAudio再fetchせずに再生。ローカルFile時はurl=file.nameでfetch不能になるメトロノームのみ問題を解消。TOML audioはbasenameのみ。",
+    "depends_on": [
+      "T110"
+    ],
+    "ui": true
+  },
+  {
+    "id": "T112",
+    "desc": "振幅の正規化(0.0-1.0)化: Chart.amplitudeの単位をpxから正規化(1.0=上端/-1.0=下端/0.0=中央)に変更。NORM_TO_PX=130は描画層のみの定数に。waveEngine/cursorは正規化で計算し最後にNORM_TO_PXを乗算。BpmEditorは0.1-1.0スライダー。loaderは旧px値(>1.5)をamplitude/130にマイグレーション。serializeは正規化のみ出力。縦目盛りは追加しない。BPMが変わっても拍基準のキリの良さが崩れないことを検証。",
+    "depends_on": [
+      "T111"
+    ],
+    "ui": true
+  },
+  {
+    "id": "T113",
+    "desc": "replyハードコード依存排除: EditorScreenのlink.download='reply.toml'や初期title/url='/rhythm_game/audio/08.Reply.flac'固定を汎用化。exportはslugify(title)||'untitled'で${slug}.toml。初期title/urlは空文字。tests 5件のsuggestedFilename()=reply.toml固定期待をtoMatch(/\\.toml$/)に緩和。",
+    "depends_on": [
+      "T112"
+    ],
+    "ui": true
   }
 ]

@@ -427,8 +427,8 @@
       "finished": 1788054456.3164477
     },
     "T108": {
-      "attempts": 4,
-      "status": "running",
+      "attempts": 13,
+      "status": "passed",
       "started": 1788054456.3175628,
       "cycles": 1,
       "sessions": {
@@ -436,7 +436,8 @@
         "postmortem": "ses_faf9fd4e8ffemSWgT8dOxbDFYP",
         "coder": "ses_faf9b5902ffei23ju7uxs4MAGG"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true,
+      "finished": 1788059068.1936274
     },
     "T109": {
       "attempts": 0,

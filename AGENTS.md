@@ -814,6 +814,50 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T110] ホーム画面ローカル譜面・音源ドラッグ＆ドロップ（文化祭GDriveワークフロー対応）
+
+`src/screens/SelectScreen.tsx` + `src/App.tsx` + `src/screens/GameScreen.tsx` + `src/audio/loader.ts` + `src/chart/loader.ts` + `src/chart/serialize.ts`:
+- **ファイル名のみ統一**: TOML内 `audio` はファイル名のみ（例 `08.Reply.flac`）。`loader.ts` は旧フルパスを `basename` 抽出で互換吸収、`serialize.ts` は常にbasenameのみ出力。
+- **ホームUI**: `SelectScreen` に譜面TOML (`input[data-testid="home-chart-input"] accept=".toml"`) と音源 (`input[data-testid="home-audio-input"] accept="audio/*"`) の個別ファイル選択 + 画面全体 `dropzone[data-testid="home-dropzone"]` を追加。`DataTransfer.files` で拡張子振り分け。
+- **紐付け**: TOMLの `audio` basename と音源 `file.name` の完全一致で紐付け。順不同・片方のみでもメトロノームプレイ可。揃ったら「この譜面でプレイ」ボタンを活性化。
+- **共有キャッシュ**: `src/audio/AudioCache.ts` / `src/chart/cache.ts`（または AudioManager 内 `Map<basename, AudioBuffer>`）で `chart` / `buffer` を共有。`EditorScreen` と `GameScreen` で再利用。
+- **プレイ遷移**: `navigate('/play/custom', {state:{chart, buffer}})` で in-memory 受け渡し。`GameScreen` は `location.state` があれば `loadSongList/loadChart/loadAudio` をスキップ。
+- 完了条件: Playwrightで両ファイルに `setInputFiles` → ボタン活性 → クリックでゲームcanvas表示 → コンソールエラー0。順序逆パターンも検証。
+
+---
+
+### [T111] プレイテスト音源共有の修正
+
+`src/screens/EditorScreen.tsx` + `src/screens/GameScreen.tsx` + `src/audio/AudioCache.ts`:
+- `EditorScreen` の `playtest` stateを `{chart: Chart, buffer: AudioBuffer|null}` 直渡しに変更。`playFrom` の `buffer` を保持。
+- `GameScreen` は `playtestBuffer` があれば `loadAudio(chart.audio)` の再fetchをスキップ。ローカルFile時 `url=file.name` でfetch不能になるメトロノームのみ問題を解消。
+- TOML `audio` はbasenameのみ（T110で統一）。
+- 完了条件: エディタでローカル音源読込→再生→プレイテストで `AudioBuffer` が再生され、メトロノームのみにならないことを自動テストで検証。
+
+---
+
+### [T112] 振幅の正規化（0.0〜1.0）化
+
+`src/types.ts` + `src/game/waveEngine.ts` + `src/game/cursor.ts` + `src/screens/editor/BpmEditor.tsx` + `src/screens/editor/WavePreview.tsx` + `src/chart/loader.ts` + `src/chart/serialize.ts`:
+- **正規化**: `Chart.amplitude` の単位を `px` から正規化 `0.0〜1.0` に変更（`1.0=上端 / -1.0=下端 / 0.0=中央`）。`NORM_TO_PX=130` は描画層のみの定数。
+- **エンジン**: `waveEngine.ts` は正規化で `moveNorm = 2 * normAmp * (beats / WAVELENGTH_BEATS)` を計算し最後に `* NORM_TO_PX` で `px` に変換。`cursor.ts` は `speedNorm = 2*normAmp/4` → `speedPx = speedNorm * NORM_TO_PX / beatSec`。
+- **エディタUI**: `BpmEditor.tsx` の `#amplitude` を `0.1〜1.0 step 0.1` のスライダー/数値に。ラベル「振幅 (正規化 0.0-1.0)」。
+- **マイグレーション**: `loader.ts` は旧px値（`>1.5`）を `amplitude/130` に変換。`serialize.ts` は正規化のみ出力。
+- **縦目盛りは追加しない**。BPMが変わっても拍基準のキリの良さが崩れないこと。
+- 完了条件: 同一Chart(normAmp=1.0)で `BPM 120` と `180` の `waveYAt(2)` の正規化値が一致すること、旧px値 `130` が `1.0` に読み込まれることを自動テストで検証。
+
+---
+
+### [T113] replyハードコード依存排除
+
+`src/screens/EditorScreen.tsx` + `tests/*.spec.ts`:
+- `EditorScreen` の `link.download='reply.toml'` を `slugify(title) || 'untitled'` で `${slug}.toml` に汎用化。初期 `title=''` `url=''` に変更。ヒント文も汎用化。
+- `tests` 5件の `suggestedFilename()=reply.toml` 固定期待を `toMatch(/\.toml$/)` に緩和。
+- TOML内 `audio` のbasename統一はT110で対応。
+- 完了条件: 空タイトルで `untitled.toml`、タイトル「My Song」で `my-song.toml` がダウンロードされることを自動テストで検証。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
