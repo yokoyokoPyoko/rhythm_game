@@ -39,7 +39,7 @@ export class WaveEngine {
     segments: Segment[],
     bpmTimeline: BpmTimeline,
     amplitude = 1.0,
-    startPosition = 0,
+    startPosition = 0.0,
   ) {
     this.timeline = bpmTimeline;
     this.amplitude = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0;

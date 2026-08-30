@@ -789,6 +789,9 @@ Specification:
 {context_hints}
 
 Constraints:
+- STRICTLY use the `edit` tool for all code modifications.
+- MUST update `src/chart/loader.ts` to support `audio_offset`, `scroll_speed`, `amplitude`.
+- NEVER output full file contents in your response. Only output the specific changes using the `edit` tool.
 - Ensure zero TypeScript compiler errors (`tsc --noEmit`).
 - Do NOT run Playwright tests or browser tests (npx playwright test). Rely solely on tsc for static verification.
 - Strict minimal dark theme (Linear/Vercel style). No gaming/RGB glows.
