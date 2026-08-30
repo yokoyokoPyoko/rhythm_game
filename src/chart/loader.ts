@@ -71,6 +71,9 @@ export function parseChartText(text: string, source = 'chart'): Chart {
     amplitude: isFiniteNumber(raw.amplitude) && raw.amplitude > 0 
       ? (raw.amplitude > 1.5 ? raw.amplitude / 130 : raw.amplitude) 
       : 1.0,
+    start_position: isFiniteNumber(raw.start_position)
+      ? Math.max(-1.0, Math.min(1.0, raw.start_position))
+      : 0.0,
     bpm_changes: parseBpmChanges(raw.bpm_changes),
     segments: parseSegments(raw.segments),
     rings: parseRings(raw.rings),
