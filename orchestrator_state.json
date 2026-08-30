@@ -1,9 +1,9 @@
 {
   "started_at": 1787099390.9580224,
   "models": {
-    "coder": "google/gemini-3.1-flash-lite",
+    "coder": "opencode/muse-spark-1.2-contributor-free",
     "qa": "",
-    "reviewer": "opencode/muse-spark-1.2-contributor-free",
+    "reviewer": "google/gemini-3.5-flash-lite",
     "postmortem": "opencode/muse-spark-1.2-contributor-free"
   },
   "tasks": {
@@ -501,12 +501,10 @@
     "T114": {
       "attempts": 23,
       "status": "running",
-      "started": 1788134151.9637744,
+      "started": 1788134340.6213524,
       "cycles": 1,
       "gate_b_golden": false,
-      "sessions": {
-        "coder": "ses_faae60ec9ffeB9fKUlghWH8uoN"
-      }
+      "sessions": {}
     }
   },
   "consecutive_no_action": 0
