@@ -11,6 +11,11 @@ interface WavePoint {
   y: number;
 }
 
+function sanitizeStartPosition(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 0;
+  return Math.max(-1, Math.min(1, v));
+}
+
 function sanitizeBeat(value: number): number {
   if (!Number.isFinite(value) || value < 0) {
     return 0;
@@ -28,17 +33,25 @@ export class WaveEngine {
   private readonly timeline: BpmTimeline;
   private readonly points: WavePoint[];
   private readonly amplitude: number;
+  private readonly startPosition: number;
 
-  constructor(segments: Segment[], bpmTimeline: BpmTimeline, amplitude = 1.0) {
+  constructor(
+    segments: Segment[],
+    bpmTimeline: BpmTimeline,
+    amplitude = 1.0,
+    startPosition = 0,
+  ) {
     this.timeline = bpmTimeline;
     this.amplitude = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0;
+    this.startPosition = sanitizeStartPosition(startPosition);
     this.points = this.buildPoints(segments ?? []);
   }
 
   private buildPoints(segments: Segment[]): WavePoint[] {
     const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
     const waveBottom = TW_CENTER_Y + this.amplitude * NORM_TO_PX;
-    const points: WavePoint[] = [{ beat: 0, y: waveTop }];
+    const startY = TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
+    const points: WavePoint[] = [{ beat: 0, y: startY }];
     let beat = 0;
     let currentY = waveTop;
     for (const seg of segments) {

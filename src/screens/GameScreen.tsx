@@ -175,7 +175,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     startedRef.current = false
     keysRef.current.up = false
     keysRef.current.down = false
-    cursorRef.current = new Cursor()
+    const chart = chartRef.current
+    const amp = chart?.amplitude ?? 1.0
+    const sp = chart?.start_position ?? 0.0
+    cursorRef.current = new Cursor(amp, sp)
     spawnerRef.current = new RingSpawner()
     scoreRef.current = new ScoreManager()
     ringsRef.current = []
@@ -212,8 +215,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes)
         chartRef.current = chart
         timelineRef.current = timeline
-        waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude)
-        cursorRef.current = new Cursor(chart.amplitude)
+        waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)
+        cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
 
         if (effectiveBuffer !== undefined) {
           buf = effectiveBuffer

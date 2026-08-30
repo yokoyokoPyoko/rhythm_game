@@ -27,6 +27,7 @@ export interface WavePreviewProps {
   bpmChanges?: BpmChange[]
   rings?: RingDef[]
   amplitude?: number
+  startPosition?: number
   snap?: number
   selectedRing?: number | null
   positionMs?: number
@@ -46,6 +47,7 @@ export default function WavePreview({
   bpmChanges = [],
   rings = [],
   amplitude = 1.0,
+  startPosition = 0.0,
   snap = 0.25,
   selectedRing = null,
   positionMs,
@@ -107,9 +109,10 @@ export default function WavePreview({
     ctx.clearRect(0, 0, cssW, cssH)
 
     const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
+    const startPosNorm = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
     const ampPx = ampNorm * 130
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-    const engine = new WaveEngine(segments, timeline, ampNorm)
+    const engine = new WaveEngine(segments, timeline, ampNorm, startPosNorm)
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H

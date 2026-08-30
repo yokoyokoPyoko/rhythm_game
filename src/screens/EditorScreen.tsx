@@ -78,6 +78,7 @@ export default function EditorScreen() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [snap, setSnap] = useState(0.25)
+  const [startPosition, setStartPosition] = useState(0.0)
   const [rings, setRings] = useState<RingDef[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
@@ -381,17 +382,17 @@ export default function EditorScreen() {
     }
     const startBeat = quantizeBeat(rawStartBeat, snap)
     recStartBeatRef.current = startBeat
-    const engine = new WaveEngine(segments, timeline, amplitude)
-    const startY = segments.length > 0 ? engine.waveYAt(startBeat) : GAME_CENTER_Y
+    const engine = new WaveEngine(segments, timeline, amplitude, startPosition)
+    const startY = segments.length > 0 ? engine.waveYAt(startBeat) : engine.waveYAt(0)
     recStartYRef.current = startY
-    const cursor = new Cursor(amplitude)
+    const cursor = new Cursor(amplitude, startPosition)
     cursor.y = startY
     recCursorRef.current = cursor
     recTrajRef.current = [{ beat: startBeat, y: startY, down: false }]
     modeRef.current = 'record'
     setMode('record')
     setRecLive({ beat: startBeat, y: startY, trajectory: recTrajRef.current.slice() })
-  }, [timeline, segments, amplitude, positionMs])
+  }, [timeline, segments, amplitude, startPosition, positionMs])
 
   const stop = () => {
     const src = sourceRef.current
@@ -607,6 +608,7 @@ export default function EditorScreen() {
     const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
     const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
     const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
+    const safeStartPosition = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
     return {
       title: title.trim() || 'Untitled',
       artist: artist.trim(),
@@ -615,11 +617,12 @@ export default function EditorScreen() {
       audio_offset: safeOffset,
       scroll_speed: safeScroll,
       amplitude: safeAmp,
+      start_position: safeStartPosition,
       bpm_changes: bpmChanges,
       segments,
       rings,
     }
-  }, [safeBpm, url, audioOffset, scrollSpeed, amplitude, bpmChanges, segments, rings])
+  }, [safeBpm, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings])
 
   const exportChart = () => {
     const slug = slugify(title) || 'untitled'
@@ -641,6 +644,7 @@ export default function EditorScreen() {
     setAudioOffset(chart.audio_offset)
     setScrollSpeed(chart.scroll_speed)
     setAmplitude(chart.amplitude)
+    setStartPosition(chart.start_position ?? 0.0)
     setBpmChanges(chart.bpm_changes)
     setSegments(chart.segments)
     setRings(chart.rings)
@@ -878,6 +882,8 @@ export default function EditorScreen() {
               onAmplitudeChange={setAmplitude}
               scrollSpeed={scrollSpeed}
               onScrollSpeedChange={setScrollSpeed}
+              startPosition={startPosition}
+              onStartPositionChange={setStartPosition}
             />
           </section>
 
@@ -953,6 +959,7 @@ export default function EditorScreen() {
             bpmChanges={bpmChanges}
             rings={rings}
             amplitude={amplitude}
+            startPosition={startPosition}
             snap={snap}
             selectedRing={selectedRing}
             positionMs={positionMs}

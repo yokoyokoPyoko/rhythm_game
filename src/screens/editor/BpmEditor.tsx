@@ -24,6 +24,8 @@ interface BpmEditorProps {
   onAmplitudeChange: (val: number) => void
   scrollSpeed: number
   onScrollSpeedChange: (val: number) => void
+  startPosition: number
+  onStartPositionChange: (val: number) => void
 }
 
 export default function BpmEditor({
@@ -35,6 +37,8 @@ export default function BpmEditor({
   onAmplitudeChange,
   scrollSpeed,
   onScrollSpeedChange,
+  startPosition,
+  onStartPositionChange,
 }: BpmEditorProps) {
   const tapTimesRef = useRef<number[]>([])
   const [tapCount, setTapCount] = useState(0)
@@ -126,6 +130,25 @@ export default function BpmEditor({
           value={Number.isFinite(scrollSpeed) ? scrollSpeed : 110}
           onChange={(e) => onScrollSpeedChange(Number(e.target.value))}
         />
+      </div>
+
+      <div className="editor-field">
+        <label className="editor-label" htmlFor="start-position">
+          開始位置 (-1.0=下端, 0=中央, 1.0=上端)
+        </label>
+        <input
+          id="start-position"
+          className="editor-input"
+          type="range"
+          min={-1}
+          max={1}
+          step={0.1}
+          value={Number.isFinite(startPosition) ? startPosition : 0}
+          onChange={(e) => onStartPositionChange(Number(e.target.value))}
+        />
+        <span className="editor-hint" style={{display: 'block', marginTop: '4px'}}>
+          現在値: {Number.isFinite(startPosition) ? startPosition.toFixed(1) : '0.0'}
+        </span>
       </div>
 
       <div className="editor-field">
