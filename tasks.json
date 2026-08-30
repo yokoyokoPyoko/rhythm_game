@@ -539,5 +539,13 @@
       "T112"
     ],
     "ui": true
+  },
+  {
+    "id": "T114",
+    "desc": "スタート位置指定: Chartにstart_position(-1.0〜1.0, 0.0=中央)を追加。WaveEngine/Cursorは初期Y=CENTER - start_position * NORM_TO_PXで開始。旧チャート互換は中央(0.0)にリセット。loaderは未定義時0.0、serializeは正規化で出力。Editorの譜面情報ペインに-1.0〜1.0スライダー追加。BPMが変わっても拍基準でスタート位置が固定されることを検証。",
+    "depends_on": [
+      "T113"
+    ],
+    "ui": true
   }
 ]

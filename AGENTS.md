@@ -858,6 +858,17 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T114] スタート位置指定
+
+`src/types.ts` + `src/game/waveEngine.ts` + `src/game/cursor.ts` + `src/chart/loader.ts` + `src/chart/serialize.ts` + `src/screens/EditorScreen.tsx` + `src/screens/GameScreen.tsx`:
+- `Chart` に `start_position: number` (-1.0〜1.0, 0.0=中央, 1.0=上端, -1.0=下端) を追加。TOMLでは `start_position = 0.0`。
+- `WaveEngine` / `Cursor` は初期Yを `TW_CENTER_Y - start_position * NORM_TO_PX` で開始（T112の正規化と同スケール）。旧上端固定を廃止。
+- `loader.ts` は未定義時 `0.0` にマイグレーション（旧チャートは中央にリセット）。`serialize.ts` は正規化で出力。
+- エディタの譜面情報ペインに `-1.0〜1.0 step 0.1` スライダー (`#start-position`) を追加。
+- 完了条件: `start_position=0.0` で `waveYAt(0)==CENTER`, `1.0` で上端, `-1.0` で下端になること、旧チャート読み込みで中央になることを自動テストで検証。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
