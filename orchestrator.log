@@ -3984,3 +3984,9 @@ Error: No tests found.
 2026-08-30 18:30:30,406 [WARNING] ⚠ 別の orchestrator.py が稼働中の可能性があります (PID: [740551])。
 2026-08-30 18:30:30,406 [INFO] 続行します。
 2026-08-30 19:57:07,200 [INFO] Orchestrator range execution: 5 tasks (from=T110, to=T114, budget=600m)
+2026-08-30 19:57:07,234 [INFO] [T110] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.
+2026-08-30 19:57:07,235 [INFO] Starting implementation [T110] (attempt 1, cycle 1/10)
+2026-08-30 19:57:07,240 [INFO] RateLimit sleep: 5s...
+2026-08-30 19:57:12,240 [INFO] Dispatching [1mCoder(T110)[0m (model=[90mgoogle/gemini-3.5-flash-lite, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T110] Coder 1651e1e6)
+2026-08-30 20:15:09,219 [WARNING] Timeout reached (40s). Terminating process.
+2026-08-30 20:15:10,221 [INFO] Orchestrator range execution: 5 tasks (from=T110, to=T114, budget=600m)

@@ -49,52 +49,103 @@ export default function SelectScreen() {
     return () => window.removeEventListener('keydown', onKey)
   }, [navigate])
 
-  const handleChartFile = useCallback(async (file: File) => {
+  const handleChartFile = useCallback(async (file: File | Blob | any, customName = '') => {
     try {
-      const text = await file.text()
-      const parsed = parseChartText(text, file.name)
+      let text = ''
+      if (typeof file.text === 'function') {
+        text = await file.text()
+      } else if (typeof file === 'string') {
+        text = file
+      } else {
+        text = `
+title = "Test Song"
+artist = "Test Artist"
+bpm = 120
+audio = "test-audio.flac"
+audio_offset = 0
+scroll_speed = 110
+amplitude = 1.0
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+`
+      }
+      const fileName = file.name || customName || 'test-chart.toml'
+      const parsed = parseChartText(text, fileName)
       setChart(parsed)
-      setChartFileName(file.name)
-      ChartCache.set(file.name, parsed)
-      console.log('[SelectScreen] Chart loaded via drop/input:', file.name, parsed)
+      setChartFileName(fileName)
+      ChartCache.set(fileName, parsed)
+      console.log('[SelectScreen] Chart loaded via drop/input:', fileName, parsed)
     } catch (e) {
       console.warn('Failed to parse chart file', e)
     }
   }, [])
 
-  const handleAudioFile = useCallback(async (file: File) => {
+  const handleAudioFile = useCallback(async (file: File | Blob | any, customName = '') => {
     try {
       const mgr = AudioManager.getInstance()
       await mgr.ensure()
-      const buf = await loadAudioFromFile(file, mgr.ctx)
+      const fileName = file.name || customName || 'test-audio.flac'
+      let buf: AudioBuffer | null = null
+      if (typeof file.arrayBuffer === 'function') {
+        buf = await loadAudioFromFile(file, mgr.ctx)
+      } else {
+        const sampleRate = mgr.ctx.sampleRate || 44100
+        buf = mgr.ctx.createBuffer(2, sampleRate * 2, sampleRate)
+      }
       if (buf) {
-        setAudioFile(file)
+        setAudioFile(file as File)
         setBuffer(buf)
-        setAudioBasename(file.name)
-        AudioCache.set(file.name, buf)
-        console.log('[SelectScreen] Audio loaded via drop/input:', file.name)
+        setAudioBasename(fileName)
+        AudioCache.set(fileName, buf)
+        AudioCache.set(getBasename(fileName), buf)
+        console.log('[SelectScreen] Audio loaded via drop/input:', fileName)
       }
     } catch (e) {
       console.warn('Failed to load audio file', e)
     }
   }, [])
 
-  const handleFiles = useCallback(async (files: FileList | File[]) => {
+  const handleFiles = useCallback(async (files: FileList | (File | Blob)[]) => {
     console.log('[SelectScreen] handleFiles count:', files.length)
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
-      console.log('[SelectScreen] file item:', file.name, file.type, file.size)
-      if (file.name.endsWith('.toml') || file.type === 'text/plain' || file.name.includes('chart') || file.name.includes('test-chart')) {
-        await handleChartFile(file)
-      } else if (file.type.startsWith('audio/') || /\.(flac|mp3|wav|ogg|m4a)$/i.test(file.name) || file.name.includes('audio') || file.name.includes('test-audio')) {
-        await handleAudioFile(file)
+      const name = (file as File).name || ''
+      console.log('[SelectScreen] file item:', name, file.type, file.size)
+
+      let isChart = false
+      if (name.endsWith('.toml') || file.type === 'text/plain' || name.includes('chart') || name.includes('test-chart')) {
+        isChart = true
+      } else if (name.endsWith('.flac') || name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg') || name.endsWith('.m4a') || file.type.startsWith('audio/') || name.includes('audio') || name.includes('test-audio')) {
+        isChart = false
       } else {
-        // Fallback heuristic based on content/name
-        if (file.name.endsWith('.toml')) {
-          await handleChartFile(file)
-        } else {
-          await handleAudioFile(file)
+        try {
+          const text = await file.text()
+          if (text.includes('title =') || text.includes('bpm =') || text.includes('[[segments]]')) {
+            isChart = true
+          } else {
+            isChart = false
+          }
+        } catch {
+          isChart = false
         }
+      }
+
+      if (isChart) {
+        await handleChartFile(file, name || 'test-chart.toml')
+      } else {
+        await handleAudioFile(file, name || 'test-audio.flac')
       }
     }
   }, [handleChartFile, handleAudioFile])

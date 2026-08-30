@@ -756,6 +756,7 @@ Specification:
 
 Constraints:
 - Ensure zero TypeScript compiler errors (`tsc --noEmit`).
+- Do NOT run Playwright tests or browser tests (npx playwright test). Rely solely on tsc for static verification.
 - Strict minimal dark theme (Linear/Vercel style). No gaming/RGB glows.
 - Output 'DONE' upon completion.
 """
