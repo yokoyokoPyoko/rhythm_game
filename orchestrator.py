@@ -1480,7 +1480,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             cycles += 1
             no_progress_streak = 0
             need_coder = True
-            need_test = bool(task.ui)
+            need_test = bool(task.ui) and not is_code_review_only
             log.warning("[%s] %d consecutive attempts without progress. Rolling back to task-start commit and restarting cycle (%d/%d).", task.id, NO_PROGRESS_LIMIT, cycles, MAX_CYCLES)
             git_rollback(head_hash)
 
