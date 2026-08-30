@@ -1,240 +1,187 @@
 import { test, expect } from '@playwright/test';
+import * as path from 'path';
+import * as fs from 'fs';
 
-const AUDIO_FILE = '08.Reply.flac';
+const TEST_AUDIO = '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav';
+const CHART_TOML = `
+title = "Test Chart"
+artist = "Test Artist"
+bpm = 120
+audio = "test-audio.wav"
 
-async function waitForAudioReady(page) {
-  await page.waitForFunction(
-    () => {
-      const btn = document.querySelector('[data-testid="editor-play"]') as HTMLButtonElement;
-      return btn && !btn.textContent?.includes('読込中');
-    },
-    { timeout: 30000 }
-  );
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+`;
+
+async function writeTempChart(chartContent: string): Promise<string> {
+  const tmpDir = '/tmp/rhythm_game_test';
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const filePath = path.join(tmpDir, `chart-${Date.now()}.toml`);
+  fs.writeFileSync(filePath, chartContent);
+  return filePath;
 }
 
-async function getSegments(page) {
-  return await page.evaluate(() => {
-    const w = window as any;
-    return w.__editorState?.segments?.map((s: any) => ({
-      direction: s.direction,
-      beats: s.beats
-    })) || [];
+async function runOrderPermutation(
+  page: ReturnType<typeof test>,
+  chartPath: string,
+  audioPath: string,
+  order: 'chart-first' | 'audio-first'
+) {
+  const errors: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') {
+      const t = msg.text();
+      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+    }
   });
-}
+  page.on('pageerror', (err) => {
+    if (/TypeError|ReferenceError|Uncaught/.test(err.message)) errors.push(err.message);
+  });
 
-async function getCumulativeBeats(segments: { direction: string; beats: number }[]) {
-  const cum: number[] = [];
-  let sum = 0;
-  for (const s of segments) {
-    cum.push(sum);
-    sum += s.beats;
+  await page.goto('/');
+  await page.waitForLoadState('domcontentloaded');
+  await expect(page.locator('.select-header h1')).toBeVisible();
+
+  // Verify file inputs and dropzone exist
+  const chartInput = page.locator('input[data-testid="home-chart-input"]');
+  const audioInput = page.locator('input[data-testid="home-audio-input"]');
+  const dropzone = page.locator('[data-testid="home-dropzone"]');
+
+  await expect(chartInput).toBeVisible({ timeout: 5000 });
+  await expect(audioInput).toBeVisible({ timeout: 5000 });
+  await expect(dropzone).toBeVisible({ timeout: 5000 });
+
+  // Verify accept attributes
+  await expect(chartInput).toHaveAttribute('accept', '.toml');
+  await expect(audioInput).toHaveAttribute('accept', 'audio/*');
+
+  const playButton = page.locator('button:has-text("この譜面でプレイ")');
+  await expect(playButton).toBeDisabled();
+
+  // Step 1: Capture initial state - button is disabled
+  const initialDisabled = await playButton.isDisabled();
+  expect(initialDisabled).toBe(true);
+
+  // Step 2: Perform user interaction - setInputFiles in specified order
+  if (order === 'chart-first') {
+    await chartInput.setInputFiles(chartPath);
+    await audioInput.setInputFiles(audioPath);
+  } else {
+    await audioInput.setInputFiles(audioPath);
+    await chartInput.setInputFiles(chartPath);
   }
-  return { cum, total: sum };
+
+  // Step 3: Assert resulting transition - button becomes enabled
+  await expect(playButton).toBeEnabled({ timeout: 10000 });
+
+  // Click the play button
+  await playButton.click();
+
+  // Verify navigation to /play/custom with canvas
+  await expect(page).toHaveURL(/\/play\/custom/, { timeout: 10000 });
+  await expect(page.locator('canvas[data-testid="playtest-canvas"]')).toBeVisible({ timeout: 10000 });
+
+  // Wait for game to initialize
+  await page.waitForTimeout(2000);
+
+  // Verify no console errors
+  expect(errors).toHaveLength(0);
+
+  // Return to select screen for next test
+  await page.keyboard.press('Escape');
+  await expect(page).toHaveURL(/\/$/, { timeout: 5000 });
+  await expect(page.locator('.select-header h1')).toBeVisible();
 }
 
-async function startRecording(page, startBeat: number) {
-  await page.evaluate((beat) => {
-    const w = window as any;
-    w.__editorState?.seekToBeat(beat);
-    w.__editorState?.enterRecordMode();
-  }, startBeat);
-  await page.waitForTimeout(500);
+async function runDropzoneTest(page: ReturnType<typeof test>, chartPath: string, audioPath: string) {
+  const errors: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') {
+      const t = msg.text();
+      if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
+    }
+  });
+  page.on('pageerror', (err) => {
+    if (/TypeError|ReferenceError|Uncaught/.test(err.message)) errors.push(err.message);
+  });
+
+  await page.goto('/');
+  await page.waitForLoadState('domcontentloaded');
+  await expect(page.locator('.select-header h1')).toBeVisible();
+
+  const dropzone = page.locator('[data-testid="home-dropzone"]');
+  await expect(dropzone).toBeVisible({ timeout: 5000 });
+
+  const playButton = page.locator('button:has-text("この譜面でプレイ")');
+  await expect(playButton).toBeDisabled();
+
+  // Read file contents for drag-and-drop simulation
+  const chartContent = fs.readFileSync(chartPath);
+  const audioContent = fs.readFileSync(audioPath);
+
+  // Simulate drop via evaluate with DataTransfer
+  await page.evaluate(async ([chartBuf, audioBuf]) => {
+    const chartFile = new File([new Uint8Array(chartBuf)], 'chart.toml', { type: 'text/toml' });
+    const audioFile = new File([new Uint8Array(audioBuf)], 'test-audio.wav', { type: 'audio/wav' });
+    const dt = new DataTransfer();
+    dt.items.add(chartFile);
+    dt.items.add(audioFile);
+    const zone = document.querySelector('[data-testid="home-dropzone"]') as HTMLElement;
+    zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  }, [chartContent, audioContent]);
+
+  // Wait for pairing and button enable
+  await expect(playButton).toBeEnabled({ timeout: 10000 });
+
+  // Click the play button
+  await playButton.click();
+
+  // Verify navigation to /play/custom with canvas
+  await expect(page).toHaveURL(/\/play\/custom/, { timeout: 10000 });
+  await expect(page.locator('canvas[data-testid="playtest-canvas"]')).toBeVisible({ timeout: 10000 });
+
+  await page.waitForTimeout(2000);
+
+  expect(errors).toHaveLength(0);
+
+  await page.keyboard.press('Escape');
+  await expect(page).toHaveURL(/\/$/, { timeout: 5000 });
+  await expect(page.locator('.select-header h1')).toBeVisible();
 }
 
-async function simulateHoldKey(page, key: string, durationMs: number) {
-  await page.keyboard.down(key);
-  await page.waitForTimeout(durationMs);
-  await page.keyboard.up(key);
-}
+test.describe('T110: SelectScreen local chart & audio drag-and-drop', () => {
+  let chartPath: string;
 
-async function stopRecording(page) {
-  await page.evaluate(() => {
-    const w = window as any;
-    w.__editorState?.exitRecordMode();
-  });
-  await page.waitForTimeout(500);
-}
-
-async function getLastFinishRecordingInfo(page) {
-  return await page.evaluate(() => {
-    const w = window as any;
-    return w.__lastFinishRecording || null;
-  });
-}
-
-test.describe('T109: Recording overwrite range limited to startBeat-endBeat', () => {
-  test.beforeEach(async ({ page }) => {
-    const errors: string[] = [];
-    page.on('console', msg => {
-      if (msg.type() === 'error') {
-        const t = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
-      }
-    });
-    page.on('pageerror', e => errors.push(e.message));
-
-    await page.goto('http://localhost:5173/#/editor');
-    await page.waitForLoadState('networkidle');
-
-    await waitForAudioReady(page);
-
-    await page.locator('[data-testid="editor-clear"]').click();
-    await page.waitForTimeout(300);
-
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__editorState?.loadInitialSegments([
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-      ]);
-    });
-    await page.waitForTimeout(500);
-
-    expect(errors).toHaveLength(0);
+  test.beforeAll(async () => {
+    chartPath = await writeTempChart(CHART_TOML);
   });
 
-  test('preserves segments after endBeat when recording in middle range', async ({ page }) => {
-    const initialSegments = await getSegments(page);
-    const { cum, total: initialTotalBeats } = await getCumulativeBeats(initialSegments);
-
-    const startBeat = 4;
-    const holdDurationMs = 3000;
-
-    await startRecording(page, startBeat);
-    await simulateHoldKey(page, 'ArrowUp', holdDurationMs);
-    await stopRecording(page);
-
-    const finishInfo = await getLastFinishRecordingInfo(page);
-    expect(finishInfo).not.toBeNull();
-    const actualEndBeat = finishInfo.endBeat;
-
-    const { cum: newCum } = await getCumulativeBeats(await getSegments(page));
-
-    let expectedEndIdx = initialSegments.length;
-    let cumBeats = 0;
-    for (let i = 0; i < initialSegments.length; i++) {
-      if (cumBeats >= actualEndBeat) {
-        expectedEndIdx = i;
-        break;
-      }
-      cumBeats += initialSegments[i].beats;
-    }
-
-    const expectedPreserved = initialSegments.slice(expectedEndIdx);
-    const actualPreserved = (await getSegments(page)).slice(expectedEndIdx);
-
-    expect(actualPreserved.length).toBe(expectedPreserved.length);
-    for (let i = 0; i < expectedPreserved.length; i++) {
-      expect(actualPreserved[i].direction).toBe(expectedPreserved[i].direction);
-      expect(actualPreserved[i].beats).toBeCloseTo(expectedPreserved[i].beats, 1);
+  test.afterAll(async () => {
+    if (chartPath && fs.existsSync(chartPath)) {
+      fs.unlinkSync(chartPath);
     }
   });
 
-  test('preserves segments after endBeat with fractional off-grid recording duration', async ({ page }) => {
-    const initialSegments = await getSegments(page);
-    const { cum } = await getCumulativeBeats(initialSegments);
-
-    const startBeat = 2;
-    const holdDurationMs = 2500;
-
-    await startRecording(page, startBeat);
-    await simulateHoldKey(page, 'ArrowDown', holdDurationMs);
-    await stopRecording(page);
-
-    const finishInfo = await getLastFinishRecordingInfo(page);
-    expect(finishInfo).not.toBeNull();
-    const actualEndBeat = finishInfo.endBeat;
-
-    let expectedEndIdx = initialSegments.length;
-    let cumBeats = 0;
-    for (let i = 0; i < initialSegments.length; i++) {
-      if (cumBeats >= actualEndBeat) {
-        expectedEndIdx = i;
-        break;
-      }
-      cumBeats += initialSegments[i].beats;
-    }
-
-    const expectedPreserved = initialSegments.slice(expectedEndIdx);
-    // Use keptAfter from finishInfo directly — it is the preserved segment list
-    const actualPreserved: { direction: string; beats: number }[] = finishInfo.keptAfter;
-
-    expect(actualPreserved.length).toBe(expectedPreserved.length);
-    for (let i = 0; i < expectedPreserved.length; i++) {
-      expect(actualPreserved[i].direction).toBe(expectedPreserved[i].direction);
-      expect(actualPreserved[i].beats).toBeCloseTo(expectedPreserved[i].beats, 1);
-    }
+  test('file input: chart first, then audio', async ({ page }) => {
+    await runOrderPermutation(page, chartPath, TEST_AUDIO, 'chart-first');
   });
 
-  test('preserves segments after endBeat when recording starts at beat 0', async ({ page }) => {
-    const initialSegments = await getSegments(page);
-    const { cum } = await getCumulativeBeats(initialSegments);
-
-    const startBeat = 0;
-    const holdDurationMs = 4000;
-
-    await startRecording(page, startBeat);
-    await simulateHoldKey(page, 'ArrowUp', holdDurationMs);
-    await stopRecording(page);
-
-    const finishInfo = await getLastFinishRecordingInfo(page);
-    expect(finishInfo).not.toBeNull();
-    const actualEndBeat = finishInfo.endBeat;
-
-    let expectedEndIdx = initialSegments.length;
-    let cumBeats = 0;
-    for (let i = 0; i < initialSegments.length; i++) {
-      if (cumBeats >= actualEndBeat) {
-        expectedEndIdx = i;
-        break;
-      }
-      cumBeats += initialSegments[i].beats;
-    }
-
-    const expectedPreserved = initialSegments.slice(expectedEndIdx);
-    // Use keptAfter from finishInfo directly — it is the preserved segment list
-    const actualPreserved: { direction: string; beats: number }[] = finishInfo.keptAfter;
-
-    expect(actualPreserved.length).toBe(expectedPreserved.length);
-    for (let i = 0; i < expectedPreserved.length; i++) {
-      expect(actualPreserved[i].direction).toBe(expectedPreserved[i].direction);
-      expect(actualPreserved[i].beats).toBeCloseTo(expectedPreserved[i].beats, 1);
-    }
+  test('file input: audio first, then chart', async ({ page }) => {
+    await runOrderPermutation(page, chartPath, TEST_AUDIO, 'audio-first');
   });
 
-  test('does not split segment that starts before endBeat', async ({ page }) => {
-    const initialSegments = await getSegments(page);
-
-    const startBeat = 3;
-    const holdDurationMs = 1500;
-
-    await startRecording(page, startBeat);
-    await simulateHoldKey(page, 'ArrowUp', holdDurationMs);
-    await stopRecording(page);
-
-    const finishInfo = await getLastFinishRecordingInfo(page);
-    expect(finishInfo).not.toBeNull();
-    const actualEndBeat = finishInfo.endBeat;
-
-    const finalSegments = await getSegments(page);
-    const { cum: finalCum } = await getCumulativeBeats(finalSegments);
-
-    let foundPartialSplit = false;
-    let cumBeats = 0;
-    for (const seg of finalSegments) {
-      const segStart = cumBeats;
-      const segEnd = cumBeats + seg.beats;
-      if (segStart < actualEndBeat && segEnd > actualEndBeat) {
-        foundPartialSplit = true;
-        break;
-      }
-      cumBeats += seg.beats;
-    }
-
-    expect(foundPartialSplit).toBe(false);
+  test('drag-and-drop both files', async ({ page }) => {
+    await runDropzoneTest(page, chartPath, TEST_AUDIO);
   });
 });
