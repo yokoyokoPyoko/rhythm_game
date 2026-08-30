@@ -3845,3 +3845,62 @@ Error: No tests found.
 2026-08-30 01:32:15,724 [INFO] [T103] Already passed -> Skip (--force to rerun)
 2026-08-30 01:32:15,724 [INFO] [T104] Already passed -> Skip (--force to rerun)
 2026-08-30 01:32:15,724 [INFO] [T105] Already passed -> Skip (--force to rerun)
+2026-08-30 12:12:55,672 [INFO] Orchestrator range execution: 64 tasks (from=T00, to=T114, budget=600m)
+2026-08-30 12:12:55,672 [INFO] [T00] Foundational task permanently complete -> Skip
+2026-08-30 12:12:55,673 [INFO] [T82] Foundational task permanently complete -> Skip
+2026-08-30 12:12:55,673 [INFO] [T01] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T02] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T10] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T11] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T12] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T13] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T14] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T40] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T41] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T20] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T21] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T22] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T23] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T24] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T25] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T30] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T31] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T32] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T33] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T42] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T50] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T51] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T52] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T53] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T54] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T55] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T56] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T60] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T61] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T62] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T70] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T71] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T72] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T73] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T74] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T81] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T80] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T90] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T91] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T92] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T93] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T94] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T95] Already passed -> Skip
+2026-08-30 12:12:55,673 [INFO] [T96] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T97] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T98] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T99] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T100] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T101] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T102] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T103] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T104] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T105] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T106] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T107] Already passed -> Skip
+2026-08-30 12:12:55,674 [INFO] [T108] Already passed -> Skip
