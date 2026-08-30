@@ -1,0 +1,32 @@
+title = "Reply"
+artist = ""
+bpm = 120
+audio = "test-audio.wav"
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+
+[[rings]]
+beat = 12.0
+
+[[rings]]
+beat = 16.0
