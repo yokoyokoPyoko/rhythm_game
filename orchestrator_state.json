@@ -1,7 +1,7 @@
 {
   "started_at": 1787099390.9580224,
   "models": {
-    "coder": "opencode/nemotron-3-ultra-free",
+    "coder": "opencode/muse-spark-1.2-contributor-free",
     "qa": "opencode/nemotron-3-ultra-free",
     "reviewer": "google/gemini-3.5-flash-lite",
     "postmortem": "opencode/nemotron-3-ultra-free"
@@ -440,16 +440,12 @@
       "finished": 1788059068.1936274
     },
     "T109": {
-      "attempts": 12,
-      "status": "running",
+      "attempts": 1,
+      "status": "passed",
       "started": 1788068057.3184,
-      "cycles": 4,
-      "sessions": {
-        "qa": "ses_faefe41c2ffesNkMehklUxrcjx",
-        "postmortem": null,
-        "coder": "ses_faee7ae3bffet8xucBrMPd3QRd"
-      },
-      "gate_b_golden": false
+      "cycles": 1,
+      "gate_b_golden": true,
+      "finished": 1788073800.0
     }
   },
   "consecutive_no_action": 0

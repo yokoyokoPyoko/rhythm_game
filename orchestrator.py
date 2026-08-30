@@ -62,7 +62,7 @@ MODEL_CATALOG = {
     "qwen38": ("Qwen3.8-27B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
     "nemotron_ultra": ("Nemotron 3 Ultra", "OpenCode Zen (Free)", "opencode/nemotron-3-ultra-free"),
     "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
-    "laguna_free": ("Hy3 Free", "OpenCode Zen (Free)", "opencode/hy3-free"),
+    "muse_spark": ("Muse Spark 1.2 Contributor", "OpenCode Zen (Free)", "opencode/muse-spark-1.2-contributor-free"),
     "gemini_flash_lite": ("Gemini 3.5 Flash-Lite", "Google AI Studio", "google/gemini-3.5-flash-lite"),
 }
 
@@ -70,16 +70,16 @@ CODER_OPTIONS = [
     ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: 高速・高精度 TypeScript コード生成"),
     ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 2: 豊富なコード知識・大規模MoE"),
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高度論理思考・長考型"),
+    ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律コード生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
-    ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律コード生成"),
 ]
 
 QA_OPTIONS = [
     ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・動画録画テスト生成"),
     ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 2: 論理的テストケース網羅・動画テスト生成"),
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証・長考テスト生成"),
+    ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律動画テスト生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時動画テスト生成"),
-    ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律動画テスト生成"),
 ]
 
 REVIEWER_OPTIONS = [
@@ -89,8 +89,8 @@ REVIEWER_OPTIONS = [
 POSTMORTEM_OPTIONS = [
     ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 1: 推論特化・根本原因究明"),
     ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 2: 最新TS仕様知識+熟考"),
+    ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律原因分析"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時エラー要約"),
-    ("laguna_free", "[OpenCode Zen] Hy3 Free", "自律枠: 完全無料・自律原因分析"),
 ]
 
 BACKOFF_DELAYS = [5, 10, 30, 60, 120]
@@ -112,7 +112,7 @@ def resolve_model_id(val: str) -> str:
 
 @dataclass
 class FlowModels:
-    coder: str = MODEL_CATALOG["laguna_free"][2]
+    coder: str = MODEL_CATALOG["muse_spark"][2]
     qa: str = MODEL_CATALOG["nemotron_ultra"][2]
     reviewer: str = MODEL_CATALOG["gemini_flash_lite"][2]
     postmortem: str = MODEL_CATALOG["nemotron_ultra"][2]
