@@ -922,8 +922,11 @@ def run_dynamic_test_red(task: Task) -> tuple[bool, str]:
     return code == 0, out
 
 
-def run_gate_b_test(state: dict[str, Any] | None, task: Task) -> GateResult:
+def run_gate_b_test(state: dict[str, Any] | None, task: Task, args: argparse.Namespace | None = None) -> GateResult:
     """Green phase: run the (already written) Playwright test with flaky-retry. Copies golden on success."""
+    if args and getattr(args, "code_review_only", False):
+        return GateResult("Gate B (Dynamic Test)", True, "PASS (Skipped via --code-review-only mode)")
+
     if not task.ui or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
 
@@ -1204,6 +1207,81 @@ def check_gate_c(task: Task, reviewer_model: str, is_red_audit: bool = False) ->
     return GateResult(gate_name, False, f"Quorum FAIL ({passed}/{REVIEWER_QUORUM} passed): {detail}")
 
 
+def check_gate_c_code_review(
+    task: Task,
+    reviewer_model: str,
+    head_hash: str,
+    state: dict[str, Any] | None = None,
+    fresh_sessions: bool = False,
+) -> GateResult:
+    gate_name = "Gate C (Code Review)"
+    _, diff_out, _ = run_cmd_pgid_stream(["git", "diff", f"{head_hash}..HEAD"])
+    if not diff_out.strip():
+        _, diff_out, _ = run_cmd_pgid_stream(["git", "diff", head_hash])
+
+    if not diff_out.strip():
+        return GateResult(gate_name, False, "No code changes found in git diff")
+
+    spec = extract_compact_spec(task.id)
+    prompt = f"""You are an Uncompromising Senior Code Auditor and Lead Architect reviewing the code diff for task {task.id} ({task.desc}).
+
+Specification & Requirements (each requirement bullet must be verified in the diff):
+{spec}
+
+CODE DIFF FOR TASK {task.id}:
+```diff
+{diff_out[:18000]}
+```
+
+EVALUATION INSTRUCTIONS:
+1. Examine the code diff above against EVERY requirement in the Specification.
+2. Verify that all required UI elements (with proper IDs / data-testids if specified), event handlers, state logic, imports, and exported functions have been implemented in the codebase.
+3. Check for completeness, correctness, type safety, and project convention adherence.
+
+MANDATORY EVIDENCE PROTOCOL:
+For EVERY requirement in the Specification above, cite the specific file path, function, or code line in the diff that implements it.
+
+Output JSON only with this schema:
+{{
+  "score": 90,
+  "verdict": "PASS",
+  "evidence": [
+    {{"requirement": "<verbatim requirement>", "status": "MET", "proof": "src/screens/SelectScreen.tsx: implemented input[data-testid='...'] and dropzone onDrop handler"}}
+  ],
+  "comment": "all requirements verified in diff"
+}}
+
+If ANY requirement is missing or incomplete:
+{{
+  "score": 40,
+  "verdict": "FAIL",
+  "evidence": [
+    {{"requirement": "<missing requirement>", "status": "UNMET", "proof": "not implemented in diff"}}
+  ],
+  "comment": "missing implementation for requirement X"
+}}
+"""
+
+    log.info("[%s] Dispatching Gate C Code Reviewer (model=%s)...", task.id, reviewer_model)
+    rev_title = f"[{task.id}] CodeReview {uuid.uuid4().hex[:8]}"
+    code, out = run_opencode_with_retry(
+        reviewer_model, prompt, timeout=None, label=f"CodeReviewer({task.id})", variant="max",
+        task_id=task.id, role="reviewer", state=state, fresh_sessions=fresh_sessions,
+        title=rev_title,
+    )
+
+    if code != 0:
+        return GateResult(gate_name, False, f"Code Reviewer model failed to execute (exit={code})")
+
+    ok, reason = _parse_review_verdict(out, task.id)
+    score_color = GREEN if ok else RED
+    log.info("Code Review Verdict: %s%s%s | Reason: %s", score_color, "PASS" if ok else "FAIL", RESET, reason)
+
+    if ok:
+        return GateResult(gate_name, True, f"PASS ({reason})")
+    return GateResult(gate_name, False, reason)
+
+
 def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
     if isinstance(pm, dict) and pm.get("retry_from") == "qa" and coder_commit:
         return "qa"
@@ -1334,8 +1412,11 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     cycles = 0
     no_progress_streak = 0
     best_stage = 0  # 0:未達 / 1:Gate A通過 / 2:Gate B通過 / 3:全ゲート通過
-    need_coder = False  # TDD: Coder runs AFTER QA-Gen writes the test
-    need_test = bool(task.ui)  # TDD: (re)generate acceptance test first; skip for non-UI tasks
+    is_code_review_only = getattr(args, "code_review_only", False)
+    need_coder = True if is_code_review_only else False  # TDD: Coder runs AFTER QA-Gen writes the test
+    need_test = bool(task.ui) and not is_code_review_only  # TDD: (re)generate acceptance test first; skip for non-UI tasks
+    if is_code_review_only:
+        log.info("[%s] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.", task.id)
     coder_commit = None
 
     # Fast-path: if dynamic.spec.ts already exists (e.g. written manually or from previous run),
@@ -1514,7 +1595,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                      task.id, len(ctx["implemented_ui"]["ids"]), len(ctx["implemented_ui"]["test_ids"]))
 
         # --- TDD Phase 3: Gate B (Green) run the acceptance test ---
-        gb = run_gate_b_test(state, task)
+        gb = run_gate_b_test(state, task, args)
         if not gb.ok:
             if gb.fatal:
                 log.error("[%s] Gate B failed (fatal): %s", task.id, gb.detail)
@@ -1526,7 +1607,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             pm = generate_postmortem(task, f"Gate B (Dynamic Test) failed:\n{gb.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
             if decode_retry_from(pm, coder_commit) == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (regenerate test).", task.id)
-                need_test = True
+                need_test = True and not is_code_review_only
                 need_coder = False
             else:
                 need_coder = True
@@ -1538,7 +1619,10 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         git_checkpoint(f"checkpoint({task.id}, gate-b)")
 
         # 4. Gate C (Reviewer)
-        gc = check_gate_c(task, models.reviewer)
+        if is_code_review_only:
+            gc = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
+        else:
+            gc = check_gate_c(task, models.reviewer)
         if not gc.ok:
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
             pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
@@ -1626,6 +1710,7 @@ def main() -> None:
     parser.add_argument("--reviewer", help="Override Reviewer model ID or short key")
     parser.add_argument("--postmortem", help="Override Postmortem model ID or short key")
     parser.add_argument("--force-qa-gen", action="store_true", help="tests/dynamic.spec.tsが既存でもQA-Genを強制再実行する（デフォルトはスキップ）")
+    parser.add_argument("--code-review-only", "--no-video", "--no-gui", dest="code_review_only", action="store_true", help="動画録画(Gate B)をスキップし、git diff と仕様書のAIコード直接審査(Gate C)で進行する")
     args = parser.parse_args()
 
     setup_logging()

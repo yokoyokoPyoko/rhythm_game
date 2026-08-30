@@ -11,6 +11,7 @@ function App() {
       <Routes>
         <Route path="/" element={<SelectScreen />} />
         <Route path="/play/:songId" element={<GameScreen />} />
+        <Route path="/play/custom" element={<GameScreen />} />
         <Route path="/result" element={<ResultScreen />} />
         <Route path="/editor" element={<EditorScreen />} />
         <Route path="/calibration" element={<CalibrationScreen />} />

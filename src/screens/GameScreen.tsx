@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
+import { AudioCache, getBasename } from '../audio/AudioCache'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audio/clock'
 import { isKeySoundEnabled, playKeyClick, setKeySoundEnabled } from '../audio/keySound'
@@ -32,6 +33,8 @@ export interface GameScreenProps {
 
 export default function GameScreen({ playtestChart, onExit }: GameScreenProps = {}) {
   const { songId } = useParams<{ songId: string }>()
+  const location = useLocation()
+  const state = location.state as { chart?: Chart; buffer?: AudioBuffer | null } | null
   const navigate = useNavigate()
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -184,8 +187,13 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     async function init() {
       try {
         let chart: Chart
+        let buf: AudioBuffer | null = null
+
         if (playtestChart) {
           chart = playtestChart
+        } else if (state?.chart) {
+          chart = state.chart
+          buf = state.buffer !== undefined ? state.buffer : null
         } else {
           const songs = await loadSongList()
           const song = songs.find((s) => s.id === songId)
@@ -200,7 +208,21 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
         timelineRef.current = timeline
         waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude)
         cursorRef.current = new Cursor(chart.amplitude)
-        bufferRef.current = await loadAudio(chart.audio, audioMgr.ctx)
+
+        if (state?.buffer !== undefined) {
+          buf = state.buffer
+        } else if (playtestChart) {
+          buf = AudioCache.get(getBasename(chart.audio)) || null
+        } else if (!state?.chart) {
+          buf = await loadAudio(chart.audio, audioMgr.ctx)
+        }
+
+        if (!buf) {
+          const cached = AudioCache.get(getBasename(chart.audio))
+          if (cached) buf = cached
+        }
+
+        bufferRef.current = buf
         if (!cancelled) {
           setStatus('ready')
         }
@@ -217,7 +239,7 @@ export default function GameScreen({ playtestChart, onExit }: GameScreenProps = 
     return () => {
       cancelled = true
     }
-  }, [songId, playtestChart])
+  }, [songId, playtestChart, state])
 
   useEffect(() => {
     if (status !== 'ready') return

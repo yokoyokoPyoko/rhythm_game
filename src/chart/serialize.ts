@@ -1,4 +1,5 @@
 import type { Chart } from '../types'
+import { getBasename } from '../audio/AudioCache'
 
 function fmt(n: number): string {
   const rounded = Math.round(n * 1000) / 1000
@@ -14,7 +15,7 @@ export function chartToToml(chart: Chart): string {
   lines.push(`title = ${tomlString(chart.title)}`)
   lines.push(`artist = ${tomlString(chart.artist)}`)
   lines.push(`bpm = ${fmt(chart.bpm)}`)
-  lines.push(`audio = ${tomlString(chart.audio)}`)
+  lines.push(`audio = ${tomlString(getBasename(chart.audio))}`)
   lines.push(`audio_offset = ${fmt(chart.audio_offset)}`)
   lines.push(`scroll_speed = ${fmt(chart.scroll_speed)}`)
   lines.push(`amplitude = ${fmt(chart.amplitude)}`)

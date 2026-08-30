@@ -1,5 +1,6 @@
 import { parse } from 'smol-toml';
 import type { BpmChange, Chart, RingDef, Segment } from '../types';
+import { getBasename } from '../audio/AudioCache';
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
@@ -64,7 +65,7 @@ export function parseChartText(text: string, source = 'chart'): Chart {
     title: raw.title,
     artist: raw.artist,
     bpm: raw.bpm,
-    audio: raw.audio,
+    audio: getBasename(raw.audio),
     audio_offset: isFiniteNumber(raw.audio_offset) ? raw.audio_offset : 0,
     scroll_speed: isFiniteNumber(raw.scroll_speed) && raw.scroll_speed > 0 ? raw.scroll_speed : 110,
     amplitude: isFiniteNumber(raw.amplitude) && raw.amplitude > 0 ? raw.amplitude : 130,
