@@ -12,9 +12,9 @@ const CANVAS_SELECTOR = '[data-testid="wave-preview-canvas"]';
  * - canvasHeight: full canvas height in device pixels
  * - ratio: waveHeight / canvasHeight
  */
-async function analyzeWaveVerticalExtent(page: import('@playwright/test').Page) {
-  return await page.evaluate(() => {
-    const canvas = document.querySelector(CANVAS_SELECTOR) as HTMLCanvasElement | null;
+async function analyzeWaveVerticalExtent(page: import('@playwright/test').Page, selector: string = CANVAS_SELECTOR) {
+  return await page.evaluate((sel) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
     if (!canvas) return { error: 'canvas not found' };
     const ctx = canvas.getContext('2d');
     if (!ctx) return { error: 'no 2d context' };
@@ -63,7 +63,7 @@ async function analyzeWaveVerticalExtent(page: import('@playwright/test').Page) 
 
     const waveHeight = bottomY - topY + 1;
     return { waveHeight, topY, bottomY, canvasHeight: h, ratio: waveHeight / h };
-  });
+  }, selector);
 }
 
 /**
@@ -102,8 +102,9 @@ async function ensureAudioReady(page: import('@playwright/test').Page) {
 }
 
 test.describe('T107: 波形上下表示領域拡張', () => {
+  let errors: string[] = [];
   test.beforeEach(async ({ page }) => {
-    const errors: string[] = [];
+    errors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         const t = msg.text();
@@ -121,7 +122,7 @@ test.describe('T107: 波形上下表示領域拡張', () => {
 
   test('canvas非透明波形ピクセルの縦幅がcanvas高の30%以上あり、上下端が表示領域内にある', async ({ page }) => {
     // Step 1: Capture initial state (empty chart - should have minimal or no wave)
-    const initial = await analyzeWaveVerticalExtent(page);
+    const initial = await analyzeWaveVerticalExtent(page, CANVAS_SELECTOR);
     console.log('Initial wave extent:', initial);
 
     // Step 2: Perform user interaction - create a wave with segments
@@ -129,7 +130,7 @@ test.describe('T107: 波形上下表示領域拡張', () => {
     await page.waitForTimeout(500); // wait for re-render
 
     // Step 3: Assert resulting transition - wave vertical extent meets requirements
-    const result = await analyzeWaveVerticalExtent(page);
+    const result = await analyzeWaveVerticalExtent(page, CANVAS_SELECTOR);
     console.log('After segment creation:', result);
 
     // Requirement 1: waveHeight >= 0.3 * canvasHeight
@@ -154,7 +155,7 @@ test.describe('T107: 波形上下表示領域拡張', () => {
     await page.waitForTimeout(300);
 
     // Capture wave extent at default amplitude (130)
-    const at130 = await analyzeWaveVerticalExtent(page);
+    const at130 = await analyzeWaveVerticalExtent(page, CANVAS_SELECTOR);
     console.log('Amplitude 130:', at130);
     expect(at130.ratio).toBeGreaterThanOrEqual(0.30);
 
@@ -163,7 +164,7 @@ test.describe('T107: 波形上下表示領域拡張', () => {
     await ampInput.fill('200');
     await page.waitForTimeout(300);
 
-    const at200 = await analyzeWaveVerticalExtent(page);
+    const at200 = await analyzeWaveVerticalExtent(page, CANVAS_SELECTOR);
     console.log('Amplitude 200:', at200);
     expect(at200.ratio).toBeGreaterThanOrEqual(0.30);
 
@@ -174,7 +175,7 @@ test.describe('T107: 波形上下表示領域拡張', () => {
     await ampInput.fill('60');
     await page.waitForTimeout(300);
 
-    const at60 = await analyzeWaveVerticalExtent(page);
+    const at60 = await analyzeWaveVerticalExtent(page, CANVAS_SELECTOR);
     console.log('Amplitude 60:', at60);
     expect(at60.ratio).toBeGreaterThanOrEqual(0.30);
 
@@ -190,7 +191,7 @@ test.describe('T107: 波形上下表示領域拡張', () => {
       await page.fill('#zoom', String(zoom));
       await page.waitForTimeout(300);
 
-      const result = await analyzeWaveVerticalExtent(page);
+      const result = await analyzeWaveVerticalExtent(page, CANVAS_SELECTOR);
       console.log(`Zoom ${zoom}:`, result);
 
       expect(result.ratio).toBeGreaterThanOrEqual(0.30);

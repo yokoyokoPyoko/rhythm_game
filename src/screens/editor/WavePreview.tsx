@@ -112,10 +112,16 @@ export default function WavePreview({
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H
-    // Expand the wave's vertical display area to use the full available height
-    // rather than clamping to the raw amplitude, so the waveform is clearly visible.
-    const amp = (fieldH - 24) / 2
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * amp
+    // Expand the wave's vertical display area to use most of the available
+    // field height while reflecting the chart amplitude. The displayed
+    // amplitude is scaled to the chart amplitude, but clamped so it never
+    // exceeds the field (leaving room for the ruler strip and not overlapping
+    // SCORE/COMBO or the operation hint) and never drops below ~20% of the
+    // canvas height so small amplitudes remain clearly visible.
+    const maxAmp = (fieldH - 24) / 2
+    const minAmp = Math.max(8, 0.2 * cssH)
+    const dispAmp = Math.min(maxAmp, Math.max(ampVal, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * dispAmp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
     const contentBeats = Math.max(
