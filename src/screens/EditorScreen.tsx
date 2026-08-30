@@ -154,24 +154,20 @@ export default function EditorScreen() {
       const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
       const newSegs = segmentize(traj, snap, amplitude)
 
+      // Keep only whole segments that start at or after endBeat (no split remainder)
+      // This matches the spec: overwrite [startBeat, endBeat) range, preserve segments starting at/after endBeat intact
       let cum = 0
-      const keptAfter: Segment[] = []
-      for (const seg of segments) {
-        const segEnd = cum + seg.beats
-        if (segEnd <= endBeat) {
-          cum = segEnd
-          continue
+      let endIdx = segments.length
+      for (let i = 0; i < segments.length; i++) {
+        if (cum >= endBeat - 1e-9) {
+          endIdx = i
+          break
         }
-        if (cum >= endBeat) {
-          keptAfter.push(seg)
-        } else {
-          const part = segEnd - endBeat
-          if (part > 0.0001) {
-            keptAfter.push({ direction: seg.direction, beats: Number(part.toFixed(4)) })
-          }
-        }
-        cum = segEnd
+        cum += segments[i].beats
       }
+      // If loop finished without break, endIdx stays at segments.length (all overwritten)
+      // Edge: if endBeat is exactly at a boundary, cum at that boundary == endBeat, so we correctly start from that index
+      const keptAfter = segments.slice(endIdx)
 
       setSegments([...keptBefore, ...newSegs, ...keptAfter])
       notify(`波形を記録 (${newSegs.length}セグメント)`)
