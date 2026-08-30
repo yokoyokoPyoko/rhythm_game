@@ -1475,6 +1475,18 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 maybe_reset_cycle()
                 continue
 
+            # Check Coder exit code - fail fast on rate limit or other errors before Gate A
+            if code != 0:
+                if "Rate limit exceeded" in out or "429" in out or "Too Many Requests" in out:
+                    log.warning("[%s] Coder hit rate limit (exit=%d). Retrying...", task.id, code)
+                else:
+                    log.error("[%s] Coder failed with exit code %d: %s", task.id, code, out[:200])
+                    generate_postmortem(task, f"Coder failed:\n{out}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                need_coder = True
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
+
             if state.get("consecutive_no_action", 0) != 0:
                 state["consecutive_no_action"] = 0
                 save_state(state)
