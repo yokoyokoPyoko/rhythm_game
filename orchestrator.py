@@ -88,6 +88,7 @@ QA_OPTIONS = [
 REVIEWER_OPTIONS = [
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "コードレビュー: 仕様書とgit diffを直接審査 (Gemini固定)"),
     ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "コードレビュー: 推論特化・根本原因究明 (Nemotron固定)"),
+    ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律コードレビュー"),
 ]
 
 POSTMORTEM_OPTIONS = [
