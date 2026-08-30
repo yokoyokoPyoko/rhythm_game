@@ -45,7 +45,7 @@ export default function WavePreview({
   bpm,
   bpmChanges = [],
   rings = [],
-  amplitude = 130,
+  amplitude = 1.0,
   snap = 0.25,
   selectedRing = null,
   positionMs,
@@ -106,9 +106,10 @@ export default function WavePreview({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cssW, cssH)
 
-    const ampVal = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 130
+    const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
+    const ampPx = ampNorm * 130
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-    const engine = new WaveEngine(segments, timeline, ampVal)
+    const engine = new WaveEngine(segments, timeline, ampNorm)
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H
@@ -120,8 +121,8 @@ export default function WavePreview({
     // canvas height so small amplitudes remain clearly visible.
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * cssH)
-    const dispAmp = Math.min(maxAmp, Math.max(ampVal, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampVal) * dispAmp
+    const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampPx) * dispAmp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
     const contentBeats = Math.max(
@@ -138,7 +139,7 @@ export default function WavePreview({
 
     // Horizontal guide lines: top / center / bottom (high visibility)
     ctx.lineWidth = 1
-    for (const gy of [mapY(GAME_CENTER_Y - ampVal), centerY, mapY(GAME_CENTER_Y + ampVal)]) {
+    for (const gy of [mapY(GAME_CENTER_Y - ampPx), centerY, mapY(GAME_CENTER_Y + ampPx)]) {
       const isCenter = Math.abs(gy - centerY) < 0.5
       ctx.strokeStyle = isCenter ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.14)'
       ctx.beginPath()
@@ -222,8 +223,8 @@ export default function WavePreview({
       ctx.strokeStyle = ACCENT_COLOR
       ctx.lineWidth = 2.5
       ctx.beginPath()
-      ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - ampVal))
-      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - ampVal))
+      ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - ampPx))
+      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - ampPx))
       ctx.stroke()
     }
 

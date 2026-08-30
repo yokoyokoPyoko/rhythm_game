@@ -60,7 +60,7 @@ export default function EditorScreen() {
   const [artist, setArtist] = useState('')
   const [url, setUrl] = useState('/rhythm_game/audio/08.Reply.flac')
   const [bpm, setBpm] = useState(120)
-  const [amplitude, setAmplitude] = useState(130)
+  const [amplitude, setAmplitude] = useState(1.0)
   const [scrollSpeed, setScrollSpeed] = useState(110)
   const [audioOffset, setAudioOffset] = useState(0)
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null)
@@ -595,7 +595,7 @@ export default function EditorScreen() {
   }
 
   const buildChart = useCallback((): Chart => {
-    const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 130
+    const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
     const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
     const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
     return {

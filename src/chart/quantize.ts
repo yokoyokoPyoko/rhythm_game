@@ -36,7 +36,7 @@ export function segmentize(
 ): Segment[] {
   if (traj.length < 2 || !(snap > 0)) return []
   const pts = [...traj].sort((a, b) => a.beat - b.beat)
-  const threshold = Math.max((amplitude * snap) / 16, 0.5)
+  const threshold = Math.max((amplitude * 130 * snap) / 16, 0.5)
 
   const segs: Segment[] = []
   let i = 0

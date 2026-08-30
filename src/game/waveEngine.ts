@@ -2,6 +2,7 @@ import type { BpmTimeline } from '../audio/bpmTimeline';
 import type { Segment } from '../types';
 
 const TW_CENTER_Y = 600 / 2;
+const NORM_TO_PX = 130;
 
 export const WAVELENGTH_BEATS = 4;
 
@@ -28,15 +29,15 @@ export class WaveEngine {
   private readonly points: WavePoint[];
   private readonly amplitude: number;
 
-  constructor(segments: Segment[], bpmTimeline: BpmTimeline, amplitude = 130) {
+  constructor(segments: Segment[], bpmTimeline: BpmTimeline, amplitude = 1.0) {
     this.timeline = bpmTimeline;
-    this.amplitude = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 130;
+    this.amplitude = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0;
     this.points = this.buildPoints(segments ?? []);
   }
 
   private buildPoints(segments: Segment[]): WavePoint[] {
-    const waveTop = TW_CENTER_Y - this.amplitude;
-    const waveBottom = TW_CENTER_Y + this.amplitude;
+    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
+    const waveBottom = TW_CENTER_Y + this.amplitude * NORM_TO_PX;
     const points: WavePoint[] = [{ beat: 0, y: waveTop }];
     let beat = 0;
     let currentY = waveTop;
@@ -50,7 +51,8 @@ export class WaveEngine {
       }
       beat += beats;
       const dir = sanitizeDirection(seg.direction);
-      const move = (2 * this.amplitude) * (beats / WAVELENGTH_BEATS);
+      const moveNorm = 2 * this.amplitude * (beats / WAVELENGTH_BEATS);
+      const move = moveNorm * NORM_TO_PX;
       if (dir === 'up') {
         currentY = Math.max(waveTop, currentY - move);
       } else if (dir === 'down') {
@@ -74,7 +76,7 @@ export class WaveEngine {
   }
 
   waveYAt(beat: number): number {
-    const waveTop = TW_CENTER_Y - this.amplitude;
+    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
     if (!Number.isFinite(beat)) {
       return waveTop;
     }
@@ -120,7 +122,7 @@ export class WaveEngine {
   }
 
   waveYAtMs(ms: number): number {
-    const waveTop = TW_CENTER_Y - this.amplitude;
+    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
     if (!Number.isFinite(ms)) {
       return waveTop;
     }

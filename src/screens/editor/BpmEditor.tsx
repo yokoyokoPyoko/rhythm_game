@@ -99,15 +99,16 @@ export default function BpmEditor({
 
       <div className="editor-field">
         <label className="editor-label" htmlFor="amplitude">
-          振幅 (Amplitude px)
+          振幅 (正規化 0.0-1.0)
         </label>
         <input
           id="amplitude"
           className="editor-input"
           type="number"
-          min={10}
-          max={300}
-          value={Number.isFinite(amplitude) ? amplitude : 130}
+          min={0.1}
+          max={1.0}
+          step={0.1}
+          value={Number.isFinite(amplitude) ? amplitude : 1.0}
           onChange={(e) => onAmplitudeChange(Number(e.target.value))}
         />
       </div>
