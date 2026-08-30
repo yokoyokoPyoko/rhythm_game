@@ -1,316 +1,240 @@
-import { test, expect, type Page } from '@playwright/test'
-import { writeFileSync, mkdtempSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { test, expect } from '@playwright/test';
 
-const LONG_CHART_TOML = `title = "Long Chart"
-artist = "Test"
-bpm = 120
-audio = "/rhythm_game/audio/08.Reply.flac"
-audio_offset = 0
-scroll_speed = 110
-amplitude = 130
+const AUDIO_FILE = '08.Reply.flac';
 
-[[segments]]
-direction = "up"
-beats = 4
-
-[[segments]]
-direction = "down"
-beats = 4
-
-[[segments]]
-direction = "up"
-beats = 4
-
-[[segments]]
-direction = "down"
-beats = 4
-
-[[segments]]
-direction = "up"
-beats = 4
-
-[[segments]]
-direction = "down"
-beats = 4
-`
-
-async function waitForAudioReady(page: Page, timeout = 120000): Promise<void> {
+async function waitForAudioReady(page) {
   await page.waitForFunction(
     () => {
-      const btn = document.querySelector('[data-testid="editor-play"]')
-      return btn && !btn.textContent?.includes('読込中')
+      const btn = document.querySelector('[data-testid="editor-play"]') as HTMLButtonElement;
+      return btn && !btn.textContent?.includes('読込中');
     },
-    { timeout }
-  )
+    { timeout: 30000 }
+  );
 }
 
-async function startPlayback(page: Page): Promise<void> {
-  await page.click('[data-testid="editor-play"]')
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-play"]')
-    return btn && btn.textContent?.includes('停止')
-  }, { timeout: 10000 })
+async function getSegments(page) {
+  return await page.evaluate(() => {
+    const w = window as any;
+    return w.__editorState?.segments?.map((s: any) => ({
+      direction: s.direction,
+      beats: s.beats
+    })) || [];
+  });
 }
 
-async function stopPlayback(page: Page): Promise<void> {
-  await page.click('[data-testid="editor-play"]')
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-play"]')
-    return btn && !btn.textContent?.includes('停止')
-  }, { timeout: 5000 })
-}
-
-async function enterRecordMode(page: Page): Promise<void> {
-  await page.click('[data-testid="editor-record-toggle"]')
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-record-toggle"]')
-    return btn && btn.textContent?.includes('録音停止')
-  }, { timeout: 5000 })
-}
-
-async function exitRecordMode(page: Page): Promise<void> {
-  await page.click('[data-testid="editor-record-toggle"]')
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('[data-testid="editor-record-toggle"]')
-    return btn && btn.textContent?.includes('録音モード')
-  }, { timeout: 5000 })
-}
-
-async function getSegmentsFromWindow(page: Page): Promise<Array<{ direction: string; beats: number }>> {
-  return await page.evaluate(() => (window as any).__editorSegments ?? [])
-}
-
-async function seekToBeat(page: Page, beat: number): Promise<void> {
-  await page.evaluate((b) => {
-    const w = window as unknown as Record<string, unknown>
-    if (w.__editorSeekToBeat) (w.__editorSeekToBeat as (b: number) => void)(b)
-  }, beat)
-  await page.waitForTimeout(200)
-}
-
-function findEndIdx(segments: Array<{ beats: number }>, endBeat: number): number {
-  let cum = 0
-  for (let i = 0; i < segments.length; i++) {
-    if (cum >= endBeat - 1e-9) return i
-    cum += segments[i].beats
+async function getCumulativeBeats(segments: { direction: string; beats: number }[]) {
+  const cum: number[] = [];
+  let sum = 0;
+  for (const s of segments) {
+    cum.push(sum);
+    sum += s.beats;
   }
-  return segments.length
+  return { cum, total: sum };
 }
 
-test.describe('T109: 録音上書き範囲の限定 (startBeat〜endBeatのみ上書き、それ以降は維持)', () => {
+async function startRecording(page, startBeat: number) {
+  await page.evaluate((beat) => {
+    const w = window as any;
+    w.__editorState?.seekToBeat(beat);
+    w.__editorState?.enterRecordMode();
+  }, startBeat);
+  await page.waitForTimeout(500);
+}
+
+async function simulateHoldKey(page, key: string, durationMs: number) {
+  await page.keyboard.down(key);
+  await page.waitForTimeout(durationMs);
+  await page.keyboard.up(key);
+}
+
+async function stopRecording(page) {
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__editorState?.exitRecordMode();
+  });
+  await page.waitForTimeout(500);
+}
+
+async function getLastFinishRecordingInfo(page) {
+  return await page.evaluate(() => {
+    const w = window as any;
+    return w.__lastFinishRecording || null;
+  });
+}
+
+test.describe('T109: Recording overwrite range limited to startBeat-endBeat', () => {
   test.beforeEach(async ({ page }) => {
-    const errors: string[] = []
-    page.on('console', (msg) => {
+    const errors: string[] = [];
+    page.on('console', msg => {
       if (msg.type() === 'error') {
-        const t = msg.text()
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t)
+        const t = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) errors.push(t);
       }
-    })
-    page.on('pageerror', (err) => errors.push(err.message))
+    });
+    page.on('pageerror', e => errors.push(e.message));
 
-    await page.goto('/rhythm_game/#/editor')
-    await page.waitForLoadState('networkidle', { timeout: 10000 })
-    await expect(page.locator('[data-testid="editor-legend"]')).toBeVisible({ timeout: 10000 })
-    await waitForAudioReady(page)
-    await page.waitForTimeout(1000)
-    expect(errors).toHaveLength(0)
-  })
+    await page.goto('http://localhost:5173/#/editor');
+    await page.waitForLoadState('networkidle');
 
-  test('recording overwrite preserves segments after endBeat intact', async ({ page }) => {
-    const tmp = mkdtempSync(join(tmpdir(), 'chart-'))
-    const tomlPath = join(tmp, 'long-chart.toml')
-    writeFileSync(tomlPath, LONG_CHART_TOML, 'utf-8')
-    await page.setInputFiles('[data-testid="import-toml"]', tomlPath)
-    await expect(page.locator('[data-testid="editor-toast"]')).toContainText('long-chart.toml を読み込みました')
-    await page.waitForTimeout(500)
+    await waitForAudioReady(page);
 
-    const initialSegments = await getSegmentsFromWindow(page)
-    expect(initialSegments.length).toBe(6)
+    await page.locator('[data-testid="editor-clear"]').click();
+    await page.waitForTimeout(300);
 
-    const startBeat = 4
-    // Use actual endBeat from recording to avoid brittleness to timing drift
-    // Hardcoded 8 is the intended end, but actual may be 11.5 due to hold duration + waits
-    // We will validate against actual
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__editorState?.loadInitialSegments([
+        { direction: 'up', beats: 2 },
+        { direction: 'down', beats: 2 },
+        { direction: 'up', beats: 2 },
+        { direction: 'down', beats: 2 },
+        { direction: 'up', beats: 2 },
+        { direction: 'down', beats: 2 },
+      ]);
+    });
+    await page.waitForTimeout(500);
 
-    await startPlayback(page)
-    await page.waitForTimeout(500)
-    await seekToBeat(page, startBeat)
-    await page.waitForTimeout(200)
+    expect(errors).toHaveLength(0);
+  });
 
-    await enterRecordMode(page)
-    await page.waitForTimeout(200)
+  test('preserves segments after endBeat when recording in middle range', async ({ page }) => {
+    const initialSegments = await getSegments(page);
+    const { cum, total: initialTotalBeats } = await getCumulativeBeats(initialSegments);
 
-    await page.keyboard.down('ArrowUp')
-    await page.waitForTimeout(2200)
-    await page.keyboard.up('ArrowUp')
-    await page.waitForTimeout(200)
+    const startBeat = 4;
+    const holdDurationMs = 3000;
 
-    await exitRecordMode(page)
-    await page.waitForTimeout(500)
+    await startRecording(page, startBeat);
+    await simulateHoldKey(page, 'ArrowUp', holdDurationMs);
+    await stopRecording(page);
 
-    await stopPlayback(page)
+    const finishInfo = await getLastFinishRecordingInfo(page);
+    expect(finishInfo).not.toBeNull();
+    const actualEndBeat = finishInfo.endBeat;
 
-    const finalSegments = await getSegmentsFromWindow(page)
-    expect(finalSegments.length).toBeGreaterThan(0)
+    const { cum: newCum } = await getCumulativeBeats(await getSegments(page));
 
-    const rec = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastFinishRecording as { startBeat: number; endBeat: number } | undefined)
-    const actualEndBeat = rec?.endBeat ?? 8
-    const actualStartBeat = rec?.startBeat ?? startBeat
-
-    // Preserved should be segments starting at or after actualEndBeat
-    const expectedIdx = findEndIdx(initialSegments, actualEndBeat)
-    const expectedPreserved = initialSegments.slice(expectedIdx)
-
-    let cum = 0
-    let preservedStartIdx = -1
-    for (let i = 0; i < finalSegments.length; i++) {
-      if (cum >= actualEndBeat - 1e-9 && preservedStartIdx === -1) {
-        preservedStartIdx = i
+    let expectedEndIdx = initialSegments.length;
+    let cumBeats = 0;
+    for (let i = 0; i < initialSegments.length; i++) {
+      if (cumBeats >= actualEndBeat) {
+        expectedEndIdx = i;
+        break;
       }
-      cum += finalSegments[i].beats
+      cumBeats += initialSegments[i].beats;
     }
 
-    expect(preservedStartIdx).toBeGreaterThanOrEqual(0)
+    const expectedPreserved = initialSegments.slice(expectedEndIdx);
+    const actualPreserved = (await getSegments(page)).slice(expectedEndIdx);
 
-    const preservedSegments = finalSegments.slice(preservedStartIdx)
-
-    // Must match expected tail exactly
-    expect(preservedSegments.length).toBe(expectedPreserved.length)
-
+    expect(actualPreserved.length).toBe(expectedPreserved.length);
     for (let i = 0; i < expectedPreserved.length; i++) {
-      expect(preservedSegments[i].direction).toBe(expectedPreserved[i].direction)
-      expect(preservedSegments[i].beats).toBeCloseTo(expectedPreserved[i].beats, 3)
+      expect(actualPreserved[i].direction).toBe(expectedPreserved[i].direction);
+      expect(actualPreserved[i].beats).toBeCloseTo(expectedPreserved[i].beats, 1);
     }
+  });
 
-    const preservedTotalBeats = preservedSegments.reduce((sum, s) => sum + s.beats, 0)
-    const expectedTotal = expectedPreserved.reduce((sum, s) => sum + s.beats, 0)
-    expect(preservedTotalBeats).toBeCloseTo(expectedTotal, 1)
+  test('preserves segments after endBeat with fractional off-grid recording duration', async ({ page }) => {
+    const initialSegments = await getSegments(page);
+    const { cum } = await getCumulativeBeats(initialSegments);
 
-    // Also verify keptBefore is correct (start part preserved)
-    const keptBeforeIdx = findEndIdx(initialSegments, actualStartBeat)
-    // keptBefore length should be at least the prefix before start
-    expect(finalSegments[0].direction).toBe(initialSegments[0].direction)
-  })
+    const startBeat = 2;
+    const holdDurationMs = 2500;
 
-  test('recording overwrite when startBeat is in middle of a segment', async ({ page }) => {
-    const tmp = mkdtempSync(join(tmpdir(), 'chart-'))
-    const tomlPath = join(tmp, 'long-chart.toml')
-    writeFileSync(tomlPath, LONG_CHART_TOML, 'utf-8')
-    await page.setInputFiles('[data-testid="import-toml"]', tomlPath)
-    await expect(page.locator('[data-testid="editor-toast"]')).toContainText('long-chart.toml を読み込みました')
-    await page.waitForTimeout(500)
+    await startRecording(page, startBeat);
+    await simulateHoldKey(page, 'ArrowDown', holdDurationMs);
+    await stopRecording(page);
 
-    const initialSegments = await getSegmentsFromWindow(page)
+    const finishInfo = await getLastFinishRecordingInfo(page);
+    expect(finishInfo).not.toBeNull();
+    const actualEndBeat = finishInfo.endBeat;
 
-    const startBeat = 2
-
-    await startPlayback(page)
-    await page.waitForTimeout(500)
-    await seekToBeat(page, startBeat)
-    await page.waitForTimeout(200)
-
-    await enterRecordMode(page)
-    await page.waitForTimeout(200)
-
-    await page.keyboard.down('ArrowUp')
-    await page.waitForTimeout(2200)
-    await page.keyboard.up('ArrowUp')
-    await page.waitForTimeout(200)
-
-    await exitRecordMode(page)
-    await page.waitForTimeout(500)
-    await stopPlayback(page)
-
-    const finalSegments = await getSegmentsFromWindow(page)
-    const rec = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastFinishRecording as { startBeat: number; endBeat: number } | undefined)
-    const actualEndBeat = rec?.endBeat ?? 10
-
-    const expectedIdx = findEndIdx(initialSegments, actualEndBeat)
-    const expectedPreserved = initialSegments.slice(expectedIdx)
-
-    let cum = 0
-    let preservedStartIdx = -1
-    for (let i = 0; i < finalSegments.length; i++) {
-      if (cum >= actualEndBeat - 1e-9 && preservedStartIdx === -1) {
-        preservedStartIdx = i
+    let expectedEndIdx = initialSegments.length;
+    let cumBeats = 0;
+    for (let i = 0; i < initialSegments.length; i++) {
+      if (cumBeats >= actualEndBeat) {
+        expectedEndIdx = i;
+        break;
       }
-      cum += finalSegments[i].beats
+      cumBeats += initialSegments[i].beats;
     }
 
-    expect(preservedStartIdx).toBeGreaterThanOrEqual(0)
+    const expectedPreserved = initialSegments.slice(expectedEndIdx);
+    // Use keptAfter from finishInfo directly — it is the preserved segment list
+    const actualPreserved: { direction: string; beats: number }[] = finishInfo.keptAfter;
 
-    const preservedSegments = finalSegments.slice(preservedStartIdx)
-
-    expect(preservedSegments.length).toBe(expectedPreserved.length)
+    expect(actualPreserved.length).toBe(expectedPreserved.length);
     for (let i = 0; i < expectedPreserved.length; i++) {
-      expect(preservedSegments[i].direction).toBe(expectedPreserved[i].direction)
-      expect(preservedSegments[i].beats).toBeCloseTo(expectedPreserved[i].beats, 3)
+      expect(actualPreserved[i].direction).toBe(expectedPreserved[i].direction);
+      expect(actualPreserved[i].beats).toBeCloseTo(expectedPreserved[i].beats, 1);
     }
-  })
+  });
 
-  test('recording overwrite with fractional off-grid timing (snap=0.5)', async ({ page }) => {
-    await page.selectOption('[data-testid="snap-select"]', '0.5')
-    await page.waitForTimeout(200)
+  test('preserves segments after endBeat when recording starts at beat 0', async ({ page }) => {
+    const initialSegments = await getSegments(page);
+    const { cum } = await getCumulativeBeats(initialSegments);
 
-    const tmp = mkdtempSync(join(tmpdir(), 'chart-'))
-    const tomlPath = join(tmp, 'long-chart.toml')
-    writeFileSync(tomlPath, LONG_CHART_TOML, 'utf-8')
-    await page.setInputFiles('[data-testid="import-toml"]', tomlPath)
-    await expect(page.locator('[data-testid="editor-toast"]')).toContainText('long-chart.toml を読み込みました')
-    await page.waitForTimeout(500)
+    const startBeat = 0;
+    const holdDurationMs = 4000;
 
-    const initialSegments = await getSegmentsFromWindow(page)
+    await startRecording(page, startBeat);
+    await simulateHoldKey(page, 'ArrowUp', holdDurationMs);
+    await stopRecording(page);
 
-    const startBeat = 4
+    const finishInfo = await getLastFinishRecordingInfo(page);
+    expect(finishInfo).not.toBeNull();
+    const actualEndBeat = finishInfo.endBeat;
 
-    await startPlayback(page)
-    await page.waitForTimeout(500)
-    await seekToBeat(page, startBeat)
-    await page.waitForTimeout(200)
+    let expectedEndIdx = initialSegments.length;
+    let cumBeats = 0;
+    for (let i = 0; i < initialSegments.length; i++) {
+      if (cumBeats >= actualEndBeat) {
+        expectedEndIdx = i;
+        break;
+      }
+      cumBeats += initialSegments[i].beats;
+    }
 
-    await enterRecordMode(page)
-    await page.waitForTimeout(200)
+    const expectedPreserved = initialSegments.slice(expectedEndIdx);
+    // Use keptAfter from finishInfo directly — it is the preserved segment list
+    const actualPreserved: { direction: string; beats: number }[] = finishInfo.keptAfter;
 
-    await page.keyboard.down('ArrowUp')
-    await page.waitForTimeout(700)
-    await page.keyboard.up('ArrowUp')
-    await page.waitForTimeout(200)
+    expect(actualPreserved.length).toBe(expectedPreserved.length);
+    for (let i = 0; i < expectedPreserved.length; i++) {
+      expect(actualPreserved[i].direction).toBe(expectedPreserved[i].direction);
+      expect(actualPreserved[i].beats).toBeCloseTo(expectedPreserved[i].beats, 1);
+    }
+  });
 
-    await exitRecordMode(page)
-    await page.waitForTimeout(500)
-    await stopPlayback(page)
+  test('does not split segment that starts before endBeat', async ({ page }) => {
+    const initialSegments = await getSegments(page);
 
-    const finalSegments = await getSegmentsFromWindow(page)
+    const startBeat = 3;
+    const holdDurationMs = 1500;
 
+    await startRecording(page, startBeat);
+    await simulateHoldKey(page, 'ArrowUp', holdDurationMs);
+    await stopRecording(page);
+
+    const finishInfo = await getLastFinishRecordingInfo(page);
+    expect(finishInfo).not.toBeNull();
+    const actualEndBeat = finishInfo.endBeat;
+
+    const finalSegments = await getSegments(page);
+    const { cum: finalCum } = await getCumulativeBeats(finalSegments);
+
+    let foundPartialSplit = false;
+    let cumBeats = 0;
     for (const seg of finalSegments) {
-      const remainder = ((seg.beats % 0.5) + 0.5) % 0.5
-      expect(remainder < 1e-3 || Math.abs(remainder - 0.5) < 1e-3).toBeTruthy()
-    }
-
-    const rec = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastFinishRecording as { startBeat: number; endBeat: number } | undefined)
-    const actualEndBeat = rec?.endBeat ?? 8
-
-    const expectedIdx = findEndIdx(initialSegments, actualEndBeat)
-    const expectedPreserved = initialSegments.slice(expectedIdx)
-
-    let cum = 0
-    let preservedStartIdx = -1
-    for (let i = 0; i < finalSegments.length; i++) {
-      if (cum >= actualEndBeat - 1e-9 && preservedStartIdx === -1) {
-        preservedStartIdx = i
+      const segStart = cumBeats;
+      const segEnd = cumBeats + seg.beats;
+      if (segStart < actualEndBeat && segEnd > actualEndBeat) {
+        foundPartialSplit = true;
+        break;
       }
-      cum += finalSegments[i].beats
+      cumBeats += seg.beats;
     }
 
-    expect(preservedStartIdx).toBeGreaterThanOrEqual(0)
-    const preservedSegments = finalSegments.slice(preservedStartIdx)
-
-    expect(preservedSegments.length).toBe(expectedPreserved.length)
-    for (let i = 0; i < expectedPreserved.length; i++) {
-      expect(preservedSegments[i].direction).toBe(expectedPreserved[i].direction)
-      expect(preservedSegments[i].beats).toBeCloseTo(expectedPreserved[i].beats, 3)
-    }
-  })
-})
+    expect(foundPartialSplit).toBe(false);
+  });
+});

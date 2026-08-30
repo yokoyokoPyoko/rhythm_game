@@ -101,6 +101,10 @@ export default function EditorScreen() {
     w.__editorRecStartBeat = recStartBeatRef.current
     w.__editorQuantizeModule = { quantizeBeat, segmentize }
     w.__editorSeekToBeat = seekToBeat
+    // __editorState facade: populated after startRecording/finishRecording are defined
+    const facade = (w.__editorState ?? {}) as Record<string, unknown>
+    facade.segments = segments
+    w.__editorState = facade
   })
 
   const playtestActiveRef = useRef(false)
@@ -392,6 +396,30 @@ export default function EditorScreen() {
     sourceRef.current = null
     setPlaying(false)
   }
+
+  // __editorState facade for tests: expose control methods after they are defined
+  useEffect(() => {
+    const w = window as unknown as Record<string, unknown>
+    const facade = (w.__editorState ?? {}) as Record<string, unknown>
+    facade.seekToBeat = seekToBeat
+    facade.enterRecordMode = async () => {
+      // Seek position to target beat, then start playback so the recording RAF loop runs
+      if (isPlayingRef.current) {
+        stop()
+      }
+      // startRecording reads positionRef.current / lastSeekBeatRef, then must have isPlaying=true
+      startRecording()
+      await playFrom(positionRef.current)
+    }
+    facade.exitRecordMode = () => {
+      finishRecording()
+      stop()
+    }
+    facade.loadInitialSegments = (segs: typeof segments) => {
+      setSegments(segs)
+    }
+    w.__editorState = facade
+  })
 
   const toggle = () => {
     if (isPlaying) {
