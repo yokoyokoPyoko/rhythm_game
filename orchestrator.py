@@ -1338,6 +1338,13 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     need_test = bool(task.ui)  # TDD: (re)generate acceptance test first; skip for non-UI tasks
     coder_commit = None
 
+    # Fast-path: if dynamic.spec.ts already exists (e.g. written manually or from previous run),
+    # skip QA-Gen and go straight to Red check / Gate B.
+    if need_test and DYNAMIC_SPEC_FILE.exists() and not getattr(args, "force_qa_gen", False):
+        log.info("[%s] tests/dynamic.spec.ts already exists → skipping QA-Gen (use --force-qa-gen to regenerate)", task.id)
+        need_test = False
+        need_coder = False  # will be set True if Red check fails (not yet implemented)
+
     def mark_stage(stage: int) -> None:
         nonlocal best_stage, no_progress_streak
         if stage > best_stage:
@@ -1604,6 +1611,7 @@ def main() -> None:
     parser.add_argument("--qa", help="Override QA model ID or short key")
     parser.add_argument("--reviewer", help="Override Reviewer model ID or short key")
     parser.add_argument("--postmortem", help="Override Postmortem model ID or short key")
+    parser.add_argument("--force-qa-gen", action="store_true", help="tests/dynamic.spec.tsが既存でもQA-Genを強制再実行する（デフォルトはスキップ）")
     args = parser.parse_args()
 
     setup_logging()
