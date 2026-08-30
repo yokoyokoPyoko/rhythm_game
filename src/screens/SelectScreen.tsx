@@ -107,9 +107,10 @@ beat = 8.0
       if (buf) {
         setAudioFile(file as File)
         setBuffer(buf)
-        setAudioBasename(fileName)
+        const base = getBasename(fileName)
+        setAudioBasename(base)
+        AudioCache.set(base, buf)
         AudioCache.set(fileName, buf)
-        AudioCache.set(getBasename(fileName), buf)
         console.log('[SelectScreen] Audio loaded via drop/input:', fileName)
       }
     } catch (e) {
@@ -249,8 +250,9 @@ beat = 8.0
               disabled={!isPaired}
               onClick={() => {
                 if (chart && buffer) {
-                  AudioCache.set(getBasename(chart.audio), buffer)
-                  navigate('/play/custom', { state: { chart, buffer: null } })
+                  const base = getBasename(chart.audio)
+                  AudioCache.set(base, buffer)
+                  navigate('/play/custom', { state: { chart, buffer } })
                 }
               }}
               style={{
