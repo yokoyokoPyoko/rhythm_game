@@ -69,7 +69,7 @@ export function parseChartText(text: string, source = 'chart'): Chart {
     audio_offset: isFiniteNumber(raw.audio_offset) ? raw.audio_offset : 0,
     scroll_speed: isFiniteNumber(raw.scroll_speed) && raw.scroll_speed > 0 ? raw.scroll_speed : 110,
     amplitude: isFiniteNumber(raw.amplitude) && raw.amplitude > 0 
-      ? (raw.amplitude > 1.5 ? raw.amplitude / 130 : raw.amplitude) 
+      ? (raw.amplitude > 10 ? raw.amplitude / 130 : raw.amplitude) 
       : 1.0,
     start_position: isFiniteNumber(raw.start_position)
       ? Math.max(-1.0, Math.min(1.0, raw.start_position))

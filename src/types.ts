@@ -12,7 +12,6 @@ export interface Chart {
   amplitude: number;
   start_position: number;
   bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
-
 }
 export interface SongEntry {
   id: string; title: string; artist: string; chartPath: string; difficulty: number;
