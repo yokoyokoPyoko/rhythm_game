@@ -89,12 +89,11 @@ export class WaveEngine {
   }
 
   waveYAt(beat: number): number {
-    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
     if (!Number.isFinite(beat)) {
-      return waveTop;
+      return TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
     }
     if (beat <= 0) {
-      return waveTop;
+      return TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
     }
     const last = this.points[this.points.length - 1];
     if (beat >= last.beat) {
