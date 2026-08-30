@@ -440,9 +440,16 @@
       "finished": 1788059068.1936274
     },
     "T109": {
-      "attempts": 0,
+      "attempts": 11,
       "status": "running",
-      "started": 1788059575.6742377
+      "started": 1788059575.6742377,
+      "cycles": 4,
+      "sessions": {
+        "qa": "ses_faefe41c2ffesNkMehklUxrcjx",
+        "postmortem": "ses_faefe8170ffe3aKGWQMtOruUDa",
+        "coder": "ses_faefb6c41ffeiJ3fV0L2qMN1zm"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
