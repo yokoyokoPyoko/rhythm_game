@@ -480,7 +480,8 @@
       "gate_b_golden": false,
       "sessions": {
         "coder": "ses_fad7e8aa9ffe7EjdJPjAmZjhsd",
-        "postmortem": "ses_fad7fb856ffe7UqNmvT13NCIOU"
+        "postmortem": "ses_fad7fb856ffe7UqNmvT13NCIOU",
+        "reviewer": "ses_fad7592faffeQ4bh53Mhv8Tq9G"
       }
     }
   },
