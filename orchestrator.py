@@ -877,8 +877,9 @@ STRICT QA REQUIREMENTS (verify BEHAVIOR / INTERNAL STATE, never surface-only DOM
 7. Robust Locators & Stability: use text/roles/test IDs from actual implemented UI elements. Avoid guessing parent container IDs.
 8. Console Error Monitoring: fail on any uncaught TypeError/ReferenceError.
 9. Off-Grid (Fractional Timing) Principle: When testing quantization, snapping, or timing judgments, NEVER test only whole-beat/integer multiples (e.g. 1000ms / 2.0 beats). You MUST include fractional off-grid inputs (e.g. holding key for 1.2 beats or 1.3 beats when snap=0.5) to verify that the value accurately snaps to the nearest grid line and prevents overshoot.
-10. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
-10. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
+ 10. **Range-Overwrite / Recording Tasks: Do NOT hardcode expected end beats or preserved slice indices. After `exitRecordMode`, READ `actualEndBeat = await page.evaluate(() => (window as any).__lastFinishRecording?.endBeat)` and compute expected preserved segments DYNAMICALLY from `initialSegments` cumulative beats: `expectedIdx = findEndIdx(initialSegments, actualEndBeat)`. Use this dynamic `expectedPreserved` for assertions. Hardcoding `endBeat = 8` or `slice(2)` will FAIL on timing drift.**
+ 11. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
+ 12. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
 
 Output only: DONE when finished. Never paste full test code into chat.
 """

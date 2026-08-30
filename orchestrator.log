@@ -3904,3 +3904,6 @@ Error: No tests found.
 2026-08-30 12:12:55,674 [INFO] [T106] Already passed -> Skip
 2026-08-30 12:12:55,674 [INFO] [T107] Already passed -> Skip
 2026-08-30 12:12:55,674 [INFO] [T108] Already passed -> Skip
+2026-08-30 14:21:21,061 [WARNING] Selected range has unpassed prerequisite dependencies: T109 (status: running)
+2026-08-30 14:32:15,204 [WARNING] Health check aborted by user.
+2026-08-30 14:34:17,317 [INFO] Orchestrator range execution: 1 tasks (from=T109, to=T109, budget=60m)
