@@ -19,7 +19,9 @@ export function chartToToml(chart: Chart): string {
   lines.push(`audio_offset = ${fmt(chart.audio_offset)}`)
   lines.push(`scroll_speed = ${fmt(chart.scroll_speed)}`)
   lines.push(`amplitude = ${fmt(chart.amplitude)}`)
-  lines.push(`start_position = ${fmt(chart.start_position)}`)
+  if (chart.start_position !== 0.0) {
+    lines.push(`start_position = ${fmt(chart.start_position)}`)
+  }
 
   if (chart.bpm_changes.length === 0) {
     lines.push(`bpm_changes = []`)

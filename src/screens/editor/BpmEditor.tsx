@@ -145,6 +145,7 @@ export default function BpmEditor({
           step={0.1}
           value={Number.isFinite(startPosition) ? startPosition : 0}
           onChange={(e) => onStartPositionChange(Number(e.target.value))}
+          data-testid="start-position"
         />
         <span className="editor-hint" style={{display: 'block', marginTop: '4px'}}>
           現在値: {Number.isFinite(startPosition) ? startPosition.toFixed(1) : '0.0'}

@@ -83,7 +83,8 @@ QA_OPTIONS = [
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "動画審査: .webm 動画を直接解析 (Gemini 固定)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "コードレビュー: 仕様書とgit diffを直接審査 (Gemini固定)"),
+    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "コードレビュー: 推論特化・根本原因究明 (Nemotron固定)"),
 ]
 
 POSTMORTEM_OPTIONS = [
@@ -350,28 +351,45 @@ def get_model_display(model_id: str) -> str:
     return f"{model_id}"
 
 
-def interactive_model_selection() -> FlowModels:
+def interactive_model_selection(code_review_only: bool = False) -> FlowModels:
     print("\n" + f"{INDIGO}{BOLD}TRACE WAVE // Autonomous Orchestrator{RESET}")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
-    print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset{RESET} (Rank 1 Models)")
-    print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
-    print(f"      {GRAY}├─ 2. QA Test    :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
-    print(f"      {GRAY}├─ 3. Reviewer   :{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
-    print(f"      {GRAY}└─ 4. Postmortem :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
-    print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google]{RESET}")
-    print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
+    
+    if code_review_only:
+        print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset (Code Review Only){RESET}")
+        print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
+        print(f"      {GRAY}├─ 2. Code Review:{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
+        print(f"      {GRAY}└─ 3. Postmortem :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
+        print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google]{RESET}")
+        print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
+    else:
+        print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset{RESET} (Rank 1 Models)")
+        print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
+        print(f"      {GRAY}├─ 2. QA Test    :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
+        print(f"      {GRAY}├─ 3. Code Review:{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
+        print(f"      {GRAY}└─ 4. Postmortem :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
+        print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google]{RESET}")
+        print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
 
     choice = input(f"Select preset [{BOLD}1{RESET}]: ").strip()
 
     if choice == "" or choice == "1":
         print(f"{GREEN}>> Applied: Recommended Preset{RESET}")
-        return FlowModels(
-            coder=MODEL_CATALOG["qwen38"][2],
-            qa=MODEL_CATALOG["qwen38"][2],
-            reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
-            postmortem=MODEL_CATALOG["nemotron_ultra"][2],
-        )
+        if code_review_only:
+            return FlowModels(
+                coder=MODEL_CATALOG["qwen38"][2],
+                qa=MODEL_CATALOG["gemini_flash_lite"][2],
+                reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
+                postmortem=MODEL_CATALOG["nemotron_ultra"][2],
+            )
+        else:
+            return FlowModels(
+                coder=MODEL_CATALOG["qwen38"][2],
+                qa=MODEL_CATALOG["qwen38"][2],
+                reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
+                postmortem=MODEL_CATALOG["nemotron_ultra"][2],
+            )
     elif choice == "2":
         print(f"{YELLOW}>> Applied: Ultra-Fast Preset (Gemini Unified){RESET}")
         return FlowModels(
@@ -399,9 +417,15 @@ def interactive_model_selection() -> FlowModels:
         return MODEL_CATALOG[selected_key][2]
 
     coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "qwen38")
-    qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "qwen38")
-    rev_m = select_one("Select [3. Dynamic Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
-    post_m = select_one("Select [4. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
+    
+    if code_review_only:
+        qa_m = MODEL_CATALOG["gemini_flash_lite"][2]
+        rev_m = select_one("Select [2. Code Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
+        post_m = select_one("Select [3. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
+    else:
+        qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "qwen38")
+        rev_m = select_one("Select [3. Code Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
+        post_m = select_one("Select [4. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
 
     return FlowModels(coder=coder_m, qa=qa_m, reviewer=rev_m, postmortem=post_m)
 
@@ -1789,7 +1813,7 @@ def main() -> None:
         else:
             models = FlowModels()
     else:
-        models = interactive_model_selection()
+        models = interactive_model_selection(code_review_only=args.code_review_only)
 
     # Apply CLI overrides if provided
     if args.coder:
