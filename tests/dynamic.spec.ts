@@ -1,234 +1,298 @@
 import { test, expect } from '@playwright/test';
 
-const TEST_AUDIO_PATH = '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav';
-const TEST_AUDIO_FILENAME = 'test-audio.wav';
-const TEST_AUDIO_TITLE = 'test-audio';
+const FIXTURE = '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav';
 
 test.describe('T106: Local Audio File Loading (File Input & Drag-and-Drop)', () => {
-  let consoleErrors: string[] = [];
+  let errors: string[] = [];
+  let pageErrors: string[] = [];
 
   test.beforeEach(async ({ page }) => {
-    consoleErrors = [];
+    errors = [];
+    pageErrors = [];
+
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
-        const text = msg.text();
-        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(text)) {
-          consoleErrors.push(text);
+        const t = msg.text();
+        if (/Uncaught|ReferenceError|TypeError|ChunkLoadError/.test(t)) {
+          errors.push(`console: ${t}`);
         }
       }
     });
-    await page.goto('/rhythm_game/#/editor');
+
+    page.on('pageerror', (err) => {
+      if (/TypeError|ReferenceError|Uncaught/.test(err.message)) {
+        pageErrors.push(`pageerror: ${err.message}`);
+      }
+    });
+
+    await page.goto('/');
     await page.waitForLoadState('networkidle', { timeout: 10000 });
-    await expect(page.locator('#root')).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = '#/editor';
+    });
+    await page.waitForSelector('[data-testid="editor-dropzone"]', { timeout: 10000 });
+    // Grant audio autoplay activation with a real user gesture.
+    await page.locator('.editor-header').click();
+    await page.waitForTimeout(300);
   });
 
   test.afterEach(() => {
-    expect(consoleErrors).toHaveLength(0);
+    expect(errors, 'Console errors detected').toHaveLength(0);
+    expect(pageErrors, 'Page errors detected').toHaveLength(0);
   });
 
-  test('file input loads audio, enables playback, and sets title from filename', async ({ page }) => {
-    // [Step 1: Capture Initial State]
-    const fileInput = page.locator('input[data-testid="audio-file-input"]');
-    await expect(fileInput).toBeVisible({ timeout: 10000 });
+  test('File input: loads audio, updates title, enables playback and timeline', async ({ page }) => {
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    const playBtn = page.locator('[data-testid="editor-play"]');
+    const titleInput = page.locator('#chart-title');
+    const slider = page.locator('.editor-slider').first();
 
-    const playButton = page.locator('button:has-text("再生"), button:has-text("Play")').first();
-    await expect(playButton).toBeVisible({ timeout: 5000 });
+    // --- Step 1: Capture Initial State ---
+    const initialTitle = await titleInput.inputValue();
+    const initialPlayBtnText = await playBtn.textContent();
+    const initialSliderDisabled = await slider.getAttribute('disabled');
 
-    const initialButtonText = await playButton.textContent();
-    expect(initialButtonText).toMatch(/再生|Play/);
+    expect(initialTitle).toBe('Reply');
+    expect(initialPlayBtnText).toBe('読込・再生');
+    expect(initialSliderDisabled).not.toBeNull();
 
-    const titleInput = page.locator('input[data-testid="chart-title-input"], input[placeholder*="タイトル"], input[placeholder*="Title"]').first();
-    const initialTitle = titleInput ? await titleInput.inputValue() : '';
+    // --- Step 2: Perform User Interaction (File Input) ---
+    await fileInput.setInputFiles(FIXTURE);
 
-    // [Step 2: Perform User Interaction - File Input]
-    await fileInput.setInputFiles(TEST_AUDIO_PATH);
+    // --- Step 3: Assert Resulting Transition (DOM observable) ---
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 30000, message: 'Play button should change from "読込中…" to "再生" after decode' }
+    ).toBe('再生');
 
-    // [Step 3: Assert Resulting Transition]
-    // Wait for audio to decode (up to 30s for large files)
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('button:has-text("再生"), button:has-text("Play")');
-        return btn && !btn.textContent?.includes('読込中') && !btn.textContent?.includes('Loading');
-      },
-      { timeout: 30000 }
-    );
+    await expect.poll(
+      async () => await titleInput.inputValue(),
+      { timeout: 10000, message: 'Title should update to filename without extension' }
+    ).toBe('test-audio');
 
-    // Verify play button is now enabled/ready
-    const readyButtonText = await playButton.textContent();
-    expect(readyButtonText).not.toMatch(/読込中|Loading/);
+    await expect(slider).toBeEnabled();
 
-    // Verify title was auto-set from filename (without extension)
-    if (await titleInput.count() > 0) {
-      await expect(titleInput).toHaveValue(TEST_AUDIO_TITLE, { timeout: 5000 });
-    }
+    // --- Step 4: Verify Playback Works ---
+    await playBtn.click();
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 5000 }
+    ).toBe('停止');
 
-    // Verify timeline/playback position UI becomes available
-    const timeDisplay = page.locator('[data-testid="playback-time"], .playback-time, text=/\\d+:\\d+/').first();
-    await expect(timeDisplay).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(600);
 
-    await page.waitForTimeout(1000);
+    const posText = await page.locator('.editor-pos-time').textContent();
+    expect(posText).not.toBe('0:00.0');
+
+    await playBtn.click();
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 5000 }
+    ).toBe('再生');
   });
 
-  test('drag-and-drop loads audio, enables playback, and sets title', async ({ page }) => {
-    // [Step 1: Capture Initial State]
-    const dropZone = page.locator('[data-testid="audio-drop-zone"], .editor-drop-zone, #editor-screen, main').first();
-    await expect(dropZone).toBeVisible({ timeout: 10000 });
+  test('Drag-and-drop: loads audio, updates title, enables playback and timeline', async ({ page }) => {
+    const playBtn = page.locator('[data-testid="editor-play"]');
+    const titleInput = page.locator('#chart-title');
+    const slider = page.locator('.editor-slider').first();
 
-    const playButton = page.locator('button:has-text("再生"), button:has-text("Play")').first();
-    await expect(playButton).toBeVisible({ timeout: 5000 });
-    const initialButtonText = await playButton.textContent();
+    // --- Step 1: Capture Initial State ---
+    const initialTitle = await titleInput.inputValue();
+    const initialPlayBtnText = await playBtn.textContent();
+    const initialSliderDisabled = await slider.getAttribute('disabled');
 
-    const titleInput = page.locator('input[data-testid="chart-title-input"], input[placeholder*="タイトル"], input[placeholder*="Title"]').first();
-    const initialTitle = titleInput ? await titleInput.inputValue() : '';
+    expect(initialTitle).toBe('Reply');
+    expect(initialPlayBtnText).toBe('読込・再生');
+    expect(initialSliderDisabled).not.toBeNull();
 
-    // [Step 2: Perform User Interaction - Drag and Drop]
-    const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
-    const file = await page.evaluateHandle((path) => {
-      return fetch(path).then(r => r.blob()).then(b => new File([b], 'test-audio.wav', { type: 'audio/wav' }));
-    }, TEST_AUDIO_PATH);
-
-    await page.dispatchEvent('[data-testid="audio-drop-zone"], .editor-drop-zone, #editor-screen, main', 'dragover', {
-      dataTransfer: dataTransfer,
-      preventDefault: true,
+    // --- Step 2: Perform User Interaction (Drag-and-Drop via DataTransfer) ---
+    await page.evaluate(async () => {
+      const res = await fetch('/rhythm_game/test-audio.wav');
+      const buf = await res.arrayBuffer();
+      const file = new File([buf], 'dropped.wav', { type: 'audio/wav' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const zone = document.querySelector('[data-testid="editor-dropzone"]') as HTMLElement;
+      const dropEvent = new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt,
+      });
+      zone.dispatchEvent(dropEvent);
     });
 
-    await page.dispatchEvent('[data-testid="audio-drop-zone"], .editor-drop-zone, #editor-screen, main', 'drop', {
-      dataTransfer: dataTransfer,
-      files: [file],
-      preventDefault: true,
+    // --- Step 3: Assert Resulting Transition ---
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 30000, message: 'Play button should change from "読込中…" to "再生" after decode' }
+    ).toBe('再生');
+
+    await expect.poll(
+      async () => await titleInput.inputValue(),
+      { timeout: 10000, message: 'Title should update to dropped filename without extension' }
+    ).toBe('dropped');
+
+    await expect(slider).toBeEnabled();
+
+    // --- Step 4: Verify Playback Works After Drop ---
+    await playBtn.click();
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 5000 }
+    ).toBe('停止');
+
+    await page.waitForTimeout(600);
+
+    const posText = await page.locator('.editor-pos-time').textContent();
+    expect(posText).not.toBe('0:00.0');
+
+    await playBtn.click();
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 5000 }
+    ).toBe('再生');
+  });
+
+  test('File input then drag-and-drop: second load replaces buffer and updates title', async ({ page }) => {
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    const playBtn = page.locator('[data-testid="editor-play"]');
+    const titleInput = page.locator('#chart-title');
+
+    // --- Step 1: Load first file via file input ---
+    await fileInput.setInputFiles(FIXTURE);
+
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 30000 }
+    ).toBe('再生');
+
+    await expect(titleInput).toHaveValue('test-audio');
+    const durationFirst = await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="editor-play"]');
+      return btn?.textContent;
+    });
+    expect(durationFirst).not.toBeNull();
+
+    // --- Step 2: Perform Drag-and-Drop with different file name ---
+    await page.evaluate(async () => {
+      const res = await fetch('/rhythm_game/test-audio.wav');
+      const buf = await res.arrayBuffer();
+      const file = new File([buf], 'second-drop.wav', { type: 'audio/wav' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const zone = document.querySelector('[data-testid="editor-dropzone"]') as HTMLElement;
+      const dropEvent = new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt,
+      });
+      zone.dispatchEvent(dropEvent);
     });
 
-    // [Step 3: Assert Resulting Transition]
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('button:has-text("再生"), button:has-text("Play")');
-        return btn && !btn.textContent?.includes('読込中') && !btn.textContent?.includes('Loading');
-      },
+    // --- Step 3: Assert title updated to second file name ---
+    await expect.poll(
+      async () => await titleInput.inputValue(),
+      { timeout: 15000 }
+    ).toBe('second-drop');
+  });
+
+  test('Audio offset is applied to playback start', async ({ page }) => {
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    const playBtn = page.locator('[data-testid="editor-play"]');
+    const offsetInput = page.locator('#audio-offset');
+
+    // --- Step 1: Load audio file ---
+    await fileInput.setInputFiles(FIXTURE);
+
+    await expect.poll(
+      async () => await playBtn.textContent(),
       { timeout: 30000 }
-    );
+    ).toBe('再生');
 
-    const readyButtonText = await playButton.textContent();
-    expect(readyButtonText).not.toMatch(/読込中|Loading/);
+    // --- Step 2: Set audio offset to 500ms ---
+    await offsetInput.fill('500');
+    await offsetInput.press('Tab');
 
-    if (await titleInput.count() > 0) {
-      await expect(titleInput).toHaveValue(TEST_AUDIO_TITLE, { timeout: 5000 });
-    }
+    expect(Number(await offsetInput.inputValue())).toBeCloseTo(500);
 
-    const timeDisplay = page.locator('[data-testid="playback-time"], .playback-time, text=/\\d+:\\d+/').first();
-    await expect(timeDisplay).toBeVisible({ timeout: 5000 });
+    // --- Step 3: Start playback and verify offset is passed to playFrom ---
+    await playBtn.click();
+    await expect.poll(
+      async () => await playBtn.textContent(),
+      { timeout: 5000 }
+    ).toBe('停止');
 
-    await page.waitForTimeout(1000);
+    const offsetValue = await page.evaluate(() => (window as any).__editorPlayFromOffset ?? null);
+    expect(offsetValue).toBe(500);
+
+    await playBtn.click();
   });
 
-  test('playback position reflects audio offset when set', async ({ page }) => {
-    // [Step 1: Capture Initial State]
-    const fileInput = page.locator('input[data-testid="audio-file-input"]');
-    await expect(fileInput).toBeVisible({ timeout: 10000 });
-    await fileInput.setInputFiles(TEST_AUDIO_PATH);
+  test('Invalid file type shows error and does not update state', async ({ page }) => {
+    const fileInput = page.locator('[data-testid="audio-file-input"]');
+    const playBtn = page.locator('[data-testid="editor-play"]');
+    const titleInput = page.locator('#chart-title');
+    const errorDisplay = page.locator('.editor-error');
 
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('button:has-text("再生"), button:has-text("Play")');
-        return btn && !btn.textContent?.includes('読込中') && !btn.textContent?.includes('Loading');
-      },
-      { timeout: 30000 }
-    );
+    // --- Step 1: Capture Initial State ---
+    const initialTitle = await titleInput.inputValue();
+    const initialPlayBtnText = await playBtn.textContent();
 
-    const offsetInput = page.locator('input[data-testid="audio-offset-input"], input[placeholder*="オフセット"], input[placeholder*="Offset"]').first();
-    await expect(offsetInput).toBeVisible({ timeout: 5000 });
+    expect(initialTitle).toBe('Reply');
+    expect(initialPlayBtnText).toBe('読込・再生');
 
-    const initialOffset = await offsetInput.inputValue();
-    const initialPlaybackTime = await page.locator('[data-testid="playback-time"], .playback-time').first().textContent();
+    // --- Step 2: Attempt to load non-audio file ---
+    await page.evaluate(async () => {
+      const file = new File(['not audio'], 'test.txt', { type: 'text/plain' });
+      const input = document.querySelector('[data-testid="audio-file-input"]') as HTMLInputElement;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
 
-    // [Step 2: Perform User Interaction - Set Offset]
-    await offsetInput.fill('5000'); // 5 seconds offset
-    await offsetInput.press('Enter');
+    // --- Step 3: Assert error shown and state unchanged ---
+    await expect.poll(
+      async () => await errorDisplay.textContent(),
+      { timeout: 10000, message: 'Error should appear for invalid file' }
+    ).toContain('デコードに失敗');
 
-    // Click play to verify offset applies
-    const playButton = page.locator('button:has-text("再生"), button:has-text("Play")').first();
-    await playButton.click();
-
-    // [Step 3: Assert Resulting Transition]
-    await page.waitForTimeout(1500);
-    const playbackTimeAfterOffset = await page.locator('[data-testid="playback-time"], .playback-time').first().textContent();
-
-    // Verify playback started from offset (approximately 5 seconds)
-    const timeMatch = playbackTimeAfterOffset?.match(/(\\d+):(\\d+)/);
-    if (timeMatch) {
-      const minutes = parseInt(timeMatch[1], 10);
-      const seconds = parseInt(timeMatch[2], 10);
-      const totalSeconds = minutes * 60 + seconds;
-      expect(totalSeconds).toBeGreaterThanOrEqual(4); // Allow some tolerance
-      expect(totalSeconds).toBeLessThanOrEqual(7);
-    }
-
-    await page.waitForTimeout(1000);
+    await expect(titleInput).toHaveValue(initialTitle);
+    await expect(playBtn).toHaveText('読込・再生');
   });
 
-  test('multiple audio formats accepted (mp3, flac, wav, ogg)', async ({ page }) => {
-    const formats = [
-      { ext: 'mp3', name: 'test-song.mp3' },
-      { ext: 'flac', name: 'test-song.flac' },
-      { ext: 'wav', name: 'test-song.wav' },
-      { ext: 'ogg', name: 'test-song.ogg' },
-    ];
+  test('Dragover event is handled without error on dropzone', async ({ page }) => {
+    const dropzone = page.locator('[data-testid="editor-dropzone"]');
 
-    for (const fmt of formats) {
-      // [Step 1: Capture Initial State]
-      const fileInput = page.locator('input[data-testid="audio-file-input"]');
-      await expect(fileInput).toBeVisible({ timeout: 5000 });
+    const initialBg = await dropzone.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(initialBg).toBeTruthy();
 
-      // Create a minimal audio file for each format test
-      const audioBlob = await page.evaluate(async (format) => {
-        const ctx = new AudioContext();
-        const buffer = ctx.createBuffer(1, 44100, 44100);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < data.length; i++) data[i] = Math.sin(i * 0.1);
-        return buffer;
-      }, fmt.ext);
+    // onDragOver calls e.preventDefault() and sets dropEffect; it must not throw.
+    await page.evaluate(() => {
+      const zone = document.querySelector('[data-testid="editor-dropzone"]') as HTMLElement;
+      const dragEvent = new DragEvent('dragover', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer(),
+      });
+      zone.dispatchEvent(dragEvent);
+    });
 
-      const testFile = new File([audioBlob], fmt.name, { type: `audio/${fmt.ext}` });
+    await page.waitForTimeout(100);
+    await expect(dropzone).toBeVisible();
 
-      // [Step 2: Perform User Interaction]
-      await fileInput.setInputFiles([testFile]);
-
-      // [Step 3: Assert Resulting Transition]
-      await page.waitForFunction(
-        () => {
-          const btn = document.querySelector('button:has-text("再生"), button:has-text("Play")');
-          return btn && !btn.textContent?.includes('読込中') && !btn.textContent?.includes('Loading');
-        },
-        { timeout: 15000 }
-      );
-
-      const playButton = page.locator('button:has-text("再生"), button:has-text("Play")').first();
-      const readyText = await playButton.textContent();
-      expect(readyText).not.toMatch(/読込中|Loading/);
-
-      // Reset for next iteration by navigating back
-      await page.goto('/rhythm_game/#/editor');
-      await page.waitForLoadState('networkidle', { timeout: 5000 });
-    }
-  });
-
-  test('file input rejects non-audio files', async ({ page }) => {
-    // [Step 1: Capture Initial State]
-    const fileInput = page.locator('input[data-testid="audio-file-input"]');
-    await expect(fileInput).toBeVisible({ timeout: 10000 });
-
-    // Create a text file
-    const textFile = new File(['not audio'], 'document.txt', { type: 'text/plain' });
-
-    // [Step 2: Perform User Interaction]
-    await fileInput.setInputFiles([textFile]);
-
-    // [Step 3: Assert Resulting Transition - should show error or not load]
-    await page.waitForTimeout(2000);
-
-    const playButton = page.locator('button:has-text("再生"), button:has-text("Play")').first();
-    const buttonText = await playButton.textContent();
-
-    // Should still show initial state (not loading/ready)
-    expect(buttonText).toMatch(/再生|Play/);
+    // A subsequent real drop still works (functional confirmation).
+    await page.evaluate(async () => {
+      const res = await fetch('/rhythm_game/test-audio.wav');
+      const buf = await res.arrayBuffer();
+      const file = new File([buf], 'dropped.wav', { type: 'audio/wav' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const zone = document.querySelector('[data-testid="editor-dropzone"]') as HTMLElement;
+      zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    await expect.poll(async () => await page.locator('[data-testid="editor-play"]').textContent(), {
+      timeout: 15000,
+    }).toBe('再生');
   });
 });
