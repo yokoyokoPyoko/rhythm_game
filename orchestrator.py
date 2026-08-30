@@ -64,6 +64,7 @@ MODEL_CATALOG = {
     "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
     "muse_spark": ("Muse Spark 1.2 Contributor", "OpenCode Zen (Free)", "opencode/muse-spark-1.2-contributor-free"),
     "gemini_flash_lite": ("Gemini 3.5 Flash-Lite", "Google AI Studio", "google/gemini-3.5-flash-lite"),
+    "gemini_flash_3_1_lite": ("Gemini 3.1 Flash-Lite", "Google AI Studio", "google/gemini-3.1-flash-lite"),
 }
 
 CODER_OPTIONS = [
@@ -72,6 +73,7 @@ CODER_OPTIONS = [
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高度論理思考・長考型"),
     ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律コード生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
+    ("gemini_flash_3_1_lite", "[Google] Gemini 3.1 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
 ]
 
 QA_OPTIONS = [
@@ -80,6 +82,7 @@ QA_OPTIONS = [
     ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証・長考テスト生成"),
     ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律動画テスト生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時動画テスト生成"),
+    ("gemini_flash_3_1_lite", "[Google] Gemini 3.1 Flash-Lite", "爆速枠: 即時動画テスト生成"),
 ]
 
 REVIEWER_OPTIONS = [
@@ -129,7 +132,7 @@ class FlowModels:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FlowModels":
         return cls(
-            coder=resolve_model_id(data.get("coder", MODEL_CATALOG["laguna_free"][2])),
+            coder=resolve_model_id(data.get("coder", MODEL_CATALOG["muse_spark"][2])),
             qa=resolve_model_id(data.get("qa", MODEL_CATALOG["nemotron_ultra"][2])),
             reviewer=resolve_model_id(data.get("reviewer", MODEL_CATALOG["gemini_flash_lite"][2])),
             postmortem=resolve_model_id(data.get("postmortem", MODEL_CATALOG["nemotron_ultra"][2])),
@@ -320,12 +323,18 @@ def check_model_health(model_id: str, label: str) -> bool:
     return True
 
 
-def perform_preflight_checks(models: FlowModels) -> bool:
+def perform_preflight_checks(models: FlowModels, code_review_only: bool = False) -> bool:
     print("\n" + f"{GRAY}─── Pre-flight Health Check ────────────────────────────────────────{RESET}")
     all_ok = True
     checked: set[str] = set()
 
-    for label, m in [("1. Coder", models.coder), ("2. QA", models.qa), ("3. Reviewer", models.reviewer), ("4. Postmortem", models.postmortem)]:
+    check_list = [("1. Coder", models.coder), ("3. Code Reviewer", models.reviewer), ("4. Postmortem", models.postmortem)]
+    if not code_review_only:
+        check_list.insert(1, ("2. QA", models.qa))
+
+    for label, m in check_list:
+        if not m:
+            continue
         if m in checked:
             print(f"  {DIM}Verified{RESET} {BOLD}{label}{RESET} ({GRAY}{m}{RESET}) -> {GREEN}[OK]{RESET}")
             continue
@@ -419,7 +428,8 @@ def interactive_model_selection(code_review_only: bool = False) -> FlowModels:
     coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "qwen38")
     
     if code_review_only:
-        qa_m = MODEL_CATALOG["gemini_flash_lite"][2]
+        # QAは不要なため空文字を設定
+        qa_m = "" 
         rev_m = select_one("Select [2. Code Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
         post_m = select_one("Select [3. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
     else:
@@ -1831,13 +1841,17 @@ def main() -> None:
 
     print(f"\n{GRAY}─── Active AI Configuration ────────────────────────────────────────{RESET}")
     print(f"  {BOLD}1. Coder{RESET}      : {CYAN}{get_model_display(models.coder)}{RESET}")
-    print(f"  {BOLD}2. QA Test{RESET}    : {CYAN}{get_model_display(models.qa)}{RESET}")
-    print(f"  {BOLD}3. Reviewer{RESET}   : {CYAN}{get_model_display(models.reviewer)}{RESET}")
-    print(f"  {BOLD}4. Postmortem{RESET} : {CYAN}{get_model_display(models.postmortem)}{RESET}")
+    if args.code_review_only:
+        print(f"  {BOLD}2. Code Reviewer{RESET} : {CYAN}{get_model_display(models.reviewer)}{RESET}")
+        print(f"  {BOLD}3. Postmortem{RESET}    : {CYAN}{get_model_display(models.postmortem)}{RESET}")
+    else:
+        print(f"  {BOLD}2. QA Test{RESET}       : {CYAN}{get_model_display(models.qa)}{RESET}")
+        print(f"  {BOLD}3. Code Reviewer{RESET} : {CYAN}{get_model_display(models.reviewer)}{RESET}")
+        print(f"  {BOLD}4. Postmortem{RESET}    : {CYAN}{get_model_display(models.postmortem)}{RESET}")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
 
     if not args.dry_run:
-        if not perform_preflight_checks(models):
+        if not perform_preflight_checks(models, code_review_only=args.code_review_only):
             log.warning("Health check aborted by user.")
             sys.exit(1)
 

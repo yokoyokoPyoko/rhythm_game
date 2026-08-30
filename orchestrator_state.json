@@ -1,9 +1,9 @@
 {
   "started_at": 1787099390.9580224,
   "models": {
-    "coder": "google/gemini-3.5-flash-lite",
-    "qa": "google/gemini-3.5-flash-lite",
-    "reviewer": "google/gemini-3.5-flash-lite",
+    "coder": "google/gemini-3.1-flash-lite",
+    "qa": "",
+    "reviewer": "opencode/nemotron-3-ultra-free",
     "postmortem": "opencode/nemotron-3-ultra-free"
   },
   "tasks": {
@@ -499,15 +499,16 @@
       "finished": 1788092710.4371612
     },
     "T114": {
-      "attempts": 6,
+      "attempts": 10,
       "status": "running",
-      "started": 1788102214.680769,
-      "cycles": 1,
+      "started": 1788104531.824973,
+      "cycles": 2,
       "gate_b_golden": false,
       "sessions": {
-        "coder": null,
-        "postmortem": "ses_fad24f4e1ffe0X7AKpC3hcf6li",
-        "reviewer": "ses_fad262655ffe5HZ9ez1hiCMS3X"
+        "coder": "ses_facc717f1ffecR2I1lmBh1tXH9",
+        "postmortem": "ses_facc4c4d0ffefVu8O8dCQ9Yawd",
+        "reviewer": "ses_fad262655ffe5HZ9ez1hiCMS3X",
+        "qa": "ses_facc31c54ffeIxpaniw1io1FWI"
       }
     }
   },
