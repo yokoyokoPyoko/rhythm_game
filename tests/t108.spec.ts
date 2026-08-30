@@ -29,18 +29,39 @@ test.describe('T108: Canvasホイールズームでページスクロール防�
   });
 
   test('canvas上でホイール操作してもwindow.scrollYが変化しない', async ({ page }) => {
-    // Scroll the page down first so there is headroom for scrolling.
-    await page.evaluate(() => window.scrollTo(0, 300));
-    await page.waitForTimeout(100);
-    const before = await page.evaluate(() => window.scrollY);
-    expect(before).toBeGreaterThan(0);
+    // Make the page tall so it is actually scrollable (a non-prevented wheel
+    // over the page background / canvas would scroll it).
+    await page.addStyleTag({
+      content: 'body { height: 4000px; } #root { min-height: 4000px; }',
+    });
 
-    // Hover over the canvas center and dispatch several real wheel events.
+    // Bring the canvas into the visible viewport (the editor may have scrolled
+    // it out of view). boundingBox() returns viewport-relative coordinates,
+    // which is exactly what page.mouse.* expects, so no scroll offset must be
+    // added. Using the viewport coordinates directly guarantees the wheel
+    // event actually lands on the canvas element.
+    await page.locator(CANVAS_SELECTOR).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(150);
+
+    const before = await page.evaluate(() => window.scrollY);
+
     const box = await page.locator(CANVAS_SELECTOR).boundingBox();
     expect(box).not.toBeNull();
     const cx = box!.x + box!.width / 2;
     const cy = box!.y + box!.height / 2;
+    // Guard: the canvas center must be inside the viewport, otherwise the wheel
+    // would not target the canvas. scrollIntoViewIfNeeded should guarantee this.
+    const viewport = await page.evaluate(() => ({
+      h: window.innerHeight,
+      w: window.innerWidth,
+    }));
+    expect(cy).toBeGreaterThan(0);
+    expect(cy).toBeLessThan(viewport.h);
+    expect(cx).toBeGreaterThan(0);
+    expect(cx).toBeLessThan(viewport.w);
+
     await page.mouse.move(cx, cy);
+    await page.waitForTimeout(50);
     for (let i = 0; i < 5; i++) {
       await page.mouse.wheel(0, -120);
       await page.waitForTimeout(30);
