@@ -321,7 +321,7 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, bpm, bpmChanges, rings, amplitude, selectedRing, positionMs, view, recording])
+  }, [segments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, positionMs, view, recording])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.

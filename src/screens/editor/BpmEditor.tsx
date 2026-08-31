@@ -110,7 +110,7 @@ export default function BpmEditor({
           className="editor-input"
           type="number"
           min={0.1}
-          max={1.0}
+          max={5.0}
           step={0.1}
           value={Number.isFinite(amplitude) ? amplitude : 1.0}
           onChange={(e) => onAmplitudeChange(Number(e.target.value))}

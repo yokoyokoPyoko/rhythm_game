@@ -68,11 +68,11 @@ export function parseChartText(text: string, source = 'chart'): Chart {
     audio: getBasename(raw.audio),
     audio_offset: isFiniteNumber(raw.audio_offset) ? raw.audio_offset : 0,
     scroll_speed: isFiniteNumber(raw.scroll_speed) && raw.scroll_speed > 0 ? raw.scroll_speed : 110,
-    amplitude: isFiniteNumber(raw.amplitude) && raw.amplitude > 0 
-      ? (raw.amplitude > 10 ? raw.amplitude / 130 : raw.amplitude) 
+    amplitude: isFiniteNumber(raw.amplitude) && (raw.amplitude as number) > 0
+      ? ((raw.amplitude as number) > 10 ? (raw.amplitude as number) / 130 : (raw.amplitude as number))
       : 1.0,
     start_position: isFiniteNumber(raw.start_position)
-      ? Math.max(-1.0, Math.min(1.0, raw.start_position))
+      ? Math.max(-1.0, Math.min(1.0, raw.start_position as number))
       : 0.0,
     bpm_changes: parseBpmChanges(raw.bpm_changes),
     segments: parseSegments(raw.segments),
