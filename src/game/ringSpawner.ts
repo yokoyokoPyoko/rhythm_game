@@ -3,6 +3,7 @@ import type { WaveEngine } from './waveEngine';
 import type { RingDef, RingState } from '../types';
 
 const TW_LEAD_BEATS = 3;
+// T121: scroll speed is dynamic via Chart.scroll_speed and Renderer scrollSpeed param
 
 function sanitizeBeat(value: number): number {
   if (!Number.isFinite(value) || value < 0) {

@@ -362,6 +362,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         scoreRef.current.recordTrace(dt, isOnWave)
       }
 
+      // T121: dynamic scroll_speed from chart
       renderer.render(ctx2d, {
         waveEngine: wave,
         cursor: cursorRef.current,

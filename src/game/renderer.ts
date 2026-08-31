@@ -7,7 +7,7 @@ import type { WaveEngine } from './waveEngine';
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 const TW_JUDGE_X = Math.round(800 * 0.26);
-const TW_SCROLL = 110;
+const DEFAULT_SCROLL_SPEED = 110;
 const FONT = "'Inter', system-ui, sans-serif";
 
 const COLORS = {
@@ -66,7 +66,7 @@ function resultColor(result: HitResult): string {
 export class Renderer {
   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
     const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline } = params;
-    const scrollSpeed = Number.isFinite(params.scrollSpeed) && (params.scrollSpeed as number) > 0 ? (params.scrollSpeed as number) : TW_SCROLL;
+    const scrollSpeed = Number.isFinite(params.scrollSpeed) && (params.scrollSpeed as number) > 0 ? (params.scrollSpeed as number) : DEFAULT_SCROLL_SPEED;
 
     this.drawBackground(ctx);
     this.drawJudgeLine(ctx);
