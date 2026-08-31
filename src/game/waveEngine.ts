@@ -64,10 +64,11 @@ export class WaveEngine {
       }
       beat += beats;
       const dir = sanitizeDirection(seg.direction);
-      // T123/T124: amplitude is speed coefficient (inverse of required beats for full span).
-      // Fixed physical height TW_AMP (130px); slope scales with amplitude — height invariant.
-      // e.g. amplitude=1 => 1 beat for full span, amplitude=2 => 0.5 beat (higher amplitude => faster).
-      const move = 2 * TW_AMP * this.amplitude * beats;
+      // T123/T124: amplitude is time coefficient (higher = slower).
+      // Fixed physical height TW_AMP (130px); speed = full_span / (required_beats).
+      // required_beats = amplitude * beats.
+      // move = speed * beats = (2 * TW_AMP) / (amplitude * beats) * beats = (2 * TW_AMP) / amplitude.
+      const move = (2 * TW_AMP) / this.amplitude;
       if (dir === 'up') {
         currentY = Math.max(waveTop, currentY - move);
       } else if (dir === 'down') {
