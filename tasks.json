@@ -636,5 +636,14 @@
     ],
     "type": "fix",
     "ui": true
+  },
+  {
+    "id": "T127",
+    "desc": "速度係数(amplitude)の規約全体の再統一と波形状の修復: 全幅(2*TW_AMP)移動に必要な拍数 = 1/amplitude という規約（amplitude=1なら1拍で全幅移動、amplitude=2なら0.5拍で全幅移動、高いほど急峻・速い）を全実装箇所で統一する。現状 cursor.ts / quantize.ts が「高いほど速い」で正しい一方、waveEngine.ts の buildPoints だけが move = 2*TW_AMP/amplitude と「高いほど遅い」に逆転しており、カーソルが波形に追従せずゲーム内トレース判定( |cursor.y - waveYAt| )や録音カーソル・波形プレビューが不一致になる。修正: buildPoints のセグメント移動量を 2*TW_AMP*amplitude*beats（TW_AMP上下幅でclamp）に変更し、cursor/quantize と同一規約に統一する。あわせて WavePreview の頂点ドラッグ(T125)、EditorScreen の録音カーソル初期Y・truncateSegmentsTo、cursor.ts のコメントも同一規約に明文化・整合させる。物理上下幅は TW_AMP=130 で固定のまま（T123/T124の成果を維持）。完了条件: 振幅設定を変更しても波の上下幅が不変で、移動速度のみが変化し、カーソルが波形に追従すること。",
+    "depends_on": [
+      "T126"
+    ],
+    "type": "fix",
+    "ui": true
   }
 ]

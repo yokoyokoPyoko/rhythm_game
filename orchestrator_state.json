@@ -646,16 +646,21 @@
     },
     "T126": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788166836.7794344,
       "cycles": 1,
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "sessions": {
         "coder": "ses_faa239b10ffe5a2exPb197WC6J",
         "reviewer": "ses_faa228613ffeqp3COFNd0xlCsR",
         "qa": "ses_fa8f35730ffeffwWrjsdfJsU7k"
       },
-      "finished": 1788146990.2281408
+      "finished": 1788166991.4127579
+    },
+    "T127": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788168325.5752487
     }
   },
   "consecutive_no_action": 0

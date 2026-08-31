@@ -975,6 +975,43 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T127] 速度係数(amplitude)の規約全体の再統一と波形状の修復
+
+**バグ**: 「速度係数に基づいた波形にならない」バグ。`amplitude` の速度係数としての解釈が `waveEngine.ts` の `buildPoints` だけ他と逆転し、カーソルが波形に追従しない。
+
+**共通規約（全箇所で統一）**:
+> `amplitude`（速度係数）: 全幅（`2*TW_AMP`）移動に必要な拍数の逆数。1拍あたりの移動量 = `2*TW_AMP*amplitude` px。
+> `amplitude=1` → 1拍で全幅移動、`amplitude=2` → 0.5拍で全幅移動。**高いほど急峻（速い）**。
+> 物理上下幅は `TW_AMP=130` で固定（T123/T124の成果を維持。振幅変更で高さは不変、速度のみ変化）。
+
+**現状の不整合（調査結果）**:
+- ✅ `src/game/cursor.ts:23` `speed = 2*TW_AMP*amplitude / (beatMs/1000)` → 高いほど速い
+- ✅ `src/chart/quantize.ts:44` `basePhysical = 1/amplitude`（全幅移動の拍数）→ 高いほど速い
+- ❌ `src/game/waveEngine.ts:71` `move = (2*TW_AMP)/amplitude` → **高いほど遅い（逆転）**
+
+**修正方針**:
+- `src/game/waveEngine.ts`: `buildPoints` のセグメント移動量を `2*TW_AMP/amplitude` から `2*TW_AMP*amplitude*beats`（`[waveTop, waveBottom]` にクランプ）へ変更し、cursor/quantize と同一規約に。amplitude=1で1拍全幅、2で0.5拍全幅。
+- `src/game/cursor.ts`: 式は正しいので変更不要。ただしコメントを正確な規約（高いほど速い）に明文化。
+- `src/chart/quantize.ts`: 既に正しいが、同一規約であることをコメントで明文化。
+- `src/screens/editor/WavePreview.tsx`: 頂点ドラッグ（T125）が新移動量（`2*TW_AMP*amplitude*beats`）で波形頂点Yを再現・クランプするよう整合。`waveYAt` を介した逆算を維持。
+- `src/screens/EditorScreen.tsx`: 録音カーソル初期Y（`engine.waveYAt`）と `truncateSegmentsTo` が新波形に追従することを確認（式は `WaveEngine` 経由なのでそのまま整合）。
+- ゲーム内: `GameScreen.tsx:361` のトレース判定 `|cursor.y - wave.waveYAtMs()| < TW_TOLERANCE` が、新波形とカーソルの一致により成立することを確認。
+
+**完了条件（自動テストで検証。速度係数・録音操作で複雑な数字を必須とする）**:
+1. **波形頂点Y = cursor速度式で算出されること**（複雑な振幅で）:
+   - `amplitude` を複雑な端数（例: `0.7`, `1.3`, `2.7`, `3.4` など）へ設定。
+   - 各振幅で `waveEngine.waveYAt(beat)` の頂点Yが `TW_CENTER_Y ± 2*TW_AMP*amplitude*beats`（clamp）と一致する（遅い側に倒れない）こと。
+2. **cursor と waveEngine が同一規約で一致すること**:
+   - 同じ振幅・同じ beatMs で、cursor の1拍あたり移動量と waveEngine のセグメント移動量が `2*TW_AMP*amplitude` で一致。
+   - オフグリッド位相（例: 0.37拍, 1.23拍）でも波頂点が正しいこと（オフグリッド検証原則）。
+3. **録音操作の複雑な入力（end-to-end）**:
+   - 例: amplitude=1.3, snap=0.5 の組み合わせで、エディタ録音操作（↑↓ を端数タイミングで押す）→ 録音カーソル軌跡と波形プレビューが同一規約で重なる。
+4. **回帰**: `amplitude` を変えても波の上下幅（`TW_AMP=130`）が不変（T123/T124維持）＋ 移動速度のみ変化。
+
+**テスト設計上の注意**: T126が「既に実装済みで全テスト合格→誤判定」された反省から、T127のテストは窓口関数単体呼び出しではなく、`WaveEngine`(waveYAt/getPoints) と `Cursor`(update) の**数値整合**を複雑な振幅値で直接検証する構造にする。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
