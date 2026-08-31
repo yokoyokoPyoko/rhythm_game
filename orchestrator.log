@@ -4695,3 +4695,6 @@ T114 failure is coder-side — cataloguing the missing fix so the retry lands.
 2026-08-31 09:37:28,735 [INFO] Dispatching [1mCodeReviewer(T114)[0m (model=[90mgoogle/gemini-3.1-flash-lite, variant=max[0m, attempt=1/5, timeout=∞) (session=ses_faadee2dcffenp4GgvCMYydJa5)
 2026-08-31 09:37:38,712 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=90, Verdict=PASS: src/chart/loader.ts において、要件通りのスタート位置のパースおよび未定義時のデフォルト値処理（マイグレーション）が実装されていることを確認しました。
 2026-08-31 09:37:38,712 [INFO] [T114] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-08-31 09:37:38,729 [INFO] [T114] Building docs/ dist for GitHub Pages...
+2026-08-31 09:37:41,568 [INFO] [T114] Pushing latest build to GitHub...
+2026-08-31 09:37:44,260 [INFO] [T114] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
