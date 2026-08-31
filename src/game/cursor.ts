@@ -28,4 +28,18 @@ export class Cursor {
     if (downPressed) delta += speed;
     this.y = Math.max(waveTop, Math.min(waveBottom, this.y + delta * dt));
   }
+
+  /**
+   * T119: Wave attraction assist — called at 1-beat boundary crossing.
+   * Pulls cursor toward wave target Y by factor (0.0-1.0).
+   */
+  pullTowards(targetY: number, factor = 0.28): void {
+    if (!Number.isFinite(targetY) || !Number.isFinite(factor)) return;
+    const f = Math.max(0, Math.min(1, factor));
+    if (f === 0) return;
+    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
+    const waveBottom = TW_CENTER_Y + this.amplitude * NORM_TO_PX;
+    const clampedTarget = Math.max(waveTop, Math.min(waveBottom, targetY));
+    this.y = Math.max(waveTop, Math.min(waveBottom, this.y + (clampedTarget - this.y) * f));
+  }
 }

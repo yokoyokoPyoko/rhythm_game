@@ -265,6 +265,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       initChart && initTimeline && initChart.rings.length > 0
         ? initTimeline.beatToMs(initChart.rings.reduce((m, r) => Math.max(m, r.beat), -Infinity))
         : null
+    let prevBeatFloor = initTimeline ? Math.floor(initTimeline.msToBeat(0)) : 0
 
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - lastTime) / 1000)
@@ -299,6 +300,15 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         keysRef.current.down,
         currentBeatMs,
       )
+      // T119: wave attraction assist — on 1-beat boundary crossing, pull cursor toward wave
+      if (startedRef.current) {
+        const currentBeatFloor = Math.floor(currentBeat)
+        if (currentBeatFloor !== prevBeatFloor) {
+          const targetY = wave.waveYAtMs(songTimeMs)
+          cursorRef.current.pullTowards(targetY, 0.28)
+          prevBeatFloor = currentBeatFloor
+        }
+      }
 
       if (startedRef.current) {
         for (const ring of ringsRef.current) {
