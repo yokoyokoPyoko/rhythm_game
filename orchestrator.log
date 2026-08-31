@@ -4731,3 +4731,6 @@ T114 failure is coder-side — cataloguing the missing fix so the retry lands.
 2026-08-31 09:42:44,559 [INFO] Persisted session ses_faabb7011ffesHvOeRHacby8mp for task=T116, role=reviewer
 2026-08-31 09:42:44,559 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: All requirements for T116 have been verified in the source code. The implementation successfully separates the editing modes both in the UI state and the interaction logic within WavePreview.
 2026-08-31 09:42:44,559 [INFO] [T116] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-08-31 09:42:44,573 [INFO] [T116] Building docs/ dist for GitHub Pages...
+2026-08-31 09:42:47,651 [INFO] [T116] Pushing latest build to GitHub...
+2026-08-31 09:42:49,887 [INFO] [T116] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
