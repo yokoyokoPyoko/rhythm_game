@@ -4,6 +4,7 @@ import { AudioManager } from '../audio/AudioManager'
 import { AudioCache, getBasename } from '../audio/AudioCache'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio, loadAudioFromFile } from '../audio/loader'
+import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
@@ -77,6 +78,7 @@ export default function EditorScreen() {
   const [durationMs, setDurationMs] = useState(0)
   const [positionMs, setPositionMs] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [metronomeEnabled, setMetronomeEnabled] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [snap, setSnap] = useState(0.25)
   const [startPosition, setStartPosition] = useState(0.0)
@@ -130,6 +132,7 @@ export default function EditorScreen() {
   const modeRef = useRef<'play' | 'record'>('play')
   const editModeRef = useRef<'vertex' | 'edge' | 'ring'>('vertex')
   useEffect(() => { editModeRef.current = editMode }, [editMode])
+  useEffect(() => { metronomeEnabledRef.current = metronomeEnabled }, [metronomeEnabled])
   const recCursorRef = useRef<Cursor | null>(null)
   const recTrajRef = useRef<TrajPoint[]>([])
   const recStartBeatRef = useRef(0)
@@ -150,6 +153,8 @@ export default function EditorScreen() {
   const positionRef = useRef(0)
   const endMsRef = useRef(0)
   const isPlayingRef = useRef(false)
+  const metronomeTimerRef = useRef<number | null>(null)
+  const metronomeEnabledRef = useRef(true)
 
   const setPlaying = (v: boolean) => {
     isPlayingRef.current = v
@@ -164,6 +169,59 @@ export default function EditorScreen() {
     rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), 0),
     8,
   )
+
+  const stopMetronome = useCallback(() => {
+    if (metronomeTimerRef.current !== null) {
+      window.clearInterval(metronomeTimerRef.current)
+      metronomeTimerRef.current = null
+    }
+  }, [])
+
+  const startMetronome = useCallback((ctx: AudioContext, fromMs: number) => {
+    stopMetronome()
+    if (!metronomeEnabledRef.current) return
+    const lookaheadSec = LOOKAHEAD_MS / 1000
+    let beatIdx = Math.ceil(timeline.msToBeat(fromMs))
+    if (!Number.isFinite(beatIdx) || beatIdx < 0) beatIdx = 0
+    let nextBeatTime = ctx.currentTime + (timeline.beatToMs(beatIdx) - fromMs) / 1000
+    // if next beat is in the past (due to quantization), advance
+    while (nextBeatTime < ctx.currentTime) {
+      nextBeatTime += timeline.beatMsAt(beatIdx) / 1000
+      beatIdx++
+    }
+    metronomeTimerRef.current = window.setInterval(() => {
+      if (!metronomeEnabledRef.current) return
+      const audioCtx = AudioManager.getInstance().ctx
+      const horizon = audioCtx.currentTime + lookaheadSec
+      while (nextBeatTime < horizon) {
+        try {
+          schedule(audioCtx, nextBeatTime, beatIdx)
+        } catch {
+          // keep grid advancing
+        }
+        nextBeatTime += timeline.beatMsAt(beatIdx) / 1000
+        beatIdx++
+      }
+    }, 25)
+  }, [stopMetronome, timeline])
+
+  useEffect(() => {
+    ;(window as unknown as Record<string, unknown>).__editorMetronomeEnabled = metronomeEnabled
+  }, [metronomeEnabled])
+
+  useEffect(() => {
+    if (isPlaying && metronomeEnabled) {
+      try {
+        const ctx = AudioManager.getInstance().ctx
+        startMetronome(ctx, positionRef.current)
+      } catch { /* ctx not ready */ }
+    } else if (!isPlaying || !metronomeEnabled) {
+      stopMetronome()
+    }
+    return () => {
+      if (!isPlaying) stopMetronome()
+    }
+  }, [isPlaying, metronomeEnabled, startMetronome, stopMetronome])
 
   const finishRecording = useCallback(() => {
     if (modeRef.current !== 'record') return
@@ -241,6 +299,7 @@ export default function EditorScreen() {
         setPositionMs(endMsRef.current)
         positionRef.current = endMsRef.current
         if (modeRef.current === 'record') finishRecording()
+        stopMetronome()
         setPlaying(false)
       } else {
         setPositionMs(pos)
@@ -262,10 +321,11 @@ export default function EditorScreen() {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [isPlaying, buffer, timeline, finishRecording])
+  }, [isPlaying, buffer, timeline, finishRecording, stopMetronome])
 
   useEffect(() => {
     return () => {
+      stopMetronome()
       if (sourceRef.current) {
         try {
           sourceRef.current.stop()
@@ -276,7 +336,7 @@ export default function EditorScreen() {
         sourceRef.current = null
       }
     }
-  }, [])
+  }, [stopMetronome])
 
   const loadLocalFile = useCallback(async (file: File) => {
     const mgr = AudioManager.getInstance()
@@ -294,6 +354,7 @@ export default function EditorScreen() {
         }
         sourceRef.current.disconnect()
         sourceRef.current = null
+        stopMetronome()
         setPlaying(false)
       }
       setBuffer(buf)
@@ -309,7 +370,7 @@ export default function EditorScreen() {
     } else {
       setError('ローカル音声ファイルのデコードに失敗しました')
     }
-  }, [notify])
+  }, [notify, stopMetronome])
 
   const playFrom = useCallback(async (fromMs: number) => {
     const mgr = AudioManager.getInstance()
@@ -374,6 +435,7 @@ export default function EditorScreen() {
       src.onended = () => {
         if (sourceRef.current === src) {
           sourceRef.current = null
+          stopMetronome()
           setPlaying(false)
         }
       }
@@ -394,7 +456,7 @@ export default function EditorScreen() {
         ? '音楽ファイルの読み込みに失敗しました（メトロノームのみで続行）'
         : null,
     )
-  }, [buffer, url, audioOffset, segments, rings, timeline])
+  }, [buffer, url, audioOffset, segments, rings, timeline, stopMetronome])
 
   const startRecording = useCallback(() => {
     let rawStartBeat: number
@@ -418,8 +480,12 @@ export default function EditorScreen() {
   }, [timeline, segments, amplitude, startPosition, positionMs, snap])
 
   const stop = useCallback(() => {
+    stopMetronome()
     const src = sourceRef.current
-    if (!src) return
+    if (!src) {
+      setPlaying(false)
+      return
+    }
     const ctx = AudioManager.getInstance().ctx
     const pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
     const clamped = buffer ? Math.min(pos, buffer.duration * 1000) : pos
@@ -433,7 +499,7 @@ export default function EditorScreen() {
     src.disconnect()
     sourceRef.current = null
     setPlaying(false)
-  }, [buffer])
+  }, [buffer, stopMetronome])
 
   // __editorState facade for tests: expose control methods after they are defined
   useEffect(() => {
@@ -887,6 +953,31 @@ export default function EditorScreen() {
             <div className="editor-pos">
               <span className="editor-pos-time">{formatSeconds(positionMs)}</span>
               <span className="editor-pos-beat">beat: {beat.toFixed(2)}</span>
+            </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="audio-offset">
+                オーディオオフセット (ms)
+              </label>
+              <input
+                id="audio-offset"
+                className="editor-input"
+                type="number"
+                step={10}
+                value={audioOffset}
+                onChange={(e) => setAudioOffset(Number(e.target.value) || 0)}
+              />
+            </div>
+            <div className="editor-field">
+              <label className="editor-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  data-testid="metronome-switch"
+                  defaultChecked
+                  checked={metronomeEnabled}
+                  onChange={(e) => setMetronomeEnabled(e.target.checked)}
+                />
+                メトロノーム音
+              </label>
             </div>
             {error && <div className="editor-error">{error}</div>}
           </section>
