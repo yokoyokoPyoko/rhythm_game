@@ -645,9 +645,14 @@
       "finished": 1788144228.9737773
     },
     "T126": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788146896.165982
+      "started": 1788146896.165982,
+      "cycles": 1,
+      "gate_b_golden": false,
+      "sessions": {
+        "coder": "ses_faa239b10ffe5a2exPb197WC6J"
+      }
     }
   },
   "consecutive_no_action": 0

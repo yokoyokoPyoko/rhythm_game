@@ -37,6 +37,15 @@ export function segmentize(
   if (traj.length < 2 || !(snap > 0)) return []
   const pts = [...traj].sort((a, b) => a.beat - b.beat)
   const threshold = Math.max((amplitude * 130 * snap) / 16, 0.5)
+  // T126: physically correct beats = nearest multiple of the beat duration that
+  // allows full-span traversal at the configured amplitude, snapped to the grid.
+  // basePhysical = 1 / amplitude  (beats to traverse 2*TW_AMP at speed amplitude)
+  const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
+  const basePhysical = 1 / safeAmp
+  let physicalSnap = quantizeBeat(basePhysical, snap)
+  if (!(physicalSnap > 1e-9)) physicalSnap = snap
+  // Ensure physicalSnap is at least snap (and not zero) so it remains snap-aligned
+  if (physicalSnap < snap - 1e-9) physicalSnap = snap
 
   const segs: Segment[] = []
   let i = 0
@@ -64,7 +73,13 @@ export function segmentize(
       else direction = dy > 0 ? 'down' : 'up'
     }
 
-    const beats = quantizeBeat(rawBeats, snap)
+    // T126: do not use rawBeats directly; snap raw to physical grid so any
+    // recording speed maps to the nearest physically consistent duration.
+    const rawQuant = quantizeBeat(rawBeats, snap)
+    let beats = quantizeBeat(rawQuant, physicalSnap)
+    // If rawQuant was smaller than half a physical unit, quantize yields 0;
+    // clamp to one physical unit to prohibit zero-length free segments.
+    if (beats < 1e-6) beats = physicalSnap
     if (beats > 1e-6) {
       const last = segs[segs.length - 1]
       if (last && last.direction === direction) {
@@ -77,9 +92,9 @@ export function segmentize(
   }
 
   // Final pass: re-quantize every produced segment's beats so recordings stay
-  // perfectly aligned to the grid (no sub-epsilon drift), then drop empties.
+  // perfectly aligned to the physical grid (and thus also to snap), then drop empties.
   return segs
-    .map((s) => ({ direction: s.direction, beats: Number(quantizeBeat(s.beats, snap).toFixed(4)) }))
+    .map((s) => ({ direction: s.direction, beats: Number(quantizeBeat(s.beats, physicalSnap).toFixed(4)) }))
     .filter((s) => s.beats > 1e-6)
 }
 
