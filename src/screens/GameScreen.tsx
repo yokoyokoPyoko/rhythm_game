@@ -7,6 +7,7 @@ import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audi
 import { isKeySoundEnabled, playKeyClick, setKeySoundEnabled } from '../audio/keySound'
 import { loadAudio } from '../audio/loader'
 import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
+import { ChartCache } from '../chart/cache'
 import { loadChart } from '../chart/loader'
 import { loadSongList } from '../chart/manifest'
 import { Cursor } from '../game/cursor'
@@ -204,12 +205,23 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           chart = state.chart
           buf = state.buffer !== undefined ? state.buffer : null
         } else {
-          const songs = await loadSongList()
-          const song = songs.find((s) => s.id === songId)
-          if (!song) {
-            throw new Error('譜面ファイルが見つかりません')
+          // T120: support custom chart added via SelectScreen cache (custom-xxx)
+          const cached = songId ? ChartCache.get(songId) : undefined
+          if (cached) {
+            chart = cached
+          } else {
+            const songs = await loadSongList()
+            const song = songs.find((s) => s.id === songId)
+            if (!song) {
+              throw new Error('譜面ファイルが見つかりません')
+            }
+            const cachedByPath = ChartCache.get(song.chartPath)
+            if (cachedByPath) {
+              chart = cachedByPath
+            } else {
+              chart = await loadChart(song.chartPath)
+            }
           }
-          chart = await loadChart(song.chartPath)
         }
         await audioMgr.ensure()
         const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes)
@@ -225,7 +237,12 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         } else if (effectiveChart) {
           buf = AudioCache.get(getBasename(chart.audio)) || null
         } else if (!state?.chart) {
-          buf = await loadAudio(chart.audio, audioMgr.ctx)
+          const cachedBuf = AudioCache.get(getBasename(chart.audio)) || (songId ? AudioCache.get(songId) : undefined)
+          if (cachedBuf) {
+            buf = cachedBuf
+          } else {
+            buf = await loadAudio(chart.audio, audioMgr.ctx)
+          }
         }
 
         if (!buf) {

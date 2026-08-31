@@ -250,9 +250,21 @@ beat = 8.0
               disabled={!isPaired}
               onClick={() => {
                 if (chart && buffer) {
+                  const id = `custom-${Date.now()}`
+                  const newEntry: SongEntry = {
+                    id,
+                    title: chart.title || chartFileName.replace(/\.toml$/i, '') || 'Untitled',
+                    artist: chart.artist || '',
+                    chartPath: id,
+                    difficulty: 3,
+                  }
+                  ChartCache.set(id, chart)
+                  ChartCache.set(chartFileName, chart)
                   const base = getBasename(chart.audio)
                   AudioCache.set(base, buffer)
-                  navigate('/play/custom', { state: { chart, buffer } })
+                  AudioCache.set(id, buffer)
+                  AudioCache.set(getBasename(chartFileName), buffer)
+                  setSongs((prev) => [...prev, newEntry])
                 }
               }}
               style={{
@@ -265,7 +277,7 @@ beat = 8.0
                 fontWeight: 'bold',
               }}
             >
-              この譜面でプレイ
+              追加
             </button>
           </div>
         </div>
