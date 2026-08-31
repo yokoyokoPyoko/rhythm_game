@@ -4916,3 +4916,8 @@ src/game/waveEngine.ts(5,7): error TS6133: 'NORM_TO_PX' is declared but its valu
 2026-08-31 11:43:42,484 [INFO] Persisted session ses_faa4cac05ffed2LdOlKT54XW2z for task=T125, role=reviewer
 2026-08-31 11:43:42,484 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: All requirements for task T125 were verified by inspecting the provided source files. The logic correctly replaces direct mouse Y positioning with physics-based re-calculation using the WaveEngine.
 2026-08-31 11:43:42,485 [INFO] [T125] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-08-31 11:43:42,517 [INFO] [T125] Building docs/ dist for GitHub Pages...
+2026-08-31 11:43:46,847 [INFO] [T125] Pushing latest build to GitHub...
+2026-08-31 11:43:48,973 [INFO] [T125] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
+2026-08-31 12:28:16,164 [INFO] Orchestrator range execution: 1 tasks (from=T126, to=T126, budget=600m)
+2026-08-31 12:28:16,165 [INFO] [T126] --only mode: skipping dependency checks.
