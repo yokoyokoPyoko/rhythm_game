@@ -945,6 +945,14 @@ CSS Transition のみ（ライブラリ不使用）:
   - `WaveEngine.buildPoints`: `waveTop`/`waveBottom` を `TW_AMP` ベースに修正。
   - `WaveEngine`/`Cursor`: 移動拍数計算に `amplitude` を使用するように修正。
 - **完了条件**: 振幅設定を変更しても波の上下幅が変化せず、プレイヤーの移動速度（斜度）のみが変化することを検証。
+---
+
+### [T124] 振幅(amplitude)の物理的な固定と速度係数化の反映修正
+
+`src/game/waveEngine.ts`:
+- 波形描画高さ（waveTop/waveBottom）計算をTW_AMP（固定）基準に戻す。
+- move距離計算を修正し、amplitudeが高いほど速度が上がる（＝到達時間が短くなる）ようにする。
+- 完了条件: 振幅設定を変更しても描画される波形の高さ（上限・下限）が不変であり、かつ移動速度のみが変化することを検証。
 
 ---
 

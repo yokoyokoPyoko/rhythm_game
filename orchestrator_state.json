@@ -609,7 +609,7 @@
     },
     "T123": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788140548.4061735,
       "cycles": 1,
       "gate_b_golden": false,
@@ -617,7 +617,13 @@
         "coder": "ses_faa82fa3effehk05OIQYk2rWNC",
         "postmortem": "ses_faa834693ffeWOFRY6SodQ9LnK",
         "reviewer": "ses_faa816515ffeDAYWJRJ34xLAle"
-      }
+      },
+      "finished": 1788140779.3499
+    },
+    "T124": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788142852.5313685
     }
   },
   "consecutive_no_action": 0
