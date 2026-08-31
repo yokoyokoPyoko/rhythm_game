@@ -91,9 +91,12 @@ export default function EditorScreen() {
   const [importError, setImportError] = useState<string | null>(null)
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [ringDetailsOpen, setRingDetailsOpen] = useState(false)
+  const [segmentDetailsOpen, setSegmentDetailsOpen] = useState(false)
   const [mode, setMode] = useState<'play' | 'record'>('play')
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
+  const [hoveredSegment, setHoveredSegment] = useState<number | null>(null)
+  const [hoveredRing, setHoveredRing] = useState<number | null>(null)
   const [view, setView] = useState<WaveView>({ startBeat: 0, beats: 16 })
   const [recLive, setRecLive] = useState<{ beat: number; y: number; trajectory: { beat: number; y: number }[] } | null>(null)
 
@@ -102,6 +105,12 @@ export default function EditorScreen() {
       setRingDetailsOpen(true)
     }
   }, [rings.length])
+
+  useEffect(() => {
+    if (segments.length > 0) {
+      setSegmentDetailsOpen(true)
+    }
+  }, [segments.length])
 
    useEffect(() => {
     const w = window as unknown as Record<string, unknown>
@@ -119,11 +128,15 @@ export default function EditorScreen() {
     w.__editorSeekToBeat = seekToBeat
     w.__editorMode = editMode
     w.__editorSelectedSegment = selectedSegment
+    w.__editorHoveredSegment = hoveredSegment
+    w.__editorHoveredRing = hoveredRing
     // __editorState facade: populated after startRecording/finishRecording are defined
     const facade = (w.__editorState ?? {}) as Record<string, unknown>
     facade.segments = segments
     facade.editMode = editMode
     facade.selectedSegment = selectedSegment
+    facade.hoveredSegment = hoveredSegment
+    facade.hoveredRing = hoveredRing
     w.__editorState = facade
   })
 
@@ -677,6 +690,31 @@ export default function EditorScreen() {
     setSelectedRing((cur) => (cur === index ? null : cur))
   }
 
+  const handleSelectRing = useCallback((index: number | null) => {
+    setSelectedRing(index)
+    if (index != null) {
+      setRingDetailsOpen(true)
+      // focus corresponding list item after details expand
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-focus-id="ring-${index}"]`) as HTMLElement | null
+        el?.focus()
+        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      })
+    }
+  }, [])
+
+  const handleSelectSegment = useCallback((index: number | null) => {
+    setSelectedSegment(index)
+    if (index != null) {
+      setSegmentDetailsOpen(true)
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-focus-id="segment-${index}"]`) as HTMLElement | null
+        el?.focus()
+        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      })
+    }
+  }, [])
+
   const addRing = useCallback(
     (beat: number): number | undefined => {
       const snapped = quantizeBeat(beat, snap)
@@ -1106,6 +1144,8 @@ export default function EditorScreen() {
             snap={snap}
             selectedRing={selectedRing}
             selectedSegment={selectedSegment}
+            hoveredRing={hoveredRing}
+            hoveredSegment={hoveredSegment}
             positionMs={positionMs}
             view={view}
             recording={recLive}
@@ -1113,13 +1153,15 @@ export default function EditorScreen() {
             onViewChange={setView}
             onAddRing={addRing}
             onMoveRing={moveRing}
-            onSelectRing={setSelectedRing}
-            onSelectSegment={setSelectedSegment}
+            onSelectRing={handleSelectRing}
+            onSelectSegment={handleSelectSegment}
+            onHoverRing={setHoveredRing}
+            onHoverSegment={setHoveredSegment}
             onSegmentsChange={setSegments}
             onDeleteRing={removeRing}
             onSeek={seekToBeat}
           />
-          <SegmentEditor segments={segments} selectedIndex={selectedSegment} onSegmentsChange={setSegments} onSelect={setSelectedSegment} editMode={editMode} />
+          <SegmentEditor segments={segments} selectedIndex={selectedSegment} hoveredIndex={hoveredSegment} onSegmentsChange={setSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} />
 
           <section className="editor-pane editor-accordion">
              <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>
@@ -1137,8 +1179,15 @@ export default function EditorScreen() {
                   .map(({ ring, i }, sortedIdx) => (
                   <li
                     key={`${i}-${ring.beat}`}
-                    className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}`}
+                    className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}${i === hoveredRing ? ' ring-list-item-hovered' : ''}`}
                     data-testid={`ring-list-item-${sortedIdx}`}
+                    data-focus-id={`ring-${i}`}
+                    tabIndex={0}
+                    onMouseEnter={() => setHoveredRing(i)}
+                    onMouseLeave={() => setHoveredRing((cur) => cur === i ? null : cur)}
+                    onClick={() => handleSelectRing(i)}
+                    onFocus={() => setHoveredRing(i)}
+                    onBlur={() => setHoveredRing((cur) => cur === i ? null : cur)}
                   >
                      <span
                        className="ring-list-beat"

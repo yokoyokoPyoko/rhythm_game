@@ -50,7 +50,7 @@ export function parseChartText(text: string, source = 'chart'): Chart {
   } catch {
     throw new Error(`チャートのTOMLパースに失敗しました: ${source}`);
   }
-  // T112/T93/T117: audio_offset / scroll_speed / amplitude normalization handled below (ensure loader supports all chart fields)
+  // T118: loader must support audio_offset / scroll_speed / amplitude (normalized) — keep legacy px migration and basename handling
 
   if (typeof raw.title !== 'string' || typeof raw.artist !== 'string') {
     throw new Error(`チャートに title / artist がありません: ${source}`);

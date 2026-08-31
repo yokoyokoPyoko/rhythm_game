@@ -33,6 +33,8 @@ export interface WavePreviewProps {
   snap?: number
   selectedRing?: number | null
   selectedSegment?: number | null
+  hoveredRing?: number | null
+  hoveredSegment?: number | null
   positionMs?: number
   view?: WaveView
   recording?: RecordingState | null
@@ -42,6 +44,8 @@ export interface WavePreviewProps {
   onMoveRing?: (index: number, beat: number) => void
   onSelectRing?: (index: number | null) => void
   onSelectSegment?: (index: number | null) => void
+  onHoverRing?: (index: number | null) => void
+  onHoverSegment?: (index: number | null) => void
   onDeleteRing?: (index: number) => void
   onSegmentsChange?: (next: Segment[]) => void
   onSeek?: (beat: number) => void
@@ -57,6 +61,8 @@ export default function WavePreview({
   snap = 0.25,
   selectedRing = null,
   selectedSegment = null,
+  hoveredRing = null,
+  hoveredSegment = null,
   positionMs,
   view,
   recording = null,
@@ -66,6 +72,8 @@ export default function WavePreview({
   onMoveRing,
   onSelectRing,
   onSelectSegment,
+  onHoverRing,
+  onHoverSegment,
   onDeleteRing,
   onSegmentsChange,
   onSeek,
@@ -210,7 +218,9 @@ export default function WavePreview({
       const p0 = points[i]
       const p1 = points[i + 1]
       const seg = segments[i]
-      const isSelectedEdge = editMode === 'edge' && i === selectedSegment
+      const isSelectedEdge = i === selectedSegment
+      const isHoveredEdge = i === hoveredSegment
+      const isHighlighted = isSelectedEdge || isHoveredEdge
       const color =
         seg && seg.direction === 'down'
           ? SUB_COLOR
@@ -227,15 +237,17 @@ export default function WavePreview({
       const y0 = mapY(engine.waveYAt(segStartB))
       const x1 = beatToX(segEndB)
       const y1 = mapY(engine.waveYAt(segEndB))
-      ctx.strokeStyle = isSelectedEdge ? SELECT_COLOR : color
-      ctx.lineWidth = isSelectedEdge ? 4 : 2.5
+      // Hover highlight: slightly thicker and brighter, selected takes precedence
+      const effColor = isSelectedEdge ? SELECT_COLOR : isHoveredEdge ? 'rgba(237,237,237,0.95)' : color
+      ctx.strokeStyle = effColor
+      ctx.lineWidth = isSelectedEdge ? 4 : isHoveredEdge ? 3.5 : 2.5
       ctx.beginPath()
       ctx.moveTo(x0, y0)
       ctx.lineTo(x1, y1)
       ctx.stroke()
-      if (isSelectedEdge) {
-        ctx.strokeStyle = 'rgba(237,237,237,0.25)'
-        ctx.lineWidth = 10
+      if (isHighlighted) {
+        ctx.strokeStyle = isSelectedEdge ? 'rgba(237,237,237,0.25)' : 'rgba(237,237,237,0.18)'
+        ctx.lineWidth = isSelectedEdge ? 10 : 8
         ctx.beginPath()
         ctx.moveTo(x0, y0)
         ctx.lineTo(x1, y1)
@@ -254,19 +266,22 @@ export default function WavePreview({
 
     // Vertex handles (vertex mode) — draw circles at each wave point
     if (editMode === 'vertex' && points.length > 0) {
-      points.forEach((p) => {
+      points.forEach((p, idx) => {
         const vx = beatToX(p.beat)
         if (vx < -10 || vx > cssW + 10) return
         const vy = mapY(p.y)
         const isStart = p.beat === 0
-        ctx.fillStyle = isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
+        const isHoveredVertex = hoveredSegment != null && (hoveredSegment === idx || hoveredSegment === idx - 1)
+        const isSelectedVertex = selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1)
+        const isHighlightedV = isSelectedVertex || isHoveredVertex
+        ctx.fillStyle = isHighlightedV ? SELECT_COLOR : isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
         ctx.beginPath()
-        ctx.arc(vx, vy, 6, 0, Math.PI * 2)
+        ctx.arc(vx, vy, isHighlightedV ? 7 : 6, 0, Math.PI * 2)
         ctx.fill()
-        ctx.strokeStyle = 'rgba(10,10,10,0.9)'
-        ctx.lineWidth = 2
+        ctx.strokeStyle = isHighlightedV ? 'rgba(237,237,237,0.9)' : 'rgba(10,10,10,0.9)'
+        ctx.lineWidth = isHighlightedV ? 2.5 : 2
         ctx.beginPath()
-        ctx.arc(vx, vy, 6, 0, Math.PI * 2)
+        ctx.arc(vx, vy, isHighlightedV ? 7 : 6, 0, Math.PI * 2)
         ctx.stroke()
       })
     }
@@ -322,10 +337,12 @@ export default function WavePreview({
       const rx = beatToX(r.beat)
       if (rx < -40 || rx > cssW + 40) return
       const isSelected = i === selectedRing
+      const isHovered = i === hoveredRing
+      const isHighlighted = isSelected || isHovered
       const ry = mapY(engine.waveYAt(r.beat))
       const isHold = r.type === 'hold'
-      ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.75)'
-      ctx.lineWidth = isSelected ? 2 : 1
+      ctx.strokeStyle = isHighlighted ? SELECT_COLOR : 'rgba(251,191,36,0.75)'
+      ctx.lineWidth = isHighlighted ? 2 : 1
       ctx.beginPath()
       ctx.moveTo(rx, RULER_H)
       ctx.lineTo(rx, cssH)
@@ -334,7 +351,7 @@ export default function WavePreview({
       if (isHold && Number.isFinite(r.duration) && r.duration! > 0) {
         const tailBeat = r.beat + r.duration!
         const tx = beatToX(tailBeat)
-        ctx.strokeStyle = isSelected ? SELECT_COLOR : 'rgba(251,191,36,0.6)'
+        ctx.strokeStyle = isHighlighted ? SELECT_COLOR : 'rgba(251,191,36,0.6)'
         ctx.lineWidth = 8
         ctx.beginPath()
         ctx.moveTo(rx, ry)
@@ -342,15 +359,16 @@ export default function WavePreview({
         ctx.stroke()
       }
 
-      // Note marker — clear filled circle, larger when selected
-      ctx.fillStyle = isSelected ? SELECT_COLOR : STAY_COLOR
+      // Note marker — clear filled circle, larger when selected/hovered (hover = 10, selected = 12)
+      const rad = isSelected ? 12 : isHovered ? 10 : 9
+      ctx.fillStyle = isHighlighted ? SELECT_COLOR : STAY_COLOR
       ctx.beginPath()
-      ctx.arc(rx, ry, isSelected ? 12 : 9, 0, Math.PI * 2)
+      ctx.arc(rx, ry, rad, 0, Math.PI * 2)
       ctx.fill()
-      ctx.lineWidth = isSelected ? 3 : 2
-      ctx.strokeStyle = isSelected ? ACCENT_COLOR : 'rgba(0,0,0,0.55)'
+      ctx.lineWidth = isHighlighted ? 3 : 2
+      ctx.strokeStyle = isHighlighted ? ACCENT_COLOR : 'rgba(0,0,0,0.55)'
       ctx.beginPath()
-      ctx.arc(rx, ry, isSelected ? 12 : 9, 0, Math.PI * 2)
+      ctx.arc(rx, ry, rad, 0, Math.PI * 2)
       ctx.stroke()
       if (isHold) {
         ctx.fillStyle = 'rgba(0,0,0,0.7)'
@@ -361,7 +379,7 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, positionMs, view, recording, editMode])
+  }, [segments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, hoveredRing, hoveredSegment, positionMs, view, recording, editMode])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -659,6 +677,51 @@ export default function WavePreview({
     if (hit >= 0) onDeleteRing?.(hit)
   }
 
+  const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (dragRef.current || vertexDragRef.current || panRef.current) return
+    // Hover interlink: detect nearest ring/edge/vertex under cursor and notify parent for list highlight
+    const ringHit = nearestRingIndex(e.clientX)
+    if (ringHit >= 0) {
+      onHoverRing?.(ringHit)
+      onHoverSegment?.(null)
+      return
+    }
+    if (editMode === 'vertex') {
+      const vHit = nearestVertexIndex(e.clientX, e.clientY)
+      if (vHit >= 0) {
+        // vertex idx maps to adjacent segment; highlight that segment
+        const segIdx = vHit === 0 ? 0 : vHit - 1
+        if (segIdx >= 0 && segIdx < segments.length) {
+          onHoverSegment?.(segIdx)
+          onHoverRing?.(null)
+          return
+        }
+      }
+    } else if (editMode === 'edge') {
+      const eHit = nearestEdgeIndex(e.clientX, e.clientY)
+      if (eHit >= 0) {
+        onHoverSegment?.(eHit)
+        onHoverRing?.(null)
+        return
+      }
+    } else {
+      // ring mode: no segment hover
+      const eHit = nearestEdgeIndex(e.clientX, e.clientY)
+      if (eHit >= 0) {
+        onHoverSegment?.(eHit)
+        onHoverRing?.(null)
+        return
+      }
+    }
+    onHoverRing?.(null)
+    onHoverSegment?.(null)
+  }
+
+  const handleMouseLeave = () => {
+    onHoverRing?.(null)
+    onHoverSegment?.(null)
+  }
+
   return (
     <div className="wave-preview-wrap" data-testid="wave-preview">
       <canvas
@@ -667,6 +730,8 @@ export default function WavePreview({
         data-testid="wave-preview-canvas"
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
         {editMode === 'vertex' && '頂点モード: 頂点をドラッグで位置・高さを微調整。空白ドラッグでパン、ホイールでズーム'}
