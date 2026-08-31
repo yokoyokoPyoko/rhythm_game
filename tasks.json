@@ -634,6 +634,7 @@
     "depends_on": [
       "T125"
     ],
+    "type": "fix",
     "ui": true
   }
 ]

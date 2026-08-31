@@ -59,42 +59,36 @@ DEFAULT_BUDGET_MIN = 600
 
 # モデル定義カタログ (表示名, プロバイダ, モデルID)
 MODEL_CATALOG = {
-    "qwen38": ("Qwen3.8-27B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/qwen/qwen3.8-27b"),
+    "big_pickle": ("Big Pickle", "OpenCode Zen", "opencode/big-pickle"),
     "nemotron_ultra": ("Nemotron 3 Ultra", "OpenCode Zen (Free)", "opencode/nemotron-3-ultra-free"),
-    "deepseek_r1": ("DeepSeek-R1-Distill-Qwen-32B", "Cloudflare Workers AI", "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"),
     "muse_spark": ("Muse Spark 1.2 Contributor", "OpenCode Zen (Free)", "opencode/muse-spark-1.2-contributor-free"),
     "gemini_flash_lite": ("Gemini 3.5 Flash-Lite", "Google AI Studio", "google/gemini-3.5-flash-lite"),
     "gemini_flash_3_1_lite": ("Gemini 3.1 Flash-Lite", "Google AI Studio", "google/gemini-3.1-flash-lite"),
 }
 
 CODER_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: 高速・高精度 TypeScript コード生成"),
-    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 2: 豊富なコード知識・大規模MoE"),
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高度論理思考・長考型"),
+    ("big_pickle", "[OpenCode Zen] Big Pickle", "Rank 1: 高精度コード生成 (Default)"),
     ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律コード生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
     ("gemini_flash_3_1_lite", "[Google] Gemini 3.1 Flash-Lite", "爆速枠: 待ち時間最小・超安定"),
 ]
 
 QA_OPTIONS = [
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 1: ブラウザ自律操作・動画録画テスト生成"),
-    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 2: 論理的テストケース網羅・動画テスト生成"),
-    ("deepseek_r1", "[Cloudflare] DeepSeek-R1-Distill-Qwen-32B", "Rank 3: 高難度ロジック検証・長考テスト生成"),
+    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 1: 論理的テストケース網羅・動画テスト生成"),
     ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律動画テスト生成"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時動画テスト生成"),
     ("gemini_flash_3_1_lite", "[Google] Gemini 3.1 Flash-Lite", "爆速枠: 即時動画テスト生成"),
 ]
 
 REVIEWER_OPTIONS = [
-    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "コードレビュー: 仕様書とgit diffを直接審査 (Gemini 3.5)"),
-    ("gemini_flash_3_1_lite", "[Google] Gemini 3.1 Flash-Lite", "コードレビュー: 動画審査・直接解析 (Gemini 3.1)"),
-    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "コードレビュー: 推論特化・根本原因究明 (Nemotron固定)"),
+    ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "コードレビュー: 高精度審査"),
+    ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "コードレビュー: 推論特化"),
+    ("gemini_flash_3_1_lite", "[Google] Gemini 3.1 Flash-Lite", "コードレビュー: 動画審査"),
     ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律コードレビュー"),
 ]
 
 POSTMORTEM_OPTIONS = [
     ("nemotron_ultra", "[OpenCode Zen] Nemotron 3 Ultra", "Rank 1: 推論特化・根本原因究明"),
-    ("qwen38", "[Cloudflare] Qwen3.8-27B", "Rank 2: 最新TS仕様知識+熟考"),
     ("muse_spark", "[OpenCode Zen] Muse Spark 1.2 Contributor", "自律枠: 完全無料・自律原因分析"),
     ("gemini_flash_lite", "[Google] Gemini 3.5 Flash-Lite", "爆速枠: 即時エラー要約"),
 ]
@@ -118,8 +112,8 @@ def resolve_model_id(val: str) -> str:
 
 @dataclass
 class FlowModels:
-    coder: str = MODEL_CATALOG["muse_spark"][2]
-    qa: str = MODEL_CATALOG["nemotron_ultra"][2]
+    coder: str = MODEL_CATALOG["big_pickle"][2]
+    qa: str = MODEL_CATALOG["muse_spark"][2]
     reviewer: str = MODEL_CATALOG["gemini_flash_lite"][2]
     postmortem: str = MODEL_CATALOG["nemotron_ultra"][2]
 
@@ -134,8 +128,8 @@ class FlowModels:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FlowModels":
         return cls(
-            coder=resolve_model_id(data.get("coder", MODEL_CATALOG["muse_spark"][2])),
-            qa=resolve_model_id(data.get("qa", MODEL_CATALOG["nemotron_ultra"][2])),
+            coder=resolve_model_id(data.get("coder", MODEL_CATALOG["big_pickle"][2])),
+            qa=resolve_model_id(data.get("qa", MODEL_CATALOG["muse_spark"][2])),
             reviewer=resolve_model_id(data.get("reviewer", MODEL_CATALOG["gemini_flash_lite"][2])),
             postmortem=resolve_model_id(data.get("postmortem", MODEL_CATALOG["nemotron_ultra"][2])),
         )
@@ -368,17 +362,17 @@ def interactive_model_selection(code_review_only: bool = False) -> FlowModels:
     
     if code_review_only:
         print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset (Code Review Only){RESET}")
-        print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
-        print(f"      {GRAY}├─ 2. Code Review:{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
-        print(f"      {GRAY}└─ 3. Postmortem :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
+        print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[OpenCode Zen]{RESET} {CYAN}Big Pickle{RESET}")
+        print(f"      {GRAY}├─ 2. Code Reviewer:{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
+        print(f"      {GRAY}└─ 3. Postmortem :{RESET} {GRAY}[OpenCode Zen]{RESET} {CYAN}Nemotron 3 Ultra{RESET}")
         print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google]{RESET}")
         print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
     else:
         print(f"  {BOLD}[1]{RESET} {GREEN}Recommended Preset{RESET} (Rank 1 Models)")
-        print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
-        print(f"      {GRAY}├─ 2. QA Test    :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}Qwen3.8-27B{RESET}")
+        print(f"      {GRAY}├─ 1. Coder      :{RESET} {GRAY}[OpenCode Zen]{RESET} {CYAN}Big Pickle{RESET}")
+        print(f"      {GRAY}├─ 2. QA Test    :{RESET} {GRAY}[OpenCode Zen]{RESET} {CYAN}Muse Spark 1.2 Contributor{RESET}")
         print(f"      {GRAY}├─ 3. Code Review:{RESET} {GRAY}[Google]{RESET} {CYAN}Gemini 3.5 Flash-Lite{RESET}")
-        print(f"      {GRAY}└─ 4. Postmortem :{RESET} {GRAY}[Cloudflare]{RESET} {CYAN}DeepSeek-R1-Distill-Qwen-32B{RESET}")
+        print(f"      {GRAY}└─ 4. Postmortem :{RESET} {GRAY}[OpenCode Zen]{RESET} {CYAN}Nemotron 3 Ultra{RESET}")
         print(f"  {BOLD}[2]{RESET} {YELLOW}Ultra-Fast Preset{RESET} (Gemini 3.5 Flash-Lite Unified) {GRAY}[Google]{RESET}")
         print(f"  {BOLD}[3]{RESET} {DIM}Custom Configuration{RESET} (Select each model manually)")
     print(f"{GRAY}────────────────────────────────────────────────────────────────────{RESET}")
@@ -389,15 +383,15 @@ def interactive_model_selection(code_review_only: bool = False) -> FlowModels:
         print(f"{GREEN}>> Applied: Recommended Preset{RESET}")
         if code_review_only:
             return FlowModels(
-                coder=MODEL_CATALOG["qwen38"][2],
+                coder=MODEL_CATALOG["big_pickle"][2],
                 qa=MODEL_CATALOG["gemini_flash_lite"][2],
                 reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
                 postmortem=MODEL_CATALOG["nemotron_ultra"][2],
             )
         else:
             return FlowModels(
-                coder=MODEL_CATALOG["qwen38"][2],
-                qa=MODEL_CATALOG["qwen38"][2],
+                coder=MODEL_CATALOG["big_pickle"][2],
+                qa=MODEL_CATALOG["muse_spark"][2],
                 reviewer=MODEL_CATALOG["gemini_flash_lite"][2],
                 postmortem=MODEL_CATALOG["nemotron_ultra"][2],
             )
@@ -427,7 +421,7 @@ def interactive_model_selection(code_review_only: bool = False) -> FlowModels:
 
         return MODEL_CATALOG[selected_key][2]
 
-    coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "qwen38")
+    coder_m = select_one("Select [1. Coder]:", CODER_OPTIONS, "big_pickle")
     
     if code_review_only:
         # QAは不要なため空文字を設定
@@ -435,7 +429,7 @@ def interactive_model_selection(code_review_only: bool = False) -> FlowModels:
         rev_m = select_one("Select [2. Code Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
         post_m = select_one("Select [3. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
     else:
-        qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "qwen38")
+        qa_m = select_one("Select [2. QA Test Generator]:", QA_OPTIONS, "muse_spark")
         rev_m = select_one("Select [3. Code Reviewer]:", REVIEWER_OPTIONS, "gemini_flash_lite")
         post_m = select_one("Select [4. Postmortem Architect]:", POSTMORTEM_OPTIONS, "nemotron_ultra")
 
@@ -776,10 +770,17 @@ def get_recent_postmortem_rules() -> str:
     return ""
 
 
-def build_compact_coder_prompt(task: Task) -> str:
+def build_compact_coder_prompt(task: Task, debug_mode: bool = False) -> str:
     spec = extract_compact_spec(task.id)
     recent_rules = get_recent_postmortem_rules()
     context_hints = get_task_context_prompt_for_coder(task.id)
+    
+    debug_instructions = ""
+    if debug_mode:
+        debug_instructions = """
+- DEBUG MODE ACTIVE: Inject console.log() statements into the source code to observe variables (especially segment generation and amplitude calculations) during execution.
+- Only log relevant state changes or calculation inputs/outputs.
+- REMOVE all console.log() statements once debugging is complete and the task is passing."""
 
     return f"""Implement the following task. No questions allowed.
 
@@ -792,12 +793,12 @@ Specification:
 
 Constraints:
 - STRICTLY use the `edit` tool for all code modifications.
-- MUST update `src/chart/loader.ts` to support `audio_offset`, `scroll_speed`, `amplitude`.
 - NEVER output full file contents in your response. Only output the specific changes using the `edit` tool.
 - Ensure zero TypeScript compiler errors (`tsc --noEmit`).
 - Do NOT run Playwright tests or browser tests (npx playwright test). Rely solely on tsc for static verification.
 - Strict minimal dark theme (Linear/Vercel style). No gaming/RGB glows.
 - Output 'DONE' upon completion.
+{debug_instructions}
 """
 
 
@@ -1571,7 +1572,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 state["tasks"][task.id]["gate_b_golden"] = False
                 state["tasks"][task.id].setdefault("sessions", {})["coder"] = None
             coder_title = f"[{task.id}] Coder {uuid.uuid4().hex[:8]}"
-            prompt = build_compact_coder_prompt(task)
+            prompt = build_compact_coder_prompt(task, debug_mode=args.debug_mode)
             code, out = run_opencode_with_retry(
                 models.coder, prompt, timeout=None, label=f"Coder({task.id})", variant="medium",
                 task_id=task.id, role="coder", state=state, fresh_sessions=fresh_sessions,
@@ -1743,12 +1744,13 @@ def main() -> None:
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="Total budget in minutes")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive model selector")
     parser.add_argument("--fresh-sessions", action="store_true", help="Always create fresh OpenCode sessions for tasks (ignoring past sessions)")
-    parser.add_argument("--coder", help="Override Coder model ID or short key (e.g. laguna_free, nemotron_ultra, qwen38)")
+    parser.add_argument("--coder", help="Override Coder model ID or short key (e.g. big_pickle, gemini_flash_lite)")
     parser.add_argument("--qa", help="Override QA model ID or short key")
     parser.add_argument("--reviewer", help="Override Reviewer model ID or short key")
     parser.add_argument("--postmortem", help="Override Postmortem model ID or short key")
     parser.add_argument("--force-qa-gen", action="store_true", help="tests/dynamic.spec.tsが既存でもQA-Genを強制再実行する（デフォルトはスキップ）")
     parser.add_argument("--code-review-only", "--no-video", "--no-gui", dest="code_review_only", action="store_true", help="動画録画(Gate B)をスキップし、git diff と仕様書のAIコード直接審査(Gate C)で進行する")
+    parser.add_argument("--debug-mode", action="store_true", help="Enable practical mode (automatic logging for debugging)")
     args = parser.parse_args()
 
     setup_logging()
