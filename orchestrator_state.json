@@ -578,7 +578,8 @@
       "cycles": 1,
       "gate_b_golden": false,
       "sessions": {
-        "coder": "ses_faab5ddd4ffe4q7B7fCRfurzg2"
+        "coder": "ses_faab5ddd4ffe4q7B7fCRfurzg2",
+        "reviewer": "ses_faab4c5e1ffekv5GnvywItaXa7"
       }
     }
   },
