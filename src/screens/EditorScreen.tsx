@@ -36,7 +36,7 @@ function truncateSegmentsTo(
   startPosition = 0.0,
 ): { kept: Segment[]; startY: number } {
   const engine = new WaveEngine(segs, timeline, amplitude, startPosition)
-  const startY = segs.length > 0 ? engine.waveYAt(beat) : GAME_CENTER_Y - startPosition * amplitude * 130
+  const startY = segs.length > 0 ? engine.waveYAt(beat) : GAME_CENTER_Y - startPosition * 130
   if (beat <= 0) return { kept: [], startY }
   let cum = 0
   const kept: Segment[] = []

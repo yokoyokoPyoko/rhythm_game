@@ -5,6 +5,7 @@ import type { BpmChange, RingDef, Segment } from '../../types'
 
 const GAME_CENTER_Y = 300
 const RULER_H = 22
+const TW_AMP = 130
 const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
 const STAY_COLOR = '#fbbf24'
@@ -130,22 +131,16 @@ export default function WavePreview({
 
     const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
     const startPosNorm = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
-    const ampPx = ampNorm * 130
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
     const engine = new WaveEngine(segments, timeline, ampNorm, startPosNorm)
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H
-    // Expand the wave's vertical display area to use most of the available
-    // field height while reflecting the chart amplitude. The displayed
-    // amplitude is scaled to the chart amplitude, but clamped so it never
-    // exceeds the field (leaving room for the ruler strip and not overlapping
-    // SCORE/COMBO or the operation hint) and never drops below ~20% of the
-    // canvas height so small amplitudes remain clearly visible.
+    // T123: physical height fixed at TW_AMP; amplitude only affects slope, not display scale.
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * cssH)
-    const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampPx) * dispAmp
+    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / TW_AMP) * dispAmp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
     const contentBeats = Math.max(
@@ -160,9 +155,9 @@ export default function WavePreview({
     const beatToX = (b: number) => ((b - viewStart) / viewBeats) * cssW
     geoRef.current = { lastBeat, viewStart, viewBeats }
 
-    // Horizontal guide lines: top / center / bottom (high visibility)
+    // Horizontal guide lines: top / center / bottom (high visibility) - fixed TW_AMP
     ctx.lineWidth = 1
-    for (const gy of [mapY(GAME_CENTER_Y - ampPx), centerY, mapY(GAME_CENTER_Y + ampPx)]) {
+    for (const gy of [mapY(GAME_CENTER_Y - TW_AMP), centerY, mapY(GAME_CENTER_Y + TW_AMP)]) {
       const isCenter = Math.abs(gy - centerY) < 0.5
       ctx.strokeStyle = isCenter ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.14)'
       ctx.beginPath()
@@ -259,8 +254,8 @@ export default function WavePreview({
       ctx.strokeStyle = ACCENT_COLOR
       ctx.lineWidth = 2.5
       ctx.beginPath()
-      ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - ampPx))
-      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - ampPx))
+      ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - TW_AMP))
+      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - TW_AMP))
       ctx.stroke()
     }
 
@@ -437,15 +432,14 @@ export default function WavePreview({
         const newBeatsPrev = Number((clamped - prevBeat).toFixed(4))
         const newBeatsNext = Number((nextBeat - clamped).toFixed(4))
         if (newBeatsPrev < safeSnap - 1e-9 || newBeatsNext < safeSnap - 1e-9) return
-        // height micro-adjust: infer direction from vertical delta
+        // height micro-adjust: infer direction from vertical delta - fixed TW_AMP
         const centerY = RULER_H + (rect.height - RULER_H) / 2
         const fieldH = rect.height - RULER_H
-        const ampPx = ampNorm * 130
         const maxAmp = (fieldH - 24) / 2
         const minAmp = Math.max(8, 0.2 * rect.height)
-        const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
+        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
         const y = e.clientY - rect.top
-        const gameY = GAME_CENTER_Y + ((y - centerY) / dispAmp) * ampPx
+        const gameY = GAME_CENTER_Y + ((y - centerY) / dispAmp) * TW_AMP
         const prevY = pts[idx - 1].y
         const delta = gameY - prevY
         const thresh = 10
@@ -534,7 +528,6 @@ export default function WavePreview({
     const rect = canvas.getBoundingClientRect()
     const g = geoRef.current
     const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
-    const ampPx = ampNorm * 130
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
     const engine = new WaveEngine(segments, timeline, ampNorm, startPosition)
     const pts = engine.getPoints()
@@ -542,8 +535,8 @@ export default function WavePreview({
     const fieldH = rect.height - RULER_H
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * rect.height)
-    const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampPx) * dispAmp
+    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / TW_AMP) * dispAmp
     const clickX = clientX - rect.left
     const clickY = clientY - rect.top
     let nearest = -1
@@ -566,7 +559,6 @@ export default function WavePreview({
     const rect = canvas.getBoundingClientRect()
     const g = geoRef.current
     const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
-    const ampPx = ampNorm * 130
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
     const engine = new WaveEngine(segments, timeline, ampNorm, startPosition)
     const pts = engine.getPoints()
@@ -574,8 +566,8 @@ export default function WavePreview({
     const fieldH = rect.height - RULER_H
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * rect.height)
-    const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampPx) * dispAmp
+    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / TW_AMP) * dispAmp
     const beat = xToBeatLocal(clientX - rect.left, rect.width)
     const clickY = clientY - rect.top
     for (let i = 0; i < pts.length - 1; i++) {

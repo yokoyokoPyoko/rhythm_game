@@ -103,7 +103,7 @@ export default function BpmEditor({
 
       <div className="editor-field">
         <label className="editor-label" htmlFor="amplitude">
-          振幅 (正規化 0.0-5.0)
+          振幅 (速度係数 0.1-5.0)
         </label>
         <input
           id="amplitude"
@@ -115,6 +115,7 @@ export default function BpmEditor({
           value={Number.isFinite(amplitude) ? amplitude : 1.0}
           onChange={(e) => onAmplitudeChange(Number(e.target.value))}
         />
+        <p className="editor-hint">物理高さは固定 (TW_AMP=130px)。値が大きいほど斜度が急峻 (1=1拍で全幅)</p>
       </div>
 
       <div className="editor-field">

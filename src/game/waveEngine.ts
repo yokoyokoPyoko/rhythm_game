@@ -2,7 +2,7 @@ import type { BpmTimeline } from '../audio/bpmTimeline';
 import type { Segment } from '../types';
 
 const TW_CENTER_Y = 600 / 2;
-const NORM_TO_PX = 130;
+const TW_AMP = 130;
 
 export const WAVELENGTH_BEATS = 4;
 
@@ -48,9 +48,9 @@ export class WaveEngine {
   }
 
   private buildPoints(segments: Segment[]): WavePoint[] {
-    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
-    const waveBottom = TW_CENTER_Y + this.amplitude * NORM_TO_PX;
-    const startY = TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
+    const waveTop = TW_CENTER_Y - TW_AMP;
+    const waveBottom = TW_CENTER_Y + TW_AMP;
+    const startY = TW_CENTER_Y - this.startPosition * TW_AMP;
     const points: WavePoint[] = [{ beat: 0, y: startY }];
     let beat = 0;
     let currentY = startY;
@@ -64,8 +64,10 @@ export class WaveEngine {
       }
       beat += beats;
       const dir = sanitizeDirection(seg.direction);
-      const moveNorm = 2 * this.amplitude * (beats / WAVELENGTH_BEATS);
-      const move = moveNorm * NORM_TO_PX;
+      // T123: amplitude is speed coefficient (inverse of required beats for full span).
+      // Fixed physical height TW_AMP; slope scales with amplitude.
+      // e.g. amplitude=1 => 1 beat for full span, amplitude=2 => 0.5 beat.
+      const move = 2 * TW_AMP * this.amplitude * beats;
       if (dir === 'up') {
         currentY = Math.max(waveTop, currentY - move);
       } else if (dir === 'down') {
@@ -90,10 +92,10 @@ export class WaveEngine {
 
   waveYAt(beat: number): number {
     if (!Number.isFinite(beat)) {
-      return TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
+      return TW_CENTER_Y - this.startPosition * TW_AMP;
     }
     if (beat <= 0) {
-      return TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
+      return TW_CENTER_Y - this.startPosition * TW_AMP;
     }
     const last = this.points[this.points.length - 1];
     if (beat >= last.beat) {
@@ -134,7 +136,7 @@ export class WaveEngine {
   }
 
   waveYAtMs(ms: number): number {
-    const startY = TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
+    const startY = TW_CENTER_Y - this.startPosition * TW_AMP;
     if (!Number.isFinite(ms)) {
       return startY;
     }

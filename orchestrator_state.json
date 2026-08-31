@@ -608,9 +608,15 @@
       "finished": 1788137567.5286195
     },
     "T123": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1788140548.4061735
+      "started": 1788140548.4061735,
+      "cycles": 1,
+      "gate_b_golden": false,
+      "sessions": {
+        "coder": "ses_faa82fa3effehk05OIQYk2rWNC",
+        "postmortem": "ses_faa834693ffeWOFRY6SodQ9LnK"
+      }
     }
   },
   "consecutive_no_action": 0
