@@ -21,6 +21,8 @@ export interface RecordingState {
   trajectory: { beat: number; y: number }[]
 }
 
+export type EditMode = 'vertex' | 'edge' | 'ring'
+
 export interface WavePreviewProps {
   segments: Segment[]
   bpm: number
@@ -30,14 +32,18 @@ export interface WavePreviewProps {
   startPosition?: number
   snap?: number
   selectedRing?: number | null
+  selectedSegment?: number | null
   positionMs?: number
   view?: WaveView
   recording?: RecordingState | null
+  editMode?: EditMode
   onViewChange?: (view: WaveView) => void
   onAddRing?: (beat: number) => number | undefined
   onMoveRing?: (index: number, beat: number) => void
   onSelectRing?: (index: number | null) => void
+  onSelectSegment?: (index: number | null) => void
   onDeleteRing?: (index: number) => void
+  onSegmentsChange?: (next: Segment[]) => void
   onSeek?: (beat: number) => void
 }
 
@@ -50,14 +56,18 @@ export default function WavePreview({
   startPosition = 0.0,
   snap = 0.25,
   selectedRing = null,
+  selectedSegment = null,
   positionMs,
   view,
   recording = null,
+  editMode = 'ring',
   onViewChange,
   onAddRing,
   onMoveRing,
   onSelectRing,
+  onSelectSegment,
   onDeleteRing,
+  onSegmentsChange,
   onSeek,
 }: WavePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -67,6 +77,7 @@ export default function WavePreview({
     viewBeats: 16,
   })
   const dragRef = useRef<{ index: number } | null>(null)
+  const vertexDragRef = useRef<{ index: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
@@ -199,6 +210,7 @@ export default function WavePreview({
       const p0 = points[i]
       const p1 = points[i + 1]
       const seg = segments[i]
+      const isSelectedEdge = editMode === 'edge' && i === selectedSegment
       const color =
         seg && seg.direction === 'down'
           ? SUB_COLOR
@@ -215,12 +227,20 @@ export default function WavePreview({
       const y0 = mapY(engine.waveYAt(segStartB))
       const x1 = beatToX(segEndB)
       const y1 = mapY(engine.waveYAt(segEndB))
-      ctx.strokeStyle = color
-      ctx.lineWidth = 2.5
+      ctx.strokeStyle = isSelectedEdge ? SELECT_COLOR : color
+      ctx.lineWidth = isSelectedEdge ? 4 : 2.5
       ctx.beginPath()
       ctx.moveTo(x0, y0)
       ctx.lineTo(x1, y1)
       ctx.stroke()
+      if (isSelectedEdge) {
+        ctx.strokeStyle = 'rgba(237,237,237,0.25)'
+        ctx.lineWidth = 10
+        ctx.beginPath()
+        ctx.moveTo(x0, y0)
+        ctx.lineTo(x1, y1)
+        ctx.stroke()
+      }
     }
 
     if (segments.length === 0) {
@@ -230,6 +250,25 @@ export default function WavePreview({
       ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - ampPx))
       ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - ampPx))
       ctx.stroke()
+    }
+
+    // Vertex handles (vertex mode) — draw circles at each wave point
+    if (editMode === 'vertex' && points.length > 0) {
+      points.forEach((p) => {
+        const vx = beatToX(p.beat)
+        if (vx < -10 || vx > cssW + 10) return
+        const vy = mapY(p.y)
+        const isStart = p.beat === 0
+        ctx.fillStyle = isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
+        ctx.beginPath()
+        ctx.arc(vx, vy, 6, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(10,10,10,0.9)'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(vx, vy, 6, 0, Math.PI * 2)
+        ctx.stroke()
+      })
     }
 
     // Recording trajectory overlay (dashed) + live ball
@@ -322,7 +361,7 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, positionMs, view, recording])
+  }, [segments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, positionMs, view, recording, editMode])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -354,6 +393,56 @@ export default function WavePreview({
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
+      // Vertex drag: adjust segment beats (position) and direction (height)
+      if (vertexDragRef.current && onSegmentsChange) {
+        const x = e.clientX - rect.left
+        let beat = xToBeatLocal(x, rect.width)
+        beat = Math.round(beat / safeSnap) * safeSnap
+        const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
+        const engineTmp = new WaveEngine(segments, timeline, ampNorm, startPosition)
+        const pts = engineTmp.getPoints()
+        const idx = vertexDragRef.current.index
+        if (idx <= 0 || idx >= pts.length - 1) {
+          // last vertex or single point: adjust last segment beats only
+          if (segments.length > 0 && idx === pts.length - 1) {
+            const prevBeat = pts[idx - 1]?.beat ?? 0
+            const newBeats = Math.max(safeSnap, Number((beat - prevBeat).toFixed(4)))
+            const next = segments.map((s, i) => (i === segments.length - 1 ? { ...s, beats: newBeats } : s))
+            onSegmentsChange(next)
+          }
+          return
+        }
+        const prevBeat = pts[idx - 1].beat
+        const nextBeat = pts[idx + 1].beat
+        const clamped = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beat))
+        const newBeatsPrev = Number((clamped - prevBeat).toFixed(4))
+        const newBeatsNext = Number((nextBeat - clamped).toFixed(4))
+        if (newBeatsPrev < safeSnap - 1e-9 || newBeatsNext < safeSnap - 1e-9) return
+        // height micro-adjust: infer direction from vertical delta
+        const centerY = RULER_H + (rect.height - RULER_H) / 2
+        const fieldH = rect.height - RULER_H
+        const ampPx = ampNorm * 130
+        const maxAmp = (fieldH - 24) / 2
+        const minAmp = Math.max(8, 0.2 * rect.height)
+        const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
+        const y = e.clientY - rect.top
+        const gameY = GAME_CENTER_Y + ((y - centerY) / dispAmp) * ampPx
+        const prevY = pts[idx - 1].y
+        const delta = gameY - prevY
+        const thresh = 10
+        let newDir: 'up' | 'down' | 'stay' = segments[idx - 1].direction
+        if (delta < -thresh) newDir = 'up'
+        else if (delta > thresh) newDir = 'down'
+        else if (Math.abs(delta) < thresh * 0.6) newDir = 'stay'
+        const nextSegs = segments.map((s, i) => {
+          if (i === idx - 1) return { ...s, beats: newBeatsPrev, direction: newDir }
+          if (i === idx) return { ...s, beats: newBeatsNext }
+          return s
+        })
+        onSegmentsChange(nextSegs)
+        return
+      }
       if (dragRef.current) {
         const x = e.clientX - rect.left
         const beat = xToBeatLocal(x, rect.width)
@@ -373,15 +462,25 @@ export default function WavePreview({
       }
     }
     const onUp = (e: MouseEvent) => {
+      if (vertexDragRef.current) {
+        vertexDragRef.current = null
+        return
+      }
+      if (dragRef.current) {
+        dragRef.current = null
+        return
+      }
       if (panRef.current && !panRef.current.moved) {
         const canvas = canvasRef.current
         if (canvas) {
           const rect = canvas.getBoundingClientRect()
           const beat = xToBeatLocal(e.clientX - rect.left, rect.width)
-          addRingAt(beat)
+          // Ring mode only: click on empty area adds ring; other modes do not
+          if (editMode === 'ring') {
+            addRingAt(beat)
+          }
         }
       }
-      dragRef.current = null
       panRef.current = null
     }
     window.addEventListener('mousemove', onMove)
@@ -390,7 +489,7 @@ export default function WavePreview({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [onMoveRing, onViewChange])
+  }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap])
 
   const nearestRingIndex = (clientX: number): number => {
     const canvas = canvasRef.current
@@ -411,6 +510,76 @@ export default function WavePreview({
     return nearestDist < 35 ? nearest : -1
   }
 
+  const nearestVertexIndex = (clientX: number, clientY: number): number => {
+    const canvas = canvasRef.current
+    if (!canvas) return -1
+    const rect = canvas.getBoundingClientRect()
+    const g = geoRef.current
+    const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
+    const ampPx = ampNorm * 130
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
+    const engine = new WaveEngine(segments, timeline, ampNorm, startPosition)
+    const pts = engine.getPoints()
+    const centerY = RULER_H + (rect.height - RULER_H) / 2
+    const fieldH = rect.height - RULER_H
+    const maxAmp = (fieldH - 24) / 2
+    const minAmp = Math.max(8, 0.2 * rect.height)
+    const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampPx) * dispAmp
+    const clickX = clientX - rect.left
+    const clickY = clientY - rect.top
+    let nearest = -1
+    let nearestDist = Infinity
+    pts.forEach((p, i) => {
+      const vx = ((p.beat - g.viewStart) / g.viewBeats) * rect.width
+      const vy = mapY(p.y)
+      const d = Math.hypot(vx - clickX, vy - clickY)
+      if (d < nearestDist) {
+        nearestDist = d
+        nearest = i
+      }
+    })
+    return nearestDist < 14 ? nearest : -1
+  }
+
+  const nearestEdgeIndex = (clientX: number, clientY: number): number => {
+    const canvas = canvasRef.current
+    if (!canvas) return -1
+    const rect = canvas.getBoundingClientRect()
+    const g = geoRef.current
+    const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
+    const ampPx = ampNorm * 130
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
+    const engine = new WaveEngine(segments, timeline, ampNorm, startPosition)
+    const pts = engine.getPoints()
+    const centerY = RULER_H + (rect.height - RULER_H) / 2
+    const fieldH = rect.height - RULER_H
+    const maxAmp = (fieldH - 24) / 2
+    const minAmp = Math.max(8, 0.2 * rect.height)
+    const dispAmp = Math.min(maxAmp, Math.max(ampPx, minAmp))
+    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / ampPx) * dispAmp
+    const beat = xToBeatLocal(clientX - rect.left, rect.width)
+    const clickY = clientY - rect.top
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i]
+      const p1 = pts[i + 1]
+      if (beat < p0.beat - 0.05 || beat > p1.beat + 0.05) continue
+      const x0 = ((p0.beat - g.viewStart) / g.viewBeats) * rect.width
+      const x1 = ((p1.beat - g.viewStart) / g.viewBeats) * rect.width
+      const y0 = mapY(p0.y)
+      const y1 = mapY(p1.y)
+      // distance from point to segment
+      const len2 = (x1 - x0) ** 2 + (y1 - y0) ** 2
+      if (len2 < 1e-6) continue
+      const t = Math.max(0, Math.min(1, ((clientX - rect.left - x0) * (x1 - x0) + (clickY - y0) * (y1 - y0)) / len2))
+      const projX = x0 + t * (x1 - x0)
+      const projY = y0 + t * (y1 - y0)
+      const d = Math.hypot(clientX - rect.left - projX, clickY - projY)
+      if (d < 16) return i
+    }
+    return -1
+  }
+
   const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -425,6 +594,47 @@ export default function WavePreview({
       return
     }
 
+    // Mode-specific hit testing — complete separation per T116
+    if (editMode === 'vertex') {
+      const vHit = nearestVertexIndex(e.clientX, e.clientY)
+      if (vHit >= 0) {
+        vertexDragRef.current = { index: vHit }
+        e.preventDefault()
+        return
+      }
+      // vertex mode: empty drag = pan (no ring creation)
+      panRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startBeat: geoRef.current.viewStart,
+        viewBeats: geoRef.current.viewBeats,
+        moved: false,
+      }
+      e.preventDefault()
+      return
+    }
+
+    if (editMode === 'edge') {
+      const eHit = nearestEdgeIndex(e.clientX, e.clientY)
+      if (eHit >= 0) {
+        onSelectSegment?.(eHit)
+        e.preventDefault()
+        return
+      }
+      // click empty in edge mode clears selection and pans
+      onSelectSegment?.(null)
+      panRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startBeat: geoRef.current.viewStart,
+        viewBeats: geoRef.current.viewBeats,
+        moved: false,
+      }
+      e.preventDefault()
+      return
+    }
+
+    // ring mode: isolated layer for add/drag/delete
     const hit = nearestRingIndex(e.clientX)
     if (hit >= 0) {
       onSelectRing?.(hit)
@@ -444,6 +654,7 @@ export default function WavePreview({
   }
 
   const handleDoubleClick = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (editMode !== 'ring') return
     const hit = nearestRingIndex(e.clientX)
     if (hit >= 0) onDeleteRing?.(hit)
   }
@@ -457,8 +668,10 @@ export default function WavePreview({
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
       />
-      <p className="editor-hint">
-        クリックでリング追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム
+      <p className="editor-hint" data-testid="wave-preview-hint">
+        {editMode === 'vertex' && '頂点モード: 頂点をドラッグで位置・高さを微調整。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'edge' && '辺モード: 辺をクリックで一括選択・プロパティ変更。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'ring' && 'リングモード: クリックで追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム'}
       </p>
     </div>
   )

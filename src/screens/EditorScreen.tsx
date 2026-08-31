@@ -90,6 +90,8 @@ export default function EditorScreen() {
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [ringDetailsOpen, setRingDetailsOpen] = useState(false)
   const [mode, setMode] = useState<'play' | 'record'>('play')
+  const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
+  const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
   const [view, setView] = useState<WaveView>({ startBeat: 0, beats: 16 })
   const [recLive, setRecLive] = useState<{ beat: number; y: number; trajectory: { beat: number; y: number }[] } | null>(null)
 
@@ -99,7 +101,7 @@ export default function EditorScreen() {
     }
   }, [rings.length])
 
-  useEffect(() => {
+   useEffect(() => {
     const w = window as unknown as Record<string, unknown>
     w.__editorSegments = segments
     w.__editorRings = rings
@@ -113,15 +115,21 @@ export default function EditorScreen() {
     w.__editorRecStartBeat = recStartBeatRef.current
     w.__editorQuantizeModule = { quantizeBeat, segmentize }
     w.__editorSeekToBeat = seekToBeat
+    w.__editorMode = editMode
+    w.__editorSelectedSegment = selectedSegment
     // __editorState facade: populated after startRecording/finishRecording are defined
     const facade = (w.__editorState ?? {}) as Record<string, unknown>
     facade.segments = segments
+    facade.editMode = editMode
+    facade.selectedSegment = selectedSegment
     w.__editorState = facade
   })
 
   const playtestActiveRef = useRef(false)
   const toastTimerRef = useRef<number | null>(null)
   const modeRef = useRef<'play' | 'record'>('play')
+  const editModeRef = useRef<'vertex' | 'edge' | 'ring'>('vertex')
+  useEffect(() => { editModeRef.current = editMode }, [editMode])
   const recCursorRef = useRef<Cursor | null>(null)
   const recTrajRef = useRef<TrajPoint[]>([])
   const recStartBeatRef = useRef(0)
@@ -489,8 +497,24 @@ export default function EditorScreen() {
         }
         return
       }
+      // T116: Blender-style 3-mode toggle V/E/R (vertex/edge/ring)
+      if (e.code === 'KeyV') {
+        e.preventDefault()
+        setEditMode('vertex')
+        return
+      }
+      if (e.code === 'KeyE') {
+        e.preventDefault()
+        setEditMode('edge')
+        return
+      }
       if (e.code === 'KeyR') {
         e.preventDefault()
+        // If already in ring mode, treat R as record toggle for backwards compat (T115)
+        if (editModeRef.current !== 'ring') {
+          setEditMode('ring')
+          return
+        }
         if (modeRef.current === 'record') {
           finishRecording()
         } else {
@@ -972,6 +996,15 @@ export default function EditorScreen() {
               />
             </div>
           </section>
+          <section className="editor-pane" data-testid="mode-toggle">
+            <h2>編集モード</h2>
+            <div className="editor-mode-toggle" role="group" aria-label="編集モード切替">
+              <button type="button" data-testid="mode-vertex" aria-pressed={editMode === 'vertex'} className={editMode === 'vertex' ? 'editor-mode-active' : ''} onClick={() => setEditMode('vertex')}>[V] 頂点</button>
+              <button type="button" data-testid="mode-edge" aria-pressed={editMode === 'edge'} className={editMode === 'edge' ? 'editor-mode-active' : ''} onClick={() => setEditMode('edge')}>[E] 辺</button>
+              <button type="button" data-testid="mode-ring" aria-pressed={editMode === 'ring'} className={editMode === 'ring' ? 'editor-mode-active' : ''} onClick={() => setEditMode('ring')}>[R] リング</button>
+            </div>
+            <p className="editor-hint">V=頂点ドラッグ / E=辺選択 / R=リング配置。Rはリングモード未選択時はモード切替、リングモード中は録音トグル</p>
+          </section>
           <WavePreview
             segments={segments}
             bpm={safeBpm}
@@ -981,17 +1014,21 @@ export default function EditorScreen() {
             startPosition={startPosition}
             snap={snap}
             selectedRing={selectedRing}
+            selectedSegment={selectedSegment}
             positionMs={positionMs}
             view={view}
             recording={recLive}
+            editMode={editMode}
             onViewChange={setView}
             onAddRing={addRing}
             onMoveRing={moveRing}
             onSelectRing={setSelectedRing}
+            onSelectSegment={setSelectedSegment}
+            onSegmentsChange={setSegments}
             onDeleteRing={removeRing}
             onSeek={seekToBeat}
           />
-          <SegmentEditor segments={segments} onSegmentsChange={setSegments} />
+          <SegmentEditor segments={segments} selectedIndex={selectedSegment} onSegmentsChange={setSegments} onSelect={setSelectedSegment} editMode={editMode} />
 
           <section className="editor-pane editor-accordion">
              <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>

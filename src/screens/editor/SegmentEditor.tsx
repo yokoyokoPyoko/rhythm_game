@@ -4,9 +4,12 @@ import type { Segment } from '../../types'
 interface SegmentEditorProps {
   segments: Segment[]
   onSegmentsChange: (next: Segment[]) => void
+  selectedIndex?: number | null
+  onSelect?: (index: number | null) => void
+  editMode?: 'vertex' | 'edge' | 'ring'
 }
 
-export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEditorProps) {
+export default function SegmentEditor({ segments, onSegmentsChange, selectedIndex = null, onSelect, editMode }: SegmentEditorProps) {
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
@@ -67,7 +70,7 @@ export default function SegmentEditor({ segments, onSegmentsChange }: SegmentEdi
       ) : (
         <ul className="segment-list">
           {segments.map((seg, i) => (
-            <li key={i} className="segment-list-item">
+            <li key={i} className={`segment-list-item${selectedIndex === i ? ' segment-list-item-selected' : ''}${editMode === 'edge' && selectedIndex === i ? ' segment-list-item-edge-active' : ''}`} onClick={() => onSelect?.(i)} data-testid={`segment-list-item-${i}`} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect?.(i) }}>
               <span className="segment-index">{i + 1}</span>
               <select
                 className="editor-input segment-direction"
