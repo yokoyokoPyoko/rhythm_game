@@ -935,6 +935,19 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T123] 波形振幅(amplitude)の定義変更と物理固定
+
+`src/game/waveEngine.ts` + `src/game/cursor.ts` + `src/chart/loader.ts` + `src/screens/editor/BpmEditor.tsx`:
+- **定義変更**: `amplitude` を「座標スケーリング(px)」から「速度係数(時間倍率の逆数)」へ再定義する。
+  - 座標: 上下幅は `TW_AMP` で固定する。
+  - 速度: `amplitude` は移動に必要な拍数にかかる係数とする（例：`amplitude=1`なら1拍で全幅移動、`amplitude=2`なら0.5拍で全幅移動）。
+- **実装**:
+  - `WaveEngine.buildPoints`: `waveTop`/`waveBottom` を `TW_AMP` ベースに修正。
+  - `WaveEngine`/`Cursor`: 移動拍数計算に `amplitude` を使用するように修正。
+- **完了条件**: 振幅設定を変更しても波の上下幅が変化せず、プレイヤーの移動速度（斜度）のみが変化することを検証。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |

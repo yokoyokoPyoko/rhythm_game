@@ -611,5 +611,13 @@
       "T121"
     ],
     "ui": true
+  },
+  {
+    "id": "T123",
+    "desc": "波形振幅(amplitude)の定義変更と物理固定: amplitudeをpxスケーリングから速度係数(拍ベースの斜度)へ再定義。上下幅はTW_AMP固定。WaveEngineの座標計算とCursorの速度計算を修正し、BPMが変わっても物理的な高さが変わらないよう物理固定。",
+    "depends_on": [
+      "T122"
+    ],
+    "ui": true
   }
 ]
