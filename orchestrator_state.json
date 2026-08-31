@@ -3,7 +3,7 @@
   "models": {
     "coder": "opencode/muse-spark-1.2-contributor-free",
     "qa": "",
-    "reviewer": "google/gemini-3.5-flash-lite",
+    "reviewer": "google/gemini-3.1-flash-lite",
     "postmortem": "opencode/muse-spark-1.2-contributor-free"
   },
   "tasks": {
@@ -501,12 +501,10 @@
     "T114": {
       "attempts": 24,
       "status": "running",
-      "started": 1788134340.6213524,
+      "started": 1788134564.0308099,
       "cycles": 1,
       "gate_b_golden": false,
-      "sessions": {
-        "coder": "ses_faae32db3ffeK3i86wvrMCfB2S"
-      }
+      "sessions": {}
     }
   },
   "consecutive_no_action": 0
