@@ -4713,3 +4713,6 @@ T114 failure is coder-side — cataloguing the missing fix so the retry lands.
 2026-08-31 09:39:51,535 [INFO] Persisted session ses_faabe2374ffe59X7aGs95GqvVs for task=T115, role=reviewer
 2026-08-31 09:39:51,536 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=90, Verdict=PASS: all requirements verified by reading source code
 2026-08-31 09:39:51,536 [INFO] [T115] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-08-31 09:39:51,554 [INFO] [T115] Building docs/ dist for GitHub Pages...
+2026-08-31 09:39:54,507 [INFO] [T115] Pushing latest build to GitHub...
+2026-08-31 09:39:56,747 [INFO] [T115] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
