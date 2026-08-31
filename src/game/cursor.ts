@@ -19,8 +19,8 @@ export class Cursor {
   update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, _segmentBeats = 1): void {
     const waveTop = TW_CENTER_Y - TW_AMP;
     const waveBottom = TW_CENTER_Y + TW_AMP;
-    // T123: amplitude is speed coefficient (inverse of required beats for full traverse)
-    // Physical height fixed at TW_AMP; speed scales with amplitude.
+    // T123/T124: amplitude is speed coefficient (inverse of required beats for full traverse)
+    // Physical height fixed at TW_AMP; speed scales with amplitude — height invariant.
     const speed = (2 * TW_AMP * this.amplitude) / (beatMs / 1000);
     let delta = 0;
     if (upPressed) delta -= speed;
