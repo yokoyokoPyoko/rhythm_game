@@ -134,9 +134,9 @@ export class WaveEngine {
   }
 
   waveYAtMs(ms: number): number {
-    const waveTop = TW_CENTER_Y - this.amplitude * NORM_TO_PX;
+    const startY = TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
     if (!Number.isFinite(ms)) {
-      return waveTop;
+      return startY;
     }
     return this.waveYAt(this.timeline.msToBeat(ms));
   }

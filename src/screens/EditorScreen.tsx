@@ -32,9 +32,10 @@ function truncateSegmentsTo(
   beat: number,
   timeline: BpmTimeline,
   amplitude: number,
+  startPosition = 0.0,
 ): { kept: Segment[]; startY: number } {
-  const engine = new WaveEngine(segs, timeline, amplitude)
-  const startY = segs.length > 0 ? engine.waveYAt(beat) : GAME_CENTER_Y
+  const engine = new WaveEngine(segs, timeline, amplitude, startPosition)
+  const startY = segs.length > 0 ? engine.waveYAt(beat) : GAME_CENTER_Y - startPosition * amplitude * 130
   if (beat <= 0) return { kept: [], startY }
   let cum = 0
   const kept: Segment[] = []
@@ -166,7 +167,7 @@ export default function EditorScreen() {
       const sorted = [...traj].sort((a, b) => a.beat - b.beat)
       const endBeat = sorted[sorted.length - 1].beat
 
-      const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude)
+      const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude, startPosition)
       const newSegs = segmentize(traj, snap, amplitude)
 
       // Keep only whole segments that start at or after endBeat (no split remainder)

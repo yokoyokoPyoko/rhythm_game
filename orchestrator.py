@@ -1255,40 +1255,38 @@ def check_gate_c_code_review(
     fresh_sessions: bool = False,
 ) -> GateResult:
     gate_name = "Gate C (Code Review)"
-    _, diff_out, _ = run_cmd_pgid_stream(["git", "diff", f"{head_hash}..HEAD"])
-    if not diff_out.strip():
-        _, diff_out, _ = run_cmd_pgid_stream(["git", "diff", head_hash])
+    # 変更されたファイルリストを取得
+    _, changed_files_out, _ = run_cmd_pgid_stream(["git", "diff", "--name-only", f"{head_hash}..HEAD"])
+    changed_files = [f for f in changed_files_out.splitlines() if f.strip().startswith("src/")]
 
-    if not diff_out.strip():
-        return GateResult(gate_name, False, "No code changes found in git diff")
+    if not changed_files:
+        return GateResult(gate_name, False, "No src code changes found")
 
     spec = extract_compact_spec(task.id)
-    prompt = f"""You are an Uncompromising Senior Code Auditor and Lead Architect reviewing the code diff for task {task.id} ({task.desc}).
+    prompt = f"""You are an Uncompromising Senior Code Auditor and Lead Architect reviewing the implementation for task {task.id} ({task.desc}).
 
-Specification & Requirements (each requirement bullet must be verified in the diff):
+Specification & Requirements (each requirement bullet must be verified in the code):
 {spec}
 
-CODE DIFF FOR TASK {task.id}:
-```diff
-{diff_out[:18000]}
-```
+FILES TO INSPECT:
+{", ".join(changed_files)}
 
 EVALUATION INSTRUCTIONS:
-1. Examine the code diff above against EVERY requirement in the Specification.
-2. Verify that all required UI elements (with proper IDs / data-testids if specified), event handlers, state logic, imports, and exported functions have been implemented in the codebase.
+1. USE THE `read` TOOL to examine the source files listed above in detail.
+2. Verify that all requirements in the Specification have been fully implemented in the source code.
 3. Check for completeness, correctness, type safety, and project convention adherence.
 
 MANDATORY EVIDENCE PROTOCOL:
-For EVERY requirement in the Specification above, cite the specific file path, function, or code line in the diff that implements it.
+For EVERY requirement in the Specification above, cite the specific file path, function, or code line in the source code that implements it.
 
 Output JSON only with this schema:
 {{
   "score": 90,
   "verdict": "PASS",
   "evidence": [
-    {{"requirement": "<verbatim requirement>", "status": "MET", "proof": "src/screens/SelectScreen.tsx: implemented input[data-testid='...'] and dropzone onDrop handler"}}
+    {{"requirement": "<verbatim requirement>", "status": "MET", "proof": "src/chart/loader.ts: added audio_offset parsing logic"}}
   ],
-  "comment": "all requirements verified in diff"
+  "comment": "all requirements verified by reading source code"
 }}
 
 If ANY requirement is missing or incomplete:
@@ -1296,13 +1294,13 @@ If ANY requirement is missing or incomplete:
   "score": 40,
   "verdict": "FAIL",
   "evidence": [
-    {{"requirement": "<missing requirement>", "status": "UNMET", "proof": "not implemented in diff"}}
+    {{"requirement": "<missing requirement>", "status": "UNMET", "proof": "not found in source code"}}
   ],
   "comment": "missing implementation for requirement X"
 }}
 """
 
-    log.info("[%s] Dispatching Gate C Code Reviewer (model=%s)...", task.id, reviewer_model)
+    log.info("[%s] Dispatching Gate C Code Reviewer (model=%s, files=%d)...", task.id, reviewer_model, len(changed_files))
     rev_title = f"[{task.id}] CodeReview {uuid.uuid4().hex[:8]}"
     code, out = run_opencode_with_retry(
         reviewer_model, prompt, timeout=None, label=f"CodeReviewer({task.id})", variant="max",
