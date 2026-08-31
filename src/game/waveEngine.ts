@@ -53,7 +53,7 @@ export class WaveEngine {
     const startY = TW_CENTER_Y - this.startPosition * this.amplitude * NORM_TO_PX;
     const points: WavePoint[] = [{ beat: 0, y: startY }];
     let beat = 0;
-    let currentY = waveTop;
+    let currentY = startY;
     for (const seg of segments) {
       if (!seg) {
         continue;

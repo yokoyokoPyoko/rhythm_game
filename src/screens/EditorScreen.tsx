@@ -832,21 +832,6 @@ export default function EditorScreen() {
               <span className="editor-pos-time">{formatSeconds(positionMs)}</span>
               <span className="editor-pos-beat">beat: {beat.toFixed(2)}</span>
             </div>
-            <div className="editor-field">
-              <label className="editor-label" htmlFor="start-position">
-                開始位置 (-1.0〜1.0)
-              </label>
-              <input
-                id="start-position"
-                className="editor-slider"
-                type="range"
-                min={-1.0}
-                max={1.0}
-                step={0.1}
-                value={startPosition}
-                onChange={(e) => setStartPosition(Number(e.target.value))}
-              />
-            </div>
             {error && <div className="editor-error">{error}</div>}
           </section>
 

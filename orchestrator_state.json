@@ -499,12 +499,14 @@
       "finished": 1788092710.4371612
     },
     "T114": {
-      "attempts": 23,
+      "attempts": 24,
       "status": "running",
       "started": 1788134340.6213524,
       "cycles": 1,
       "gate_b_golden": false,
-      "sessions": {}
+      "sessions": {
+        "coder": "ses_faae32db3ffeK3i86wvrMCfB2S"
+      }
     }
   },
   "consecutive_no_action": 0
