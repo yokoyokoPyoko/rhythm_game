@@ -573,14 +573,20 @@
     },
     "T120": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1788137310.1767757,
       "cycles": 1,
       "gate_b_golden": false,
       "sessions": {
         "coder": "ses_faab5ddd4ffe4q7B7fCRfurzg2",
         "reviewer": "ses_faab4c5e1ffekv5GnvywItaXa7"
-      }
+      },
+      "finished": 1788137416.0676813
+    },
+    "T121": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788137416.0687568
     }
   },
   "consecutive_no_action": 0
