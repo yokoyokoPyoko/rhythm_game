@@ -50,7 +50,7 @@ export function parseChartText(text: string, source = 'chart'): Chart {
   } catch {
     throw new Error(`チャートのTOMLパースに失敗しました: ${source}`);
   }
-  // T93/T99/T120/T121/T122/T123/T124: loader must support audio_offset / scroll_speed / amplitude (speed coefficient, physical height fixed at TW_AMP) — keep legacy px migration (>10 => /130) and basename handling
+  // T93/T99/T120/T121/T122/T123/T124/T125: loader supports audio_offset / scroll_speed / amplitude (speed coefficient 0.1-5.0, physical height fixed at TW_AMP via waveEngine) — legacy px migration (>10 => /130) + basename handling
 
   if (typeof raw.title !== 'string' || typeof raw.artist !== 'string') {
     throw new Error(`チャートに title / artist がありません: ${source}`);
@@ -67,7 +67,7 @@ export function parseChartText(text: string, source = 'chart'): Chart {
     artist: raw.artist,
     bpm: raw.bpm,
     audio: getBasename(raw.audio),
-    // T93/T99/T120/T121/T122/T123/T124: audio_offset / scroll_speed / amplitude (speed coefficient 0.1-5.0, height fixed at TW_AMP) with legacy px migration (>10 => /130)
+    // T93/T99/T120/T121/T122/T123/T124/T125: audio_offset / scroll_speed / amplitude (speed coefficient 0.1-5.0, height fixed at TW_AMP from waveEngine) legacy px migration (>10 => /130)
     audio_offset: isFiniteNumber(raw.audio_offset) ? (raw.audio_offset as number) : 0,
     scroll_speed: isFiniteNumber(raw.scroll_speed) && (raw.scroll_speed as number) > 0 ? (raw.scroll_speed as number) : 110,
     amplitude: isFiniteNumber(raw.amplitude) && (raw.amplitude as number) > 0 ? ((raw.amplitude as number) > 10 ? (raw.amplitude as number) / 130 : (raw.amplitude as number)) : 1.0,

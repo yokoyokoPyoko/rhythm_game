@@ -1,5 +1,4 @@
-const TW_CENTER_Y = 600 / 2;
-const TW_AMP = 130;
+import { TW_AMP, TW_CENTER_Y } from './waveEngine';
 
 function sanitizeStartPosition(v: unknown): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) return 0;

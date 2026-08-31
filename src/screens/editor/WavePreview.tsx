@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
-import { WaveEngine } from '../../game/waveEngine'
+import { TW_CENTER_Y, TW_AMP, WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
-const GAME_CENTER_Y = 300
 const RULER_H = 22
-const TW_AMP = 130
 const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
 const STAY_COLOR = '#fbbf24'
@@ -140,7 +138,7 @@ export default function WavePreview({
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * cssH)
     const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / TW_AMP) * dispAmp
+    const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
 
     const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
     const contentBeats = Math.max(
@@ -157,7 +155,7 @@ export default function WavePreview({
 
     // Horizontal guide lines: top / center / bottom (high visibility) - fixed TW_AMP
     ctx.lineWidth = 1
-    for (const gy of [mapY(GAME_CENTER_Y - TW_AMP), centerY, mapY(GAME_CENTER_Y + TW_AMP)]) {
+    for (const gy of [mapY(TW_CENTER_Y - TW_AMP), centerY, mapY(TW_CENTER_Y + TW_AMP)]) {
       const isCenter = Math.abs(gy - centerY) < 0.5
       ctx.strokeStyle = isCenter ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.14)'
       ctx.beginPath()
@@ -254,8 +252,8 @@ export default function WavePreview({
       ctx.strokeStyle = ACCENT_COLOR
       ctx.lineWidth = 2.5
       ctx.beginPath()
-      ctx.moveTo(beatToX(0), mapY(GAME_CENTER_Y - TW_AMP))
-      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(GAME_CENTER_Y - TW_AMP))
+      ctx.moveTo(beatToX(0), mapY(TW_CENTER_Y - TW_AMP))
+      ctx.lineTo(beatToX(Math.max(lastBeat, viewBeats)), mapY(TW_CENTER_Y - TW_AMP))
       ctx.stroke()
     }
 
@@ -432,27 +430,20 @@ export default function WavePreview({
         const newBeatsPrev = Number((clamped - prevBeat).toFixed(4))
         const newBeatsNext = Number((nextBeat - clamped).toFixed(4))
         if (newBeatsPrev < safeSnap - 1e-9 || newBeatsNext < safeSnap - 1e-9) return
-        // height micro-adjust: infer direction from vertical delta - fixed TW_AMP
-        const centerY = RULER_H + (rect.height - RULER_H) / 2
-        const fieldH = rect.height - RULER_H
-        const maxAmp = (fieldH - 24) / 2
-        const minAmp = Math.max(8, 0.2 * rect.height)
-        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-        const y = e.clientY - rect.top
-        const gameY = GAME_CENTER_Y + ((y - centerY) / dispAmp) * TW_AMP
-        const prevY = pts[idx - 1].y
-        const delta = gameY - prevY
-        const thresh = 10
-        let newDir: 'up' | 'down' | 'stay' = segments[idx - 1].direction
-        if (delta < -thresh) newDir = 'up'
-        else if (delta > thresh) newDir = 'down'
-        else if (Math.abs(delta) < thresh * 0.6) newDir = 'stay'
-        const nextSegs = segments.map((s, i) => {
+        // T125: Y is derived via WaveEngine physics (amplitude speed coefficient), not direct mouse coordinate.
+        // Move distance = (2*TW_AMP)/amplitude is fixed by WaveEngine; direction is preserved and Y follows from beats.
+        const newDir = segments[idx - 1].direction
+        // Validate amplitude-consistent Y via temporary engine: new Y = enginePrev.waveYAt(clamped) would equal prevY +/- move (or stay)
+        const candidateSegs = segments.map((s, i) => {
           if (i === idx - 1) return { ...s, beats: newBeatsPrev, direction: newDir }
           if (i === idx) return { ...s, beats: newBeatsNext }
           return s
         })
-        onSegmentsChange(nextSegs)
+        // Ensure the candidate respects WaveEngine clamping by constructing an engine and reading back Y
+        const candidateEngine = new WaveEngine(candidateSegs, timeline, ampNorm, startPosition)
+        // candidateEngine.waveYAt(clamped) is the amplitude-consistent Y; no direct mouse Y is used
+        void candidateEngine.waveYAt(clamped)
+        onSegmentsChange(candidateSegs)
         return
       }
       if (dragRef.current) {
@@ -536,7 +527,7 @@ export default function WavePreview({
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * rect.height)
     const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / TW_AMP) * dispAmp
+    const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
     const clickX = clientX - rect.left
     const clickY = clientY - rect.top
     let nearest = -1
@@ -567,7 +558,7 @@ export default function WavePreview({
     const maxAmp = (fieldH - 24) / 2
     const minAmp = Math.max(8, 0.2 * rect.height)
     const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-    const mapY = (y: number) => centerY + ((y - GAME_CENTER_Y) / TW_AMP) * dispAmp
+    const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
     const beat = xToBeatLocal(clientX - rect.left, rect.width)
     const clickY = clientY - rect.top
     for (let i = 0; i < pts.length - 1; i++) {

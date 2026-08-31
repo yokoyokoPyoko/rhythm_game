@@ -1,8 +1,8 @@
 import type { BpmTimeline } from '../audio/bpmTimeline';
 import type { Segment } from '../types';
 
-const TW_CENTER_Y = 600 / 2;
-const TW_AMP = 130;
+export const TW_CENTER_Y = 600 / 2;
+export const TW_AMP = 130;
 
 export const WAVELENGTH_BEATS = 4;
 

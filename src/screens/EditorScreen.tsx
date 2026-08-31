@@ -8,7 +8,7 @@ import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
-import { WaveEngine } from '../game/waveEngine'
+import { TW_AMP, TW_CENTER_Y, WaveEngine } from '../game/waveEngine'
 import { segmentize, quantizeBeat, type TrajPoint } from '../chart/quantize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
@@ -17,8 +17,6 @@ import WavePreview, { type WaveView } from './editor/WavePreview'
 import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
-
-const GAME_CENTER_Y = 300
 
 function formatSeconds(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -36,7 +34,7 @@ function truncateSegmentsTo(
   startPosition = 0.0,
 ): { kept: Segment[]; startY: number } {
   const engine = new WaveEngine(segs, timeline, amplitude, startPosition)
-  const startY = segs.length > 0 ? engine.waveYAt(beat) : GAME_CENTER_Y - startPosition * 130
+  const startY = segs.length > 0 ? engine.waveYAt(beat) : TW_CENTER_Y - startPosition * TW_AMP
   if (beat <= 0) return { kept: [], startY }
   let cum = 0
   const kept: Segment[] = []
@@ -149,7 +147,7 @@ export default function EditorScreen() {
   const recCursorRef = useRef<Cursor | null>(null)
   const recTrajRef = useRef<TrajPoint[]>([])
   const recStartBeatRef = useRef(0)
-  const recStartYRef = useRef(GAME_CENTER_Y)
+  const recStartYRef = useRef(TW_CENTER_Y)
   const lastTickRef = useRef(0)
   const keysRef = useRef({ up: false, down: false, space: false })
   const spacePressBeatRef = useRef(0)
