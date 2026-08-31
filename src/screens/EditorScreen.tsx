@@ -201,6 +201,20 @@ export default function EditorScreen() {
     recTrajRef.current = []
   }, [segments, snap, amplitude, timeline, notify])
 
+  // T115: auto-scroll follow - when playhead nears right edge, advance viewStartBeat
+  useEffect(() => {
+    if (!isPlaying) return
+    const curBeat = timeline.msToBeat(positionMs)
+    const margin = Math.max(1, view.beats * 0.2)
+    const threshold = view.startBeat + view.beats - margin
+    if (curBeat > threshold) {
+      const newStart = Math.max(0, curBeat - view.beats * 0.55)
+      if (Math.abs(newStart - view.startBeat) > 0.05) {
+        setView((v) => ({ startBeat: newStart, beats: v.beats }))
+      }
+    }
+  }, [positionMs, isPlaying, timeline, view.startBeat, view.beats])
+
   useEffect(() => {
     if (!isPlaying) return
     let raf = 0
@@ -289,7 +303,7 @@ export default function EditorScreen() {
     }
   }, [notify])
 
-  const playFrom = async (fromMs: number) => {
+  const playFrom = useCallback(async (fromMs: number) => {
     const mgr = AudioManager.getInstance()
     await mgr.ensure()
     const ctx = mgr.ctx
@@ -372,7 +386,7 @@ export default function EditorScreen() {
         ? '音楽ファイルの読み込みに失敗しました（メトロノームのみで続行）'
         : null,
     )
-  }
+  }, [buffer, url, audioOffset, segments, rings, timeline])
 
   const startRecording = useCallback(() => {
     let rawStartBeat: number
@@ -393,9 +407,9 @@ export default function EditorScreen() {
     modeRef.current = 'record'
     setMode('record')
     setRecLive({ beat: startBeat, y: startY, trajectory: recTrajRef.current.slice() })
-  }, [timeline, segments, amplitude, startPosition, positionMs])
+  }, [timeline, segments, amplitude, startPosition, positionMs, snap])
 
-  const stop = () => {
+  const stop = useCallback(() => {
     const src = sourceRef.current
     if (!src) return
     const ctx = AudioManager.getInstance().ctx
@@ -411,7 +425,7 @@ export default function EditorScreen() {
     src.disconnect()
     sourceRef.current = null
     setPlaying(false)
-  }
+  }, [buffer])
 
   // __editorState facade for tests: expose control methods after they are defined
   useEffect(() => {
@@ -455,16 +469,33 @@ export default function EditorScreen() {
         tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable === true
       if (editable) return
 
-      // T103: ring stamping via Space is only allowed in record mode.
+      // T115: Space = play/stop toggle (global), R = record toggle (global)
+      // In record+playing mode Space is reserved for hold-ring stamping.
       if (e.code === 'Space') {
         e.preventDefault()
-        if (!isPlayingRef.current) return
-        if (modeRef.current !== 'record') return
-        if (keysRef.current.space) return
-        const rawBeat = timeline.msToBeat(positionRef.current)
-        const snapped = quantizeBeat(rawBeat, snap)
-        spacePressBeatRef.current = snapped
-        keysRef.current.space = true
+        if (isPlayingRef.current && modeRef.current === 'record') {
+          if (keysRef.current.space) return
+          const rawBeat = timeline.msToBeat(positionRef.current)
+          const snapped = quantizeBeat(rawBeat, snap)
+          spacePressBeatRef.current = snapped
+          keysRef.current.space = true
+          return
+        }
+        // Toggle play/stop
+        if (isPlayingRef.current) {
+          stop()
+        } else {
+          void playFrom(positionRef.current)
+        }
+        return
+      }
+      if (e.code === 'KeyR') {
+        e.preventDefault()
+        if (modeRef.current === 'record') {
+          finishRecording()
+        } else {
+          startRecording()
+        }
         return
       }
 
@@ -549,7 +580,7 @@ export default function EditorScreen() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [snap, timeline, selectedRing, segments, notify])
+  }, [snap, timeline, selectedRing, segments, notify, playFrom, stop, startRecording, finishRecording])
 
   const removeRing = (index: number) => {
     setRings((prev) => prev.filter((_, i) => i !== index))

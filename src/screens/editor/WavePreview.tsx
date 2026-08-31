@@ -71,6 +71,7 @@ export default function WavePreview({
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
 
+  // T115: auto-scroll is driven by EditorScreen (positionMs/view) - keep view sync via geoRef
   // Native non-passive wheel listener so preventDefault() actually blocks
   // page scrolling (React's synthetic onWheel is attached as passive).
   useEffect(() => {
