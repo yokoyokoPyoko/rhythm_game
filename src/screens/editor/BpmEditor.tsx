@@ -103,7 +103,7 @@ export default function BpmEditor({
 
       <div className="editor-field">
         <label className="editor-label" htmlFor="amplitude">
-          振幅 (正規化 0.0-1.0)
+          振幅 (正規化 0.0-5.0)
         </label>
         <input
           id="amplitude"
