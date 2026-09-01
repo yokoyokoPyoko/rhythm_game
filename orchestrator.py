@@ -997,26 +997,52 @@ Output only: DONE when finished. Never paste full test code into chat.
     return False
 
 
-def run_dynamic_test_red(task: Task, test_runner: str = "vitest") -> tuple[bool, str, bool]:
-    """TDD Red phase: run the test ONCE. Returns (passed, output, timed_out).
+def _vitest_is_broken(out: str) -> bool:
+    """Detect a 'broken' vitest run: the test file failed to COMPILE/import, or produced no real
+    test cases. These are false Reds (the test is just broken, not legitimately failing on
+    assertions). A genuine Red must show real assertion failures on actual test cases."""
+    low = out.lower()
+    # No test files / no tests executed
+    if re.search(r"no test files found|no tests found|tests?\s*0\s*(failed|passed)", low):
+        return True
+    # TypeScript / transform / import / resolution errors during collection
+    if re.search(r"failed to load|failed to resolve|error while transforming|cannot find (module|name|type)|"
+                 r"is not assignable|ts\d{4}|syntax ?error|transform error|failed to import|"
+                 r"cannot find module|referenceerror: (module|require) is not defined", low):
+        return True
+    # A run that reports zero passed AND zero failed with an error banner is broken
+    if re.search(r"error", low) and ("0 passed" in low or "no test" in low or "failed to" in low):
+        return True
+    return False
 
-    passed=True means it PASSED (false-positive / no real assertions).
-    timed_out=True means the run hung and hit the timeout — the QA test should be regenerated.
+
+def run_dynamic_test_red(task: Task, test_runner: str = "vitest") -> tuple[bool, bool, str, bool]:
+    """TDD Red phase: run the test ONCE. Returns (passed, broken, output, timed_out).
+
+    - passed=True  : test PASSED on unimplemented code (false-positive / already implemented).
+    - broken=True  : test is BROKEN (compile/import error, node collect failure, or zero real
+                     tests) — a false Red. The QA test should be regenerated.
+    - timed_out=True: the run hung and hit the timeout — the QA test should be regenerated.
+    Genuine Red = not passed and not broken and not timed_out (assertions failed for the right reason).
     """
     test_file = _dynamic_test_file(test_runner)
     if not test_file.exists():
-        return False, f"{test_file.name} does not exist", False
+        return False, False, f"{test_file.name} does not exist", False
     if test_runner == "vitest":
         code, out, timed_out = run_cmd_pgid_stream(
             ["npx", "vitest", "run", f"tests/{test_file.name}"], timeout=PW_RED_TIMEOUT, prefix="red: "
         )
-        return code == 0, out, timed_out
+        passed = code == 0
+        broken = (not passed) and (not timed_out) and _vitest_is_broken(out)
+        return passed, broken, out, timed_out
     if not ensure_dev_server():
-        return False, "Dev server failed to start", False
+        return False, False, "Dev server failed to start", False
     code, out, timed_out = run_cmd_pgid_stream(
         ["npx", "playwright", "test", f"tests/{test_file.name}"], timeout=PW_RED_TIMEOUT, prefix="red: "
     )
-    return code == 0, out, timed_out
+    passed = code == 0
+    # Playwright keeps existing behavior: only timed-out and passed are special-cased.
+    return passed, False, out, timed_out
 
 
 def run_gate_b_test(state: dict[str, Any] | None, task: Task, args: argparse.Namespace | None = None) -> GateResult:
@@ -1610,7 +1636,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 maybe_reset_cycle()
                 continue
             # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
-            red_passed, red_out, red_timed_out = run_dynamic_test_red(task, tr)
+            red_passed, red_broken, red_out, red_timed_out = run_dynamic_test_red(task, tr)
             if red_timed_out:
                 log.error("[%s] Gate B Red check HUNG (timed out). QA test is bogus/unrunnable. Regenerating test from QA...", task.id)
                 generate_postmortem(
@@ -1619,6 +1645,25 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                     "The test did not exit within the timeout — likely bad/browser-side vitest usage, infinite loop, "
                     "or waiting on DOM that never resolves. Rewrite as a pure node unit test (vi.useFakeTimers()) that "
                     "exits promptly even when the feature is unimplemented.",
+                    models.postmortem, state=state, fresh_sessions=fresh_sessions,
+                )
+                need_test = True
+                need_coder = False
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
+            if red_broken:
+                log.error("[%s] Gate B Red check: test file is BROKEN (compile/import error or no real tests). This is a FALSE Red. Regenerating test from QA...", task.id)
+                broken_lines = [l.strip() for l in red_out.splitlines() if re.search(r"Error|failed to|Cannot find|not assignable|transform|no test|Cannot find module", l)]
+                sample = "\n".join(broken_lines[:6]) if broken_lines else red_out[-400:]
+                generate_postmortem(
+                    task,
+                    f"QA test is BROKEN during Red check (test_runner={tr}) — the test file failed to compile/import "
+                    "or produced zero real test cases:\n"
+                    f"{sample}\n"
+                    "A genuine Red must show actual assertion FAILURES on real tests. Rewrite so the module(s) import "
+                    "cleanly, the tests collect, and they assert expected behavior on the (currently unimplemented) code "
+                    "such that at least one test genuinely fails.",
                     models.postmortem, state=state, fresh_sessions=fresh_sessions,
                 )
                 need_test = True
@@ -1678,6 +1723,11 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 maybe_reset_cycle()
                 continue
             log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
+            # Red → Green handoff: Genuine Red confirmed (test FAILS for the right reason).
+            # Now the Coder must run to implement the feature BEFORE Gate B (Green) executes —
+            # otherwise Gate B runs against unimplemented code, fails spuriously, and wastes a
+            # full cycle + postmortem. (Fixes skipped-Coder bug.)
+            need_coder = True
         else:
             # Reusing a previous test: ensure the test file exists (restore golden if rolled back).
             if not test_file.exists():
