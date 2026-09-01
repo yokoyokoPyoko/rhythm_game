@@ -1012,6 +1012,47 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T128] 波形のクリップ時傾斜崩壊の修正
+
+**バグ**: 「速度係数より緩やか（遅い）になる」残存バグ。T127で `buildPoints` の移動量式（`2*TW_AMP*amplitude*beats`、上下幅クランプ）は正しくなったが、`WaveEngine.waveYAt()` が**クランプ済み端点の2点間を線形補間**するため、区間が上下幅にクランプされたセグメントで「実変位 ÷ フル拍数」の傾斜となり、速度係数 `2*TW_AMP*amplitude` より**緩やか**になってしまう。
+
+**実測例**（amp=1.0, セグメント `down beats=3`, 中央スタート）:
+- カーソル速度 = `2*130*1.0` = 260px/拍 → beat 0.5 で下端(130px)到達。
+- 現行 `waveYAt` = 43.3px/拍 → beat 3 まで下端に届かない。
+- つまりクランプは変位を減らす方向にしか働かず、**「速くなる事は無く、遅い・緩やか側のみ発生」**。ゲーム内トレース判定 `|cursor.y - wave.waveYAtMs()| < TW_TOLERANCE` や波形プレビューが不一致になる。
+
+**共通規約（T127 と同一）**:
+> `amplitude`（速度係数）: 全幅（`2*TW_AMP`）移動に必要な拍数の逆数。1拍あたりの移動量 = `2*TW_AMP*amplitude` px。
+> `amplitude=1` → 1拍で全幅移動、`amplitude=2` → 0.5拍で全幅移動。**高いほど急峻（速い）**。
+> 物理上下幅は `TW_AMP=130` で固定。
+
+**修正方針**:
+1. `src/game/waveEngine.ts`:
+   - `WavePoint` に**セグメント開始点の1拍あたり変位 `dY`** を追加（`up` = `-2*TW_AMP*amplitude`, `down` = `+2*TW_AMP*amplitude`, `stay` = `0`）。
+   - `buildPoints` は各セグメントの開始点に `dY` を記録し、端点 `y`（表示・エディタ用）は従来通りクランプ済み値を保持。
+   - `waveYAt(beat)` は区間 `[p0.beat, p1.beat]` 内で `y = clamp(p0.y + p0.dY * (beat - p0.beat), waveTop, waveBottom)` と**補間中にもクランプ**し、急峻な傾斜（climb）と境界到達後の水平 stay を表現。カーソル速度式と厳密に一致させる。
+   - **`getPoints()` は `{beat, y}` 構造と長さ（= セグメント数 + 1）を不変に保つ**こと（エディタの「1点 = 1セグメント」対応を維持、T116/V・E・R モードへの干渉禁止）。
+2. `src/screens/editor/WavePreview.tsx`（T128自体の作業。エディタ表示をゲーム波形と一致させる）:
+   - セグメント描画ループを単一 `lineTo` から `waveYAt` サンプリングの**ポリライン**（climb → stay）へ変更し、急速なコーナーを正しく描画。
+   - `nearestEdgeIndex` も同一のクランプポリラインで判定し、辺選択が表示と一致するようにする。
+   - 頂点ハンドル・ドラッグ（T125）は `getPoints()` の不変性によりそのまま維持。
+
+**完了条件（自動テスト。オフグリッド検証原則に従い端数タイミング必須）**:
+1. **クランプ区間の途中拍で Y = cursor移動量**:
+   - `amplitude` を複雑な端数（`0.5`, `0.7`, `1.0`, `1.3`, `2.7` など）に設定。
+   - 例: amp=1.0, `[{down, beats:3}]`, startPosition=0 で、beat `0.25`, `0.5`, `1.0`, `1.5`, `2.0` の `waveYAt` が `clamp(CENTER + 2*TW_AMP*amp*beat, top, bottom)` と一致すること（現行 43.3px/拍 の遅さが消える）。
+   - 端数タイミング（例: `0.37`, `1.23` 拍）でも同一規約で一致（オフグリッド検証原則）。
+2. **cursor と waveEngine の数値整合**:
+   - 同じ amp / beatMs で、cursor の1拍あたり移動量と `waveYAt` の区間傾斜が `2*TW_AMP*amplitude` で一致し、遅い側に倒れないこと。
+3. **startPosition ≠ 0 / stay / 方向反転・多セグメント**:
+   - 中央以外から開始、`stay` 混在、up↔down 反転の複数セグメントで、区間内傾斜が物理速度と一致し、境界での水平 stay が正しいこと。
+4. **回帰**:
+   - `getPoints()` の長さが `セグメント数 + 1` のまま（エディタ 1:1 保守）。
+   - 既存 T127 不変量（端点 `min(TW_AMP, 2*TW_AMP*amp*beats)`、上下幅 `TW_AMP=130` 不変、`segmentize`）が回帰しないこと。
+   - `WaveEngine`(waveYAt/getPoints) と `Cursor`(update) の数値整合を**複雑な振幅値で直接**比較する構造にする（T127のテスト設計上の注意を踏襲）。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
