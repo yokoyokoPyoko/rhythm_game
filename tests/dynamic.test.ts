@@ -196,51 +196,36 @@ describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅とし
     });
 
     it('time-varying amplitude: segment starting at beat 4 uses amp 2.0, earlier uses 1.0 (2-step transition)', () => {
-      // [Step1] Capture initial with no variation
       const baseAmp = 1.0;
+      // Use up/down alternating to keep wave near center so slopes are visible
       const segs: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 2 },  // segment starting at beat 4
       ];
+      // [Step1] Capture initial with no variation
       const tlBefore = new BpmTimeline(120, [], baseAmp);
       const engineBefore = new WaveEngine(segs, tlBefore, baseAmp, 0);
-      // At beat 4.37 (0.37 into 3rd segment), slope should be base 1.0*260
-      const yBefore = engineBefore.waveYAt(4.37);
+      // Use small delta to avoid clamping; slope before beat 4 should be base 1.0
+      const delta = 0.1;
       const yBefore0 = engineBefore.waveYAt(4);
-      const slopeBefore = (yBefore - yBefore0) / 0.37;
+      const yBefore = engineBefore.waveYAt(4 + delta);
+      const slopeBefore = (yBefore - yBefore0) / delta;
       expect(slopeBefore).toBeCloseTo(2 * TW_AMP * 1.0, 0);
 
       // [Step2] Perform: add amplitude change at beat 4 to 2.0
       const tlAfter = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.0 }], baseAmp);
       const engineAfter = new WaveEngine(segs, tlAfter, baseAmp, 0);
       // [Step3] Assert changed outcome: slope doubles for segment starting at 4
-      const yAfter = engineAfter.waveYAt(4.37);
       const yAfter0 = engineAfter.waveYAt(4);
-      const slopeAfter = (yAfter - yAfter0) / 0.37;
+      const yAfter = engineAfter.waveYAt(4 + delta);
+      const slopeAfter = (yAfter - yAfter0) / delta;
       expect(slopeAfter).toBeCloseTo(2 * TW_AMP * 2.0, 0);
-      // And off-grid values match clamped expectation with amp 2.0 for that segment
-      const expectedAfter = clampY(yAfter0 + 2 * TW_AMP * 2.0 * 0.37);
+      // Off-grid check
+      const expectedAfter = clampY(yAfter0 + 2 * TW_AMP * 2.0 * delta);
       expect(yAfter).toBeCloseTo(expectedAfter, 1);
-      // Before was 1.0 slope, so yAfter should be steeper (difference unless clipped)
-      // For down from whatever y at 4, after should be >= before (more downward)
-      // Not always if before already at bottom — construct case where not clipped:
-      // Use startPosition 1.0 top so first segments not reaching bottom? Let's also explicitly test non-clipped case:
-      const tlVar2 = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.0 }], 1.0);
-      // Need segments that keep Y away from clamp at beat 4: using up/down alternating to stay near center
-      const segs2: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-      ];
-      const e2 = new WaveEngine(segs2, tlVar2, 1.0, 0);
-      const at4 = e2.waveYAt(4);
-      const at437 = e2.waveYAt(4.37);
-      // From beat 4, direction down, amp at segStart 4 is 2.0 -> delta 0.37*520=192.4 may clip but we verify slope via raw before clamp cap
-      // Use small delta 0.1 that won't clip for either amp if starting not at edge: pick startPosition 0.5?
-      // Simpler assert slope with small delta 0.1 at segment start 4 is 520 for amp2
-      const at401 = e2.waveYAt(4.1);
-      expect((at401 - at4) / 0.1).toBeCloseTo(2 * TW_AMP * 2.0, 0);
     });
 
     it('getPoints().length === segments.length+1 and structure {beat,y} invariants (complex amps)', () => {
@@ -268,21 +253,25 @@ describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅とし
 
     it('legacy constructor amplitude param does NOT affect waveYAt when timeline list drives (removes dead field)', () => {
       const tl = new BpmTimeline(120, [{ beat: 2, bpm: 120, amplitude: 2.7 }], 1.0);
+      // Use segments that return wave to center before beat 2 so slope is visible
       const segs: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'down', beats: 2 },
+        { direction: 'up', beats: 0.25 },
+        { direction: 'down', beats: 0.25 },
+        { direction: 'stay', beats: 1.5 },
+        { direction: 'down', beats: 2 },  // segment starting at beat 2
       ];
       // [Step1] engine with ctor amp 1.0
       const e1 = new WaveEngine(segs, tl, 1.0, 0);
-      const y1 = e1.waveYAt(2.37);
+      const delta = 0.1;
+      const y1 = e1.waveYAt(2 + delta);
       // [Step2] same timeline but ctor amp 999 (legacy dead field)
       const e2 = new WaveEngine(segs, tl, 999 as unknown as number, 0);
-      const y2 = e2.waveYAt(2.37);
+      const y2 = e2.waveYAt(2 + delta);
       // [Step3] Must be identical — timeline drives, not ctor param (if field removed)
       expect(y2).toBeCloseTo(y1, 1);
       // And both should follow timeline amp 2.7 at beat 2, not ctor
       const at2 = e1.waveYAt(2);
-      const slope = (y1 - at2) / 0.37;
+      const slope = (y1 - at2) / delta;
       expect(slope).toBeCloseTo(2 * TW_AMP * 2.7, 0);
       expect(slope).not.toBeCloseTo(2 * TW_AMP * 999, 0);
     });
@@ -294,19 +283,21 @@ describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅とし
         const segs: Segment[] = [{ direction: 'down', beats: 3 }];
         for (const sp of [-1, 0, 1]) {
           const engine = new WaveEngine(segs, tl, 1.0 as unknown as number, sp);
-          // segment starts at 0, so amplitudeAt(0)=1.0 not amp, only segment starting after 1 uses new amp — single seg uses 1.0
           const expected0 = expectedClampedY(sp, 1.0, 'down', 0.37);
           expect(engine.waveYAt(0.37), `amp=${amp} sp=${sp}`).toBeCloseTo(expected0, 1);
         }
         // Multi-seg where second segment starts at 1 uses new amp
+        // Use small delta to avoid clamping at high amplitudes (delta < 1/(2*amp))
         const segs2: Segment[] = [
           { direction: 'stay', beats: 1 },
           { direction: 'down', beats: 3 },
         ];
         const e2 = new WaveEngine(segs2, tl, 1.0 as unknown as number, 0);
         const at1 = e2.waveYAt(1);
-        const at137 = e2.waveYAt(1.37);
-        expect((at137 - at1) / 0.37).toBeCloseTo(2 * TW_AMP * amp, 0);
+        // Use delta=0.1 which stays within bounds for amp up to 5
+        const smallDelta = 0.1;
+        const at1small = e2.waveYAt(1 + smallDelta);
+        expect((at1small - at1) / smallDelta).toBeCloseTo(2 * TW_AMP * amp, 0);
       }
     });
 
@@ -440,19 +431,24 @@ describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅とし
 
     it('only after addChange does wave/cursor reflect new amplitude (3-step with off-grid)', () => {
       let bpmChanges: BpmChange[] = [];
+      // Use alternating up/down to keep wave near center
       const segs: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 2 },  // segment at beat 4
       ];
       const tl0 = new BpmTimeline(120, bpmChanges, 1.0);
       const w0 = new WaveEngine(segs, tl0, 1.0, 0);
-      const yAt4_37_before = w0.waveYAt(4.37);
+      const delta = 0.1;
+      const yAt4_before = w0.waveYAt(4);
+      const yAt4_37_before = w0.waveYAt(4 + delta);
       // Change injection only
       const injectionAmp = 2.5;
       const tlStill = new BpmTimeline(120, bpmChanges, 1.0);
       const wStill = new WaveEngine(segs, tlStill, 1.0, 0);
-      expect(wStill.waveYAt(4.37)).toBeCloseTo(yAt4_37_before, 5);
+      expect(wStill.waveYAt(4 + delta)).toBeCloseTo(yAt4_37_before, 5);
       // Now addChange stamps injection into list
       bpmChanges = addChangeStamp(bpmChanges, 120, injectionAmp);
       const tlAfter = new BpmTimeline(120, bpmChanges, 1.0);
@@ -461,9 +457,11 @@ describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅とし
       expect(tlAfter.amplitudeAt(4.23)).toBeCloseTo(2.5, 5);
       expect(tlAfter.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
       // Wave slope for segment starting at 4 should now be 2.5x
-      const slopeAfter = (wAfter.waveYAt(4.37) - wAfter.waveYAt(4)) / 0.37;
+      const yAt4_after = wAfter.waveYAt(4);
+      const yAt4_afterDelta = wAfter.waveYAt(4 + delta);
+      const slopeAfter = (yAt4_afterDelta - yAt4_after) / delta;
       expect(slopeAfter).toBeCloseTo(2 * TW_AMP * 2.5, 0);
-      const slopeBefore = (w0.waveYAt(4.37) - w0.waveYAt(4)) / 0.37;
+      const slopeBefore = (yAt4_37_before - yAt4_before) / delta;
       expect(slopeBefore).toBeCloseTo(2 * TW_AMP * 1.0, 0);
       expect(slopeAfter).not.toBeCloseTo(slopeBefore, 0);
     });
@@ -518,9 +516,13 @@ describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅とし
       const segs: Segment[] = [{ direction: 'down', beats: 3 }];
       const engineCompat = new WaveEngine(segs, tlCompat, base, 0);
       const engineBase = new WaveEngine(segs, tlBefore, 1.0, 0);
+      // Use small delta to avoid clamping: slope = 2*TW_AMP*base at beat 0 (segment start)
+      const d = 0.1;
+      const slopeCompat = (engineCompat.waveYAt(d) - engineCompat.waveYAt(0)) / d;
+      const slopeBase = (engineBase.waveYAt(d) - engineBase.waveYAt(0)) / d;
       // Slopes differ per base
-      expect((engineCompat.waveYAt(0.37) - engineCompat.waveYAt(0)) / 0.37).toBeCloseTo(2 * TW_AMP * 1.7, 0);
-      expect((engineBase.waveYAt(0.37) - engineBase.waveYAt(0)) / 0.37).toBeCloseTo(2 * TW_AMP * 1.0, 0);
+      expect(slopeCompat).toBeCloseTo(2 * TW_AMP * 1.7, 0);
+      expect(slopeBase).toBeCloseTo(2 * TW_AMP * 1.0, 0);
     });
 
     it('loader parseChartText migrates legacy px amplitude >10 and preserves per-entry amplitude (3-step)', () => {
@@ -712,46 +714,33 @@ bpm = 120
         { direction: 'down', beats: 2 },
       ];
       const engine = new WaveEngine(segs, tl, 1.0, 0);
-      // segment start beats: 0 (amp1.0), 2 (amp0.7), 4 (amp2.7)
-      // Check each segment's slope at off-grid 0.37 into segment
-      const checks: Array<{ segStart: number; amp: number; off: number }> = [
-        { segStart: 0, amp: 1.0, off: 0.37 },
-        { segStart: 2, amp: 0.7, off: 0.37 },
-        { segStart: 4, amp: 2.7, off: 0.37 },
+      // Use small delta to avoid clamping at high amplitudes
+      const delta = 0.1;
+      const checks: Array<{ segStart: number; amp: number }> = [
+        { segStart: 0, amp: 1.0 },
+        { segStart: 2, amp: 0.7 },
+        { segStart: 4, amp: 2.7 },
       ];
       for (const c of checks) {
-        const beat = c.segStart + c.off;
-        // wave slope
-        const dyWave = engine.waveYAt(beat) - engine.waveYAt(c.segStart);
-        // cursor slope at that segment's amp
-        const cursor = new Cursor(c.amp, 0);
+        const beat = c.segStart;
         const tlAmp = tl.amplitudeAt(c.segStart);
         expect(tlAmp).toBeCloseTo(c.amp, 5);
-        cursor.setAmplitude(tlAmp);
-        const y0 = cursor.y;
-        // Need cursor start Y aligned? Cursor starts at CENTER, wave at 0 is CENTER
-        // But after segments, wave Y at segStart may be not CENTER; cursor test uses delta only
-        // So use dy ratio
-        cursor.update((c.off * beatMs) / 1000, false, true, beatMs, 1);
-        const dyCursor = cursor.y - y0;
-        // Wave dy may be clipped, cursor dy also clipped to TW_AMP bounds but cursor independent path
-        // For small off (0.37) and amp 2.7, dy would be 259 -> clamped? But segment 4 starting Y may already be offset
-        // Instead verify per-beat speed coefficient matches: slope should be 2*TW_AMP*amp before clip
-        // For isolated slope test, use separate engine with single segment at that amp
+        // For the time-varying engine, verify dy respects amp at segStart (with clamping)
+        const dyWave = engine.waveYAt(beat + delta) - engine.waveYAt(beat);
+        const expectedDy = clampY(engine.waveYAt(beat) + 2 * TW_AMP * c.amp * delta) - engine.waveYAt(beat);
+        expect(dyWave).toBeCloseTo(expectedDy, 1);
+
+        // Use isolated single-segment engine for slope comparison (no clamping issues)
         const tlSingle = new BpmTimeline(120, [], c.amp);
         const eSingle = new WaveEngine([{ direction: 'down', beats: 5 }], tlSingle, c.amp, 0);
-        const slopeWave = (eSingle.waveYAt(c.off) - eSingle.waveYAt(0)) / c.off;
+        const slopeWave = (eSingle.waveYAt(delta) - eSingle.waveYAt(0)) / delta;
         const cursorSingle = new Cursor(c.amp, 0);
         const y0s = cursorSingle.y;
-        cursorSingle.update((c.off * beatMs) / 1000, false, true, beatMs, 1);
-        const slopeCursor = (cursorSingle.y - y0s) / c.off;
+        cursorSingle.update((delta * beatMs) / 1000, false, true, beatMs, 1);
+        const slopeCursor = (cursorSingle.y - y0s) / delta;
         expect(slopeWave).toBeCloseTo(2 * TW_AMP * c.amp, 0);
         expect(slopeCursor).toBeCloseTo(2 * TW_AMP * c.amp, 0);
         expect(slopeWave).toBeCloseTo(slopeCursor, 0);
-        // For the time-varying engine, also verify dy respects amp at segStart (with clamping)
-        const expectedDy = clampY(engine.waveYAt(c.segStart) + 2 * TW_AMP * c.amp * c.off) - engine.waveYAt(c.segStart);
-        expect(dyWave).toBeCloseTo(expectedDy, 1);
-        void dyCursor;
       }
     });
 
