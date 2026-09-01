@@ -5180,3 +5180,11 @@ Error: No tests found.
 2026-09-01 16:54:32,538 [INFO] Persisted session ses_fa409c589ffekbtktnvqs5sjKY for task=T128, role=reviewer
 2026-09-01 16:54:32,539 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: All T128 requirements verified by reading source code.
 2026-09-01 16:54:32,539 [INFO] [T128] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-09-01 16:54:32,552 [INFO] [T128] Building docs/ dist for GitHub Pages...
+2026-09-01 16:54:35,314 [INFO] [T128] Pushing latest build to GitHub...
+2026-09-01 16:54:37,850 [INFO] [T128] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
+2026-09-01 17:43:22,756 [INFO] Orchestrator range execution: 1 tasks (from=T129, to=T129, budget=600m)
+2026-09-01 17:43:22,756 [INFO]   Plan: T129 <- 録音モードのセグメント長クオンタイズ修正：現行 segmentize() は T126 由来の physicalSnap = quantizeBeat(1/amplitude, snap) により、amplitude>=1 かつ snap<=1 で1拍(全幅移動)へ強制スナップするため、(a)スナップ解像度(0.125/0.25/0.5/1)が無視され必ず全幅移動しか生成されない、(b)録音範囲[startBeat,endBeat)と newSegs 総拍数が不一致になり波形上書きが「加算(ずれ/隙間)」に見える。修正方針: segmentize() の各ランの長さを「ユーザー選択の snap 解像度の整数倍」(最小1snap、quantizeBeatを1/amplitudeで無くsnap基準に)へ丸める。1/amplitude による強制を廃止する。T128のdY補間モデルにより端数セグメント(例 0.25拍)も部分移動として正しく描画されるため、物理整合性は保たれる。finishRecording の keptBefore/newSegs/keptAfter 合成は既に正しいため変更不要(segmentize の修正だけで上書きが正しく機能する)。完了条件(オフグリッド必須): (1) snap別(0.125/0.25/0.5/1)で、端数タイミングの短押し(例 0.30拍)が snap の整数倍セグメント(0.25/0.25/0.5/1)を生成し、各セグメントのbeatsが snap の整数倍であること。(2) 録音範囲 [startBeat,endBeat) と newSegs の総ビートが(グリッド整列で)一致し、finishRecording 合成が連続した上書き波形になる(隙間・重複・端数がぶれない)こと。(3) 既存の snap 整合性テスト(dynamic.test.ts の本セクション、t101.spec.ts)が回帰しないこと。(4) isSnapAligned を保ったまま、1/amplitude ではないことを検証(例: snap=0.25, amp=1 の短押し0.30拍 -> 0.25であり1.0でない)。
+2026-09-01 17:45:28,916 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-01 17:45:29,918 [INFO] Orchestrator range execution: 1 tasks (from=T129, to=T129, budget=600m)
+2026-09-01 17:45:29,918 [INFO] [T129] --only mode: skipping dependency checks.
