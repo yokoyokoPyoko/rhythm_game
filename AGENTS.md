@@ -1049,7 +1049,32 @@ CSS Transition のみ（ライブラリ不使用）:
 4. **回帰**:
    - `getPoints()` の長さが `セグメント数 + 1` のまま（エディタ 1:1 保守）。
    - 既存 T127 不変量（端点 `min(TW_AMP, 2*TW_AMP*amp*beats)`、上下幅 `TW_AMP=130` 不変、`segmentize`）が回帰しないこと。
-   - `WaveEngine`(waveYAt/getPoints) と `Cursor`(update) の数値整合を**複雑な振幅値で直接**比較する構造にする（T127のテスト設計上の注意を踏襲）。
+    - `WaveEngine`(waveYAt/getPoints) と `Cursor`(update) の数値整合を**複雑な振幅値で直接**比較する構造にする（T127のテスト設計上の注意を踏襲）。
+
+---
+
+### [T129] 録音モードのセグメント長クオンタイズ修正（snap解像度優先）
+
+**バグ（2症状）**: T128 で速度係数には従えるようになったが、録音モードで以下の2つの回帰が発生。
+1. **スナップ解像度が無視され、必ず全幅移動のみ**になる。
+2. **波形上書き機能が波形加算（ずれ/隙間）に見える**。
+
+**根本原因**: `src/chart/quantize.ts` の `segmentize()` に T126 が導入した `physicalSnap = quantizeBeat(1/amplitude, snap)` が、`amplitude>=1 かつ snap<=1` で常に `1.0` になり、全セグメント長を強制的に「全幅移動に必要な拍数（1/amplitude）」へ丸めるため。
+- 実測例: 0.30拍の短押し（amp=1）が snap=0.125/0.25/0.5/1 の**全て**で `beats:1`（全幅）になる。
+- 録音範囲 `[startBeat, endBeat)`（例: 1.25拍）に対し `newSegs`（例: 1.0拍）が短くなり、`keptAfter` との間に隙間が生じて「加算/ずれ」に見える。
+
+**共通規約**: セグメント長は**ユーザーが選択した snap 解像度の整数倍**（最小 1 snap）で決める。`1/amplitude` による強制は**廃止**する。T128 の dY 補間モデルにより、端数セグメント（例 0.25拍）も部分移動として正しく描画されるため物理整合性は保たれる（高振幅・急峻でも矛盾しない）。
+
+**修正内容**: `src/chart/quantize.ts` の `segmentize()`。
+- 各ランの長さを `quantizeBeat(rawBeats, snap)`（snap 基準）へ揃える。`beats < snap` なら最小 `snap` にクランプ（0/自由長セグメント防止）。`1/amplitude` の `physicalSnap` 計算とそれによる再クオンタイズを除去。
+- 方向判定（up/down/stay）用の `threshold` と `basePhysical` は不要になった部分を整理。`finishRecording`（EditorScreen.tsx）の `keptBefore/newSegs/keptAfter` 合成は既に正しいため**変更不要**。
+
+**完了条件（オフグリッド検証原則に従い端数タイミング必須）**:
+1. snap別（0.125/0.25/0.5/1）で、**端数タイミングの短押し**（例: 0.30拍, amp=1）が `snap` の整数倍のセグメント（0.25/0.25/0.5/1）を生成し、各セグメントの `beats` が `snap` の整数倍であること。
+2. **1/amplitude でない**ことを検証（例: snap=0.25, amp=1, 短押し0.30拍 → `beats=0.25` であり `1.0` でない）。
+3. 録音範囲 `[startBeat, endBeat)` と `newSegs` の総ビートがグリッド整列で一致し、`finishRecording` 合成（keptBefore + newSegs + keptAfter）が連続した上書き波形になること（隙間・重複なし）。
+4. 既存の snap 整合性（`dynamic.test.ts` の本セクション、`t101.spec.ts` の「beats が snap の整数倍」）が**回帰しない**こと。
+5. 旧ゴールデン `tests/.gateb_T126.spec.ts` / `tests/.gateb_T105.spec.ts` は旧仕様（1/amplitude 強制）を検証しているため、新しい規約（snap 整数倍）に合わせて更新または削除する（orchestrator Gate B は `dynamic.test.ts` を使用するため、ライブテストは snap 整合性のみで判定）。
 
 ---
 

@@ -1,658 +1,667 @@
 [
-  {
-    "id": "T00",
-    "desc": "Vite + React + TypeScript プロジェクトスキャフォールド。smol-toml, react-router-dom をインストール。",
-    "depends_on": [],
-    "ui": false
-  },
-  {
-    "id": "T82",
-    "desc": "Playwright スモークテストスクリプト作成（Gate B用固定スクリプト。最初に作り、以後変更しない）",
-    "depends_on": [
-      "T00"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T01",
-    "desc": "src/types.ts に全TypeScript型定義を作成（Chart, Segment, BpmChange, RingDef, SongEntry, RingState, HitResult, GameMode）",
-    "depends_on": [
-      "T00"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T02",
-    "desc": "src/index.css にCSSデザインシステム（トークン変数、フォント、Linear/Vercel風ミニマルダーク）",
-    "depends_on": [
-      "T00"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T10",
-    "desc": "src/audio/AudioManager.ts: AudioContextのライフサイクル管理、ユーザー操作後にrunning状態、baseLatency取得",
-    "depends_on": [
-      "T01"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T11",
-    "desc": "src/audio/metronome.ts: lookahead=200msのビートスケジューラ。強拍/弱拍で音を分ける。",
-    "depends_on": [
-      "T10"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T12",
-    "desc": "src/audio/clock.ts: songNow()関数。audioCtx.currentTimeベース、manualOffsetMs加味。",
-    "depends_on": [
-      "T11"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T13",
-    "desc": "src/audio/loader.ts: 相対URL（/audio/xxx.flac等）からfetch→decodeAudioData→AudioBufferSourceで再生。失敗時はメトロノームのみ継続。",
-    "depends_on": [
-      "T10"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T14",
-    "desc": "src/audio/bpmTimeline.ts: bpm_changes配列を処理しbeat→ms変換。指定beatでBPMを変更しnextBeatTimeを更新。",
-    "depends_on": [
-      "T11",
-      "T12"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T40",
-    "desc": "src/chart/loader.ts: smol-tomlでChart型にパース。バリデーション。不正データはエラーを返す。",
-    "depends_on": [
-      "T01"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T41",
-    "desc": "public/songs.toml作成 + src/chart/manifest.ts: songs.tomlをfetchしてSongEntry[]を返す。",
-    "depends_on": [
-      "T40"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T20",
-    "desc": "src/game/waveEngine.ts: segments配列から waveYAt(beatPos): number を実装。累積ビート数で折れ線補間。",
-    "depends_on": [
-      "T01",
-      "T14"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T21",
-    "desc": "src/game/cursor.ts: ↑↓キー入力でカーソルY座標を更新。速度=(2*TW_AMP)/(segmentBeats*(beatMs/1000))px/sec。segmentBeats=現在のセグメント拍数。",
-    "depends_on": [
-      "T20"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T22",
-    "desc": "src/game/ringSpawner.ts: Chart.ringsからRingStateを生成。TW_LEAD_BEATS=3拍前にspawn、hitTimeにjudge lineへ到達するようスクロール。",
-    "depends_on": [
-      "T20",
-      "T12"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T23",
-    "desc": "src/game/hitJudge.ts: Space押下時に最近傍RingStateを検索。タイミング誤差±beatMs*0.4かつY距離±60pxでヒット。PERFECT/GOOD/MISSを返す。",
-    "depends_on": [
-      "T22"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T24",
-    "desc": "src/game/score.ts: PERFECT=300, GOOD=100, MISS=コンボリセット。トレース継続ボーナス（±26px内で0.15秒ごとにcombo+1）。",
-    "depends_on": [
-      "T23"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T25",
-    "desc": "src/game/renderer.ts: Canvas 2Dで波形・カーソル・リング・判定線・HUDを60fpsで描画。",
-    "depends_on": [
-      "T20",
-      "T21",
-      "T22",
-      "T24"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T30",
-    "desc": "src/App.tsx + react-router-dom: / → Select, /play/:songId → Game, /result → Result, /editor → Editor のルーティング。",
-    "depends_on": [
-      "T01",
-      "T02"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T31",
-    "desc": "src/screens/SelectScreen.tsx: songs.tomlからカード一覧表示。タイトル・アーティスト・難易度。クリックで/play/:songIdへ。",
-    "depends_on": [
-      "T30",
-      "T41"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T32",
-    "desc": "src/screens/GameScreen.tsx: CanvasをReactコンポーネントでラップ。useEffect内でゲームループ起動。ESC→Select、R→restart、曲終了→Result。",
-    "depends_on": [
-      "T25",
-      "T30"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T33",
-    "desc": "src/screens/ResultScreen.tsx: スコアカウントアップ、ランク(S/A/B/C/D)、PERFECT/GOOD/MISS数、「もう一回」「曲選択」ボタン。",
-    "depends_on": [
-      "T30",
-      "T24"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T42",
-    "desc": "統合: /play/:songId でsongs.toml→chart.toml→音楽ロード→波形・リング同期再生。全システムを繋げる。",
-    "depends_on": [
-      "T31",
-      "T32",
-      "T41",
-      "T13",
-      "T14",
-      "T20",
-      "T22"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T50",
-    "desc": "src/screens/EditorScreen.tsx: /editor のレイアウト基盤。左ペイン（音楽制御）・右ペイン（タイムライン）の二分割UI。",
-    "depends_on": [
-      "T30",
-      "T40"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T51",
-    "desc": "エディタ内オーディオプレイヤー: URL入力→再生/停止/シーク。現在位置を秒・beat両方で表示。BPM設定フィールド。",
-    "depends_on": [
-      "T50",
-      "T13"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T52",
-    "desc": "リング録音モード: 再生中にSpaceでbeat位置スタンプ。スナップ量設定可。録音済みリストを表示。",
-    "depends_on": [
-      "T51"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T53",
-    "desc": "セグメントエディタ: up/downセグメントの追加/削除/順序変更。変更するとリアルタイムで波形プレビュー更新。",
-    "depends_on": [
-      "T50"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T54",
-    "desc": "BPMエディタ: 基本BPM設定 + BPM変更リスト（beat, newBpm）。タップテンポ入力対応。",
-    "depends_on": [
-      "T50"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T55",
-    "desc": "TOMLエクスポート: 現在のエディタ状態を正規TOMLに変換しダウンロード。T40でパースできることを確認。",
-    "depends_on": [
-      "T52",
-      "T53",
-      "T54"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T56",
-    "desc": "エディタ内プレイテスト: 「プレイテスト」ボタンでエクスポートせずゲーム画面を起動し現在譜面を確認。",
-    "depends_on": [
-      "T55",
-      "T42"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T60",
-    "desc": "手動オフセット調整: </> キーでmanualOffsetMsを±10ms変更。localStorageに保存。ゲーム内右下に表示。",
-    "depends_on": [
-      "T12"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T61",
-    "desc": "Lキーキャリブレーション画面: メトロノームに合わせてSpace×8回、最初の2サンプル破棄して平均からoffset自動設定。",
-    "depends_on": [
-      "T11",
-      "T60"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T62",
-    "desc": "キー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
-    "depends_on": [
-      "T11"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T70",
-    "desc": "曲選択画面ポリッシュ: カードホバーアニメーション、難易度バー、フォント整備。Linear風。",
-    "depends_on": [
-      "T31"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T71",
-    "desc": "ゲーム画面ポリッシュ: 波形グラデーション、コンボ色変化、PERFECT演出、ビートパルス。ゲーミングRGB・過剰グロー禁止。",
-    "depends_on": [
-      "T42"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T72",
-    "desc": "リザルト画面ポリッシュ: スコアカウントアップアニメーション、ランク大文字表示、PERFECT/GOOD/MISS統計。",
-    "depends_on": [
-      "T33"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T73",
-    "desc": "オーサリングツールポリッシュ: タイムラインにリング縦線表示。UI全体のLinear風整合性。",
-    "depends_on": [
-      "T52",
-      "T53"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T74",
-    "desc": "画面遷移アニメーション: 全画面切り替えにCSS Transitionでフェード/スライド。",
-    "depends_on": [
-      "T31",
-      "T32",
-      "T33"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T81",
-    "desc": "エラーハンドリング: TOML構文エラー・チャートファイル404・音楽ロード失敗を分かりやすいUIメッセージで表示。",
-    "depends_on": [
-      "T42",
-      "T13"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T80",
-    "desc": "E2E統合確認: 曲選択→ゲーム→リザルト→再プレイ→曲選択の完全フロー手動確認。コンソールエラーなし。",
-    "depends_on": [
-      "T70",
-      "T71",
-      "T72",
-      "T73",
-      "T74",
-      "T56",
-      "T61",
-      "T62",
-      "T81"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T90",
-    "desc": "ヒット判定のリング解決バグ修正: judgeHit()がヒットしたリングをresolved=trueにしないため、同一リングの複数回ヒットと、ヒット済みリングの後からのMISS二重計上が発生する。",
-    "depends_on": [
-      "T23"
-    ],
-    "ui": false
-  },
-  {
-    "id": "T91",
-    "desc": "総合デバッグ: リング選定改善・曲終了判定の音楽長基準化・メトロノームlatency補正・キャリブレーションoffsetリセット・WavePreviewのBPM変更反映・startGame二重起動防止・回帰確認。",
-    "depends_on": [
-      "T90"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T92",
-    "desc": "プレイ表示領域（波形上下幅）の固定拡張: TW_AMPを80pxから130px（Y: 170〜430px）へ拡大し、HUDやヒントと干渉せずに画面を広く活用。",
-    "depends_on": [
-      "T91"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T93",
-    "desc": "譜面設定（TOML）拡張: 縦横進み幅（amplitude, scroll_speed）および楽曲開始オフセット（audio_offset）を追加し、エディタ設定ペインで編集・TOML出力に対応。",
-    "depends_on": [
-      "T92"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T94",
-    "desc": "セグメント方向「とどまる (stay)」の追加 & リアルタイムセグメント録音: 'stay'（水平維持）実装と、エディタ再生中のキー入力リアルタイムセグメントスタンプ機能。",
-    "depends_on": [
-      "T93"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T95",
-    "desc": "ホールドリング（長押し）の追加: RingDef/RingStateにduration/type追加、ゲーム画面での長押し継続判定・帯描画、エディタでのホールド設定対応。",
-    "depends_on": [
-      "T94"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T96",
-    "desc": "オーサリングツールUI/UX刷新: WavePreview拡大、リング・セグメント一覧のデフォルト折りたたみ(アコーディオン)、タイムライン直感編集サポート。",
-    "depends_on": [
-      "T95"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T97",
-    "desc": "オーサリングツール総合使い勝手の測定・改善: 単一機能（直感編集等）に限定せず、チャートエディタとしての一連ワークフロー（音楽読込→BPM→リング/セグメント配置→波形プレビュー→TOML出力→プレイテスト）全体が十分使えるかを測り、不足を改善する。",
-    "depends_on": [
-      "T96"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T98",
-    "desc": "波形モデル統一 + エディタ録音モード + DAW風ズーム/パン。★波形の高さは自由（現在は up=上端/down=下端/stay=中央の 1/0/-1 固定）。玉の移動速度は振幅×波長で一意決定され、波長=4拍固定（BPMで時間換算）。スクロール速度は波長ではなく水平ノーツ流れ用で別物。適用範囲はゲーム本体も含む。\n(1) src/game/waveEngine.ts: WAVELENGTH_BEATS=4 を export。buildPoints() を端点スナップから「増分移動」に変更（up/down で (2*amp)*(segBeats/4) だけ移動し [top,bottom] にクランプ）。これで任意の高さが表現可能に。\n(2) src/game/cursor.ts: update() の速度計算をセグメントごとの波長ではなくグローバル WAVELENGTH_BEATS=4 に変更（第5引数 segmentBeats は無視）。\n(3) src/screens/GameScreen.tsx: cursor.update() の第5引数（segmentBeatsAt）を削除し、玉と描画波形を一致させる。\n(4) src/screens/EditorScreen.tsx: 再生モード/録音モードのトグルを追加。録音開始時、シーク位置の波形高さを初期値（既存波形がなければ中央）として玉(Cursor)を初期化し、再生に同期して上下キーのみで玉を操作し軌跡を記録。停止/解除時に軌跡をセグメント化してコミット（開始beat以降を上書き、以前は維持）。キー入力を書き換え: 録音モードでは上下キーで keyStateRef をセット（既存の「セグメントスタンプ」ロジックは削除）、Spaceは両モードでリング追加。\n(5) src/screens/editor/WavePreview.tsx: 時間軸のみのズーム/パン。view={startBeat,beats} プロップを受け、全描画(波形/リング/プレイヘッド/グリッド/クリック逆変換)を view 基準にマップ。ホイール=カーソル位置固定ズーム、空白ドラッグ=パン（リング上ドラッグは既存移動、クリックは追加と使い分け）。録音中はライブ玉と軌跡を破線で重畳。垂直ズームは実装しない。\n(6) EditorScreen にズーム/スクロール用スライダーを追加（マウス操作＋スライダーの両方）。レジェンド文案を新仕様に更新。\n(7) Segment 型は {direction,beats} のまま（自由高さは多数の小セグメントで表現）。型追加なし。Linear/Vercel風ミニマルダーク維持。実装後は tsc --noEmit と既存チャートでの玉/波形一致を確認。",
-    "depends_on": [
-      "T97",
-      "T92",
-      "T94",
-      "T95"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T99",
-    "desc": "オーサリングツール機能改善(1/7): オーディオオフセット設定をBPM設定ペインから音楽制御ペインへ移動し、エディタ再生時(playFrom)にも確実に反映させる。自動テストで検証可能にする。",
-    "depends_on": [
-      "T98"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T100",
-    "desc": "オーサリングツール機能改善(2/7): 録音時にホールドリングを反映（Space押下でhold型リングをスタンプ、録音軌跡からホールドを生成）。自動テストで検証可能にする。",
-    "depends_on": [
-      "T99"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T101",
-    "desc": "オーサリングツール機能改善(3/7): 録音時のクオンタイズ（スナップ吸着）を実装し、クオンタイズ分解能設定UI（1/4・1/2等）を追加。記録されたセグメントのbeatsが選択したsnap解像度の倍数になることを自動テストで検証可能にする。",
-    "depends_on": [
-      "T100"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T102",
-    "desc": "オーサリングツール機能改善(4/7): レガシーな再生中キーボードセグメントスタンプ機能を完全削除（playモードで上下キーを押してもセグメントが増えないことを自動テストで検証）。",
-    "depends_on": [
-      "T101"
-    ],
-    "ui": true,
-    "type": "negative"
-  },
-  {
-    "id": "T103",
-    "desc": "オーサリングツール機能改善(5/10): レガシーな再生中キーボードリングスタンプ機能を完全削除。再生モード（playモード）でSpaceキーを押してもリングが追加されないことを自動テストで検証（録音モードでのみSpaceリング追加を許可）。",
-    "depends_on": [
-      "T102"
-    ],
-    "ui": true,
-    "type": "negative"
-  },
-  {
-    "id": "T104",
-    "desc": "オーサリングツール機能改善(6/10): 波形プレビュー描画の頂点レンダリング化。固定ステップサンプリングを廃止しセグメント頂点を直接結ぶことで、拡大率によらず鋭く正確な折れ線を描画。多重重ね描きも解消。自動テストで検証可能にする。",
-    "depends_on": [
-      "T103"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T105",
-    "desc": "オーサリングツール機能改善(7/10): 録音クオンタイズのキー離し（リリース）位置吸着改善。キーを離した瞬間の拍を正確にsnapグリッドに吸着させ、セグメントの過剰伸長（オーバーシュート）を防止。自動テストで検証可能にする。",
-    "depends_on": [
-      "T104"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T106",
-    "desc": "ローカル音声ファイル読込機能: エディタ画面（および曲選択画面）にファイル選択（input type=file）およびドラッグ＆ドロップ読込を追加し、手持ちのローカル音声ファイル（mp3/flac/wav/ogg）をブラウザ上で直接デコード・再生・譜面作成可能にする。自動テストで検証可能にする。",
-    "depends_on": [
-      "T105"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T107",
-    "desc": "オーサリングツール機能改善(8/10): 波形の上下表示領域を拡張（canvasの縦幅・描画マップを広げ、SCORE/COMBO/操作ヒントに侵食しない範囲で）。自動テストで検証可能にする。",
-    "depends_on": [
-      "T106"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T108",
-    "desc": "オーサリングツール機能改善(9/10): Canvasホイールズーム時にページがスクロールしないよう preventDefault を確実に適用。自動テストで検証可能にする。",
-    "depends_on": [
-      "T107"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T109",
-    "desc": "オーサリングツール機能改善(10/10): 録音の上書き範囲を「開始beat〜終了beat」に限定し、それ以降のセグメントへの過剰上書きを防止。自動テストで検証可能にする。",
-    "depends_on": [
-      "T108"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T110",
-    "desc": "ホーム画面ローカル譜面・音源DnD（文化祭GDriveワークフロー対応）: SelectScreenに譜面TOMLと音源ファイルの個別ドラッグ＆ドロップ＋ファイル選択UIを追加。TOML内audioはファイル名のみで統一し、basename一致で紐付け。GameScreenは /play/custom で {chart, buffer} をin-memory受け取り、ChartCache/AudioCache(Map<basename,AudioBuffer>)で共有。順不同・片方のみでもメトロノームでプレイ可。pairが揃ったら「この譜面でプレイ」活性化。",
-    "depends_on": [
-      "T109"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T111",
-    "desc": "プレイテスト音源共有の修正: EditorScreenのplaytestを {chart, buffer} 直渡しにし、T110のAudioCacheを再利用してGameScreenがloadAudio再fetchせずに再生。ローカルFile時はurl=file.nameでfetch不能になるメトロノームのみ問題を解消。TOML audioはbasenameのみ。",
-    "depends_on": [
-      "T110"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T112",
-    "desc": "振幅の正規化(0.0-1.0)化: Chart.amplitudeの単位をpxから正規化(1.0=上端/-1.0=下端/0.0=中央)に変更。NORM_TO_PX=130は描画層のみの定数に。waveEngine/cursorは正規化で計算し最後にNORM_TO_PXを乗算。BpmEditorは0.1-1.0スライダー。loaderは旧px値(>1.5)をamplitude/130にマイグレーション。serializeは正規化のみ出力。縦目盛りは追加しない。BPMが変わっても拍基準のキリの良さが崩れないことを検証。",
-    "depends_on": [
-      "T111"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T113",
-    "desc": "replyハードコード依存排除: EditorScreenのlink.download='reply.toml'や初期title/url='/rhythm_game/audio/08.Reply.flac'固定を汎用化。exportはslugify(title)||'untitled'で${slug}.toml。初期title/urlは空文字。tests 5件のsuggestedFilename()=reply.toml固定期待をtoMatch(/\\.toml$/)に緩和。",
-    "depends_on": [
-      "T112"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T114",
-    "desc": "スタート位置指定: Chartにstart_position(-1.0〜1.0, 0.0=中央)を追加。WaveEngine/Cursorは初期Y=CENTER - start_position * NORM_TO_PXで開始。旧チャート互換は中央(0.0)にリセット。loaderは未定義時0.0、serializeは正規化で出力。Editorの譜面情報ペインに-1.0〜1.0スライダー追加。BPMが変わっても拍基準でスタート位置が固定されることを検証。",
-    "depends_on": [
-      "T113"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T115",
-    "desc": "エディタ自動スクロール追従 ＆ Space再生・R録画ショートカット: プレビュー再生中に現在の拍位置がビュー右端に近づいたとき自動スクロール。Spaceで再生/停止、Rで録画開始/停止のグローバルショートカット。",
-    "depends_on": [
-      "T114"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T116",
-    "desc": "Blender風3モード切替式エディタ ([V] 頂点モード, [E] 辺モード, [R] リング配置モード): プレビュー上の3つの独立した編集モードの切替トグルおよびショートカット(V/E/R)による波形・リング編集の完全分離。",
-    "depends_on": [
-      "T115"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T117",
-    "desc": "メトロノームON/OFFスイッチ: エディタ左ペインの音楽制御セクションにメトロノーム音のチェックボックスを追加し、再生ループ中のスケジューラへ動的反映。",
-    "depends_on": [
-      "T116"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T118",
-    "desc": "アコーディオン ⇄ 波形プレビューの相互ハイライト連動: 右ペインのリスト要素ホバー/選択とプレビュー上の対応セグメント/リングの強調表示、およびプレビュー上の要素クリックによるアコーディオン展開フォーカス連動。",
-    "depends_on": [
-      "T117"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T119",
-    "desc": "通常プレイ時の難易度緩和アシスト「波の磁力（ウェーブ・アトラクション）」: 通常ゲームプレイ時、1拍境界を通過する瞬間にカーソル位置が波の目標位置へ向かって自動吸着（プル）されるアシスト機能の実装。",
-    "depends_on": [
-      "T118"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T120",
-    "desc": "ホーム画面のカスタム譜面インポート「追加」機能: SelectScreenのインポートセクションで「この譜面でプレイ」ボタンを「追加」に変更し、読み込んだカスタム譜面を曲一覧（カードグリッド）に新しいSongEntryとして登録する。追加されたカスタム曲は通常の楽曲と同様にカードクリックでプレイ可能にし、AudioCache/ChartCacheと状態管理で保持する。",
-    "depends_on": [
-      "T119"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T121",
-    "desc": "スクロール速度(scroll_speed)のゲームプレイ反映修正: RingSpawner等でハードコードされていたTW_SCROLLを廃止し、チャートのscroll_speedを動的に使用してノーツのスクロール速度を正しく反映させる。",
-    "depends_on": [
-      "T120"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T122",
-    "desc": "振幅(amplitude)1以上の設定対応とローダー閾値修正: BpmEditorの振幅入力上限(1.0)を撤廃し1以上を設定可能にする。またloader.tsの旧px値判定閾値を1.5から10に修正し、1以上の正規化振幅が誤ってピクセル値として除算されるバグを防止する。",
-    "depends_on": [
-      "T121"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T124",
-    "desc": "振幅(amplitude)の物理的な固定と速度係数化の反映修正。WaveEngineでTW_AMP（固定）と速度係数（amplitude）を分離し、波形の描画高さが変わらず移動速度だけが変わるよう修正する。",
-    "depends_on": [
-      "T123"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T125",
-    "desc": "振幅(amplitude)連動型の波形編集ロジック修正: 頂点/辺編集時のドラッグ操作において、マウス位置から直接座標を計算する仕様を廃止。WaveEngineの物理計算（振幅に基づく速度係数）と整合するようにドラッグ時の座標算出を再設計する。",
-    "depends_on": [
-      "T124"
-    ],
-    "ui": true
-  },
-  {
-    "id": "T126",
-    "desc": "録音時のセグメント長クオンタイズの物理整合性修正: segmentize関数において、録音時のrawな拍数ではなく、amplitudeに基づく物理的に正しい拍数（整合性のある拍数）へ強制的に丸めるロジックを実装し、自由な長さのセグメント生成を禁止する。",
-    "depends_on": [
-      "T125"
-    ],
-    "type": "fix",
-    "ui": true
-  },
-  {
-    "id": "T127",
-    "desc": "速度係数(amplitude)の規約全体の再統一と波形状の修復: 全幅(2*TW_AMP)移動に必要な拍数 = 1/amplitude という規約（amplitude=1なら1拍で全幅移動、amplitude=2なら0.5拍で全幅移動、高いほど急峻・速い）を全実装箇所で統一する。現状 cursor.ts / quantize.ts が「高いほど速い」で正しい一方、waveEngine.ts の buildPoints だけが move = 2*TW_AMP/amplitude と「高いほど遅い」に逆転しており、カーソルが波形に追従せずゲーム内トレース判定( |cursor.y - waveYAt| )や録音カーソル・波形プレビューが不一致になる。修正: buildPoints のセグメント移動量を 2*TW_AMP*amplitude*beats（TW_AMP上下幅でclamp）に変更し、cursor/quantize と同一規約に統一する。あわせて WavePreview の頂点ドラッグ(T125)、EditorScreen の録音カーソル初期Y・truncateSegmentsTo、cursor.ts のコメントも同一規約に明文化・整合させる。物理上下幅は TW_AMP=130 で固定のまま（T123/T124の成果を維持）。完了条件: 振幅設定を変更しても波の上下幅が不変で、移動速度のみが変化し、カーソルが波形に追従すること。",
-    "depends_on": [
-      "T126"
-    ],
-    "type": "fix",
-    "ui": true
-  },
-  {
-    "id": "T128",
-    "desc": "波形のクリップ時傾斜崩壊の修正: T127で buildPoints の移動量式(2*TW_AMP*amplitude*beats)は正規化・clamp済みだが、WaveEngine.waveYAt() が「2点間(clamp済み端点)の線形補間」をしているため、区間が上下幅にクランプされたセグメントで「実変位÷フル拍数」の傾斜となり速度係数より緩やか(遅く)になってしまう。カーソル(2*TW_AMP*amplitude)と波形が乖離し、トレース判定や波形プレビューが不一致になる(速度係数より速くなる事は無く、緩やか･遅い側のみ発生)。修正方針: (1) WavePointにセグメント開始点の1拍あたり変位 dY(up=-2*TW_AMP*amp, down=+2*TW_AMP*amp, stay=0)を持たせ、waveYAt(beat)は区間内で y=clamp(p0.y + p0.dY*(beat-p0.beat), waveTop, waveBottom) と補間中にもクランプし、急峻な傾斜+境界到達後の水平stayを表現する。(2) getPoints() は {beat,y} 構造と長さ(セグメント数+1)を不変に保つ(エディタの1点=1セグメント対応を維持。頂点ハンドル/辺選択/ドラッグに干渉しない)。(3) WavePreview.tsx のセグメント描画を waveYAt-sampledポリライン化し、nearestEdgeIndexも同一clampポリラインで判定してエディタ表示とゲーム波形を一致させる。完了条件: クランプ区間の途中拍で waveYAt のYが cursor移動量(clamp(CENTER±2*TW_AMP*amp*beat))と一致すること(端数タイミング0.37/1.23拍含む)。既存T127不変量(端点min値、上下幅TW_AMP=130不変、segmentize)が回帰しないこと。最大で緩やか(遅い)側に倒れるバグが無いこと。",
-    "depends_on": [
-      "T127"
-    ],
-    "type": "fix",
-    "ui": true
-  }
+ {
+  "id": "T00",
+  "desc": "Vite + React + TypeScript プロジェクトスキャフォールド。smol-toml, react-router-dom をインストール。",
+  "depends_on": [],
+  "ui": false
+ },
+ {
+  "id": "T82",
+  "desc": "Playwright スモークテストスクリプト作成（Gate B用固定スクリプト。最初に作り、以後変更しない）",
+  "depends_on": [
+   "T00"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T01",
+  "desc": "src/types.ts に全TypeScript型定義を作成（Chart, Segment, BpmChange, RingDef, SongEntry, RingState, HitResult, GameMode）",
+  "depends_on": [
+   "T00"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T02",
+  "desc": "src/index.css にCSSデザインシステム（トークン変数、フォント、Linear/Vercel風ミニマルダーク）",
+  "depends_on": [
+   "T00"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T10",
+  "desc": "src/audio/AudioManager.ts: AudioContextのライフサイクル管理、ユーザー操作後にrunning状態、baseLatency取得",
+  "depends_on": [
+   "T01"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T11",
+  "desc": "src/audio/metronome.ts: lookahead=200msのビートスケジューラ。強拍/弱拍で音を分ける。",
+  "depends_on": [
+   "T10"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T12",
+  "desc": "src/audio/clock.ts: songNow()関数。audioCtx.currentTimeベース、manualOffsetMs加味。",
+  "depends_on": [
+   "T11"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T13",
+  "desc": "src/audio/loader.ts: 相対URL（/audio/xxx.flac等）からfetch→decodeAudioData→AudioBufferSourceで再生。失敗時はメトロノームのみ継続。",
+  "depends_on": [
+   "T10"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T14",
+  "desc": "src/audio/bpmTimeline.ts: bpm_changes配列を処理しbeat→ms変換。指定beatでBPMを変更しnextBeatTimeを更新。",
+  "depends_on": [
+   "T11",
+   "T12"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T40",
+  "desc": "src/chart/loader.ts: smol-tomlでChart型にパース。バリデーション。不正データはエラーを返す。",
+  "depends_on": [
+   "T01"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T41",
+  "desc": "public/songs.toml作成 + src/chart/manifest.ts: songs.tomlをfetchしてSongEntry[]を返す。",
+  "depends_on": [
+   "T40"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T20",
+  "desc": "src/game/waveEngine.ts: segments配列から waveYAt(beatPos): number を実装。累積ビート数で折れ線補間。",
+  "depends_on": [
+   "T01",
+   "T14"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T21",
+  "desc": "src/game/cursor.ts: ↑↓キー入力でカーソルY座標を更新。速度=(2*TW_AMP)/(segmentBeats*(beatMs/1000))px/sec。segmentBeats=現在のセグメント拍数。",
+  "depends_on": [
+   "T20"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T22",
+  "desc": "src/game/ringSpawner.ts: Chart.ringsからRingStateを生成。TW_LEAD_BEATS=3拍前にspawn、hitTimeにjudge lineへ到達するようスクロール。",
+  "depends_on": [
+   "T20",
+   "T12"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T23",
+  "desc": "src/game/hitJudge.ts: Space押下時に最近傍RingStateを検索。タイミング誤差±beatMs*0.4かつY距離±60pxでヒット。PERFECT/GOOD/MISSを返す。",
+  "depends_on": [
+   "T22"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T24",
+  "desc": "src/game/score.ts: PERFECT=300, GOOD=100, MISS=コンボリセット。トレース継続ボーナス（±26px内で0.15秒ごとにcombo+1）。",
+  "depends_on": [
+   "T23"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T25",
+  "desc": "src/game/renderer.ts: Canvas 2Dで波形・カーソル・リング・判定線・HUDを60fpsで描画。",
+  "depends_on": [
+   "T20",
+   "T21",
+   "T22",
+   "T24"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T30",
+  "desc": "src/App.tsx + react-router-dom: / → Select, /play/:songId → Game, /result → Result, /editor → Editor のルーティング。",
+  "depends_on": [
+   "T01",
+   "T02"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T31",
+  "desc": "src/screens/SelectScreen.tsx: songs.tomlからカード一覧表示。タイトル・アーティスト・難易度。クリックで/play/:songIdへ。",
+  "depends_on": [
+   "T30",
+   "T41"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T32",
+  "desc": "src/screens/GameScreen.tsx: CanvasをReactコンポーネントでラップ。useEffect内でゲームループ起動。ESC→Select、R→restart、曲終了→Result。",
+  "depends_on": [
+   "T25",
+   "T30"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T33",
+  "desc": "src/screens/ResultScreen.tsx: スコアカウントアップ、ランク(S/A/B/C/D)、PERFECT/GOOD/MISS数、「もう一回」「曲選択」ボタン。",
+  "depends_on": [
+   "T30",
+   "T24"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T42",
+  "desc": "統合: /play/:songId でsongs.toml→chart.toml→音楽ロード→波形・リング同期再生。全システムを繋げる。",
+  "depends_on": [
+   "T31",
+   "T32",
+   "T41",
+   "T13",
+   "T14",
+   "T20",
+   "T22"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T50",
+  "desc": "src/screens/EditorScreen.tsx: /editor のレイアウト基盤。左ペイン（音楽制御）・右ペイン（タイムライン）の二分割UI。",
+  "depends_on": [
+   "T30",
+   "T40"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T51",
+  "desc": "エディタ内オーディオプレイヤー: URL入力→再生/停止/シーク。現在位置を秒・beat両方で表示。BPM設定フィールド。",
+  "depends_on": [
+   "T50",
+   "T13"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T52",
+  "desc": "リング録音モード: 再生中にSpaceでbeat位置スタンプ。スナップ量設定可。録音済みリストを表示。",
+  "depends_on": [
+   "T51"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T53",
+  "desc": "セグメントエディタ: up/downセグメントの追加/削除/順序変更。変更するとリアルタイムで波形プレビュー更新。",
+  "depends_on": [
+   "T50"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T54",
+  "desc": "BPMエディタ: 基本BPM設定 + BPM変更リスト（beat, newBpm）。タップテンポ入力対応。",
+  "depends_on": [
+   "T50"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T55",
+  "desc": "TOMLエクスポート: 現在のエディタ状態を正規TOMLに変換しダウンロード。T40でパースできることを確認。",
+  "depends_on": [
+   "T52",
+   "T53",
+   "T54"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T56",
+  "desc": "エディタ内プレイテスト: 「プレイテスト」ボタンでエクスポートせずゲーム画面を起動し現在譜面を確認。",
+  "depends_on": [
+   "T55",
+   "T42"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T60",
+  "desc": "手動オフセット調整: </> キーでmanualOffsetMsを±10ms変更。localStorageに保存。ゲーム内右下に表示。",
+  "depends_on": [
+   "T12"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T61",
+  "desc": "Lキーキャリブレーション画面: メトロノームに合わせてSpace×8回、最初の2サンプル破棄して平均からoffset自動設定。",
+  "depends_on": [
+   "T11",
+   "T60"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T62",
+  "desc": "キー効果音トグル: Space押下時の打鍵音ON/OFF。localStorageに保存。",
+  "depends_on": [
+   "T11"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T70",
+  "desc": "曲選択画面ポリッシュ: カードホバーアニメーション、難易度バー、フォント整備。Linear風。",
+  "depends_on": [
+   "T31"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T71",
+  "desc": "ゲーム画面ポリッシュ: 波形グラデーション、コンボ色変化、PERFECT演出、ビートパルス。ゲーミングRGB・過剰グロー禁止。",
+  "depends_on": [
+   "T42"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T72",
+  "desc": "リザルト画面ポリッシュ: スコアカウントアップアニメーション、ランク大文字表示、PERFECT/GOOD/MISS統計。",
+  "depends_on": [
+   "T33"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T73",
+  "desc": "オーサリングツールポリッシュ: タイムラインにリング縦線表示。UI全体のLinear風整合性。",
+  "depends_on": [
+   "T52",
+   "T53"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T74",
+  "desc": "画面遷移アニメーション: 全画面切り替えにCSS Transitionでフェード/スライド。",
+  "depends_on": [
+   "T31",
+   "T32",
+   "T33"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T81",
+  "desc": "エラーハンドリング: TOML構文エラー・チャートファイル404・音楽ロード失敗を分かりやすいUIメッセージで表示。",
+  "depends_on": [
+   "T42",
+   "T13"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T80",
+  "desc": "E2E統合確認: 曲選択→ゲーム→リザルト→再プレイ→曲選択の完全フロー手動確認。コンソールエラーなし。",
+  "depends_on": [
+   "T70",
+   "T71",
+   "T72",
+   "T73",
+   "T74",
+   "T56",
+   "T61",
+   "T62",
+   "T81"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T90",
+  "desc": "ヒット判定のリング解決バグ修正: judgeHit()がヒットしたリングをresolved=trueにしないため、同一リングの複数回ヒットと、ヒット済みリングの後からのMISS二重計上が発生する。",
+  "depends_on": [
+   "T23"
+  ],
+  "ui": false
+ },
+ {
+  "id": "T91",
+  "desc": "総合デバッグ: リング選定改善・曲終了判定の音楽長基準化・メトロノームlatency補正・キャリブレーションoffsetリセット・WavePreviewのBPM変更反映・startGame二重起動防止・回帰確認。",
+  "depends_on": [
+   "T90"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T92",
+  "desc": "プレイ表示領域（波形上下幅）の固定拡張: TW_AMPを80pxから130px（Y: 170〜430px）へ拡大し、HUDやヒントと干渉せずに画面を広く活用。",
+  "depends_on": [
+   "T91"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T93",
+  "desc": "譜面設定（TOML）拡張: 縦横進み幅（amplitude, scroll_speed）および楽曲開始オフセット（audio_offset）を追加し、エディタ設定ペインで編集・TOML出力に対応。",
+  "depends_on": [
+   "T92"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T94",
+  "desc": "セグメント方向「とどまる (stay)」の追加 & リアルタイムセグメント録音: 'stay'（水平維持）実装と、エディタ再生中のキー入力リアルタイムセグメントスタンプ機能。",
+  "depends_on": [
+   "T93"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T95",
+  "desc": "ホールドリング（長押し）の追加: RingDef/RingStateにduration/type追加、ゲーム画面での長押し継続判定・帯描画、エディタでのホールド設定対応。",
+  "depends_on": [
+   "T94"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T96",
+  "desc": "オーサリングツールUI/UX刷新: WavePreview拡大、リング・セグメント一覧のデフォルト折りたたみ(アコーディオン)、タイムライン直感編集サポート。",
+  "depends_on": [
+   "T95"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T97",
+  "desc": "オーサリングツール総合使い勝手の測定・改善: 単一機能（直感編集等）に限定せず、チャートエディタとしての一連ワークフロー（音楽読込→BPM→リング/セグメント配置→波形プレビュー→TOML出力→プレイテスト）全体が十分使えるかを測り、不足を改善する。",
+  "depends_on": [
+   "T96"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T98",
+  "desc": "波形モデル統一 + エディタ録音モード + DAW風ズーム/パン。★波形の高さは自由（現在は up=上端/down=下端/stay=中央の 1/0/-1 固定）。玉の移動速度は振幅×波長で一意決定され、波長=4拍固定（BPMで時間換算）。スクロール速度は波長ではなく水平ノーツ流れ用で別物。適用範囲はゲーム本体も含む。\n(1) src/game/waveEngine.ts: WAVELENGTH_BEATS=4 を export。buildPoints() を端点スナップから「増分移動」に変更（up/down で (2*amp)*(segBeats/4) だけ移動し [top,bottom] にクランプ）。これで任意の高さが表現可能に。\n(2) src/game/cursor.ts: update() の速度計算をセグメントごとの波長ではなくグローバル WAVELENGTH_BEATS=4 に変更（第5引数 segmentBeats は無視）。\n(3) src/screens/GameScreen.tsx: cursor.update() の第5引数（segmentBeatsAt）を削除し、玉と描画波形を一致させる。\n(4) src/screens/EditorScreen.tsx: 再生モード/録音モードのトグルを追加。録音開始時、シーク位置の波形高さを初期値（既存波形がなければ中央）として玉(Cursor)を初期化し、再生に同期して上下キーのみで玉を操作し軌跡を記録。停止/解除時に軌跡をセグメント化してコミット（開始beat以降を上書き、以前は維持）。キー入力を書き換え: 録音モードでは上下キーで keyStateRef をセット（既存の「セグメントスタンプ」ロジックは削除）、Spaceは両モードでリング追加。\n(5) src/screens/editor/WavePreview.tsx: 時間軸のみのズーム/パン。view={startBeat,beats} プロップを受け、全描画(波形/リング/プレイヘッド/グリッド/クリック逆変換)を view 基準にマップ。ホイール=カーソル位置固定ズーム、空白ドラッグ=パン（リング上ドラッグは既存移動、クリックは追加と使い分け）。録音中はライブ玉と軌跡を破線で重畳。垂直ズームは実装しない。\n(6) EditorScreen にズーム/スクロール用スライダーを追加（マウス操作＋スライダーの両方）。レジェンド文案を新仕様に更新。\n(7) Segment 型は {direction,beats} のまま（自由高さは多数の小セグメントで表現）。型追加なし。Linear/Vercel風ミニマルダーク維持。実装後は tsc --noEmit と既存チャートでの玉/波形一致を確認。",
+  "depends_on": [
+   "T97",
+   "T92",
+   "T94",
+   "T95"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T99",
+  "desc": "オーサリングツール機能改善(1/7): オーディオオフセット設定をBPM設定ペインから音楽制御ペインへ移動し、エディタ再生時(playFrom)にも確実に反映させる。自動テストで検証可能にする。",
+  "depends_on": [
+   "T98"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T100",
+  "desc": "オーサリングツール機能改善(2/7): 録音時にホールドリングを反映（Space押下でhold型リングをスタンプ、録音軌跡からホールドを生成）。自動テストで検証可能にする。",
+  "depends_on": [
+   "T99"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T101",
+  "desc": "オーサリングツール機能改善(3/7): 録音時のクオンタイズ（スナップ吸着）を実装し、クオンタイズ分解能設定UI（1/4・1/2等）を追加。記録されたセグメントのbeatsが選択したsnap解像度の倍数になることを自動テストで検証可能にする。",
+  "depends_on": [
+   "T100"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T102",
+  "desc": "オーサリングツール機能改善(4/7): レガシーな再生中キーボードセグメントスタンプ機能を完全削除（playモードで上下キーを押してもセグメントが増えないことを自動テストで検証）。",
+  "depends_on": [
+   "T101"
+  ],
+  "ui": true,
+  "type": "negative"
+ },
+ {
+  "id": "T103",
+  "desc": "オーサリングツール機能改善(5/10): レガシーな再生中キーボードリングスタンプ機能を完全削除。再生モード（playモード）でSpaceキーを押してもリングが追加されないことを自動テストで検証（録音モードでのみSpaceリング追加を許可）。",
+  "depends_on": [
+   "T102"
+  ],
+  "ui": true,
+  "type": "negative"
+ },
+ {
+  "id": "T104",
+  "desc": "オーサリングツール機能改善(6/10): 波形プレビュー描画の頂点レンダリング化。固定ステップサンプリングを廃止しセグメント頂点を直接結ぶことで、拡大率によらず鋭く正確な折れ線を描画。多重重ね描きも解消。自動テストで検証可能にする。",
+  "depends_on": [
+   "T103"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T105",
+  "desc": "オーサリングツール機能改善(7/10): 録音クオンタイズのキー離し（リリース）位置吸着改善。キーを離した瞬間の拍を正確にsnapグリッドに吸着させ、セグメントの過剰伸長（オーバーシュート）を防止。自動テストで検証可能にする。",
+  "depends_on": [
+   "T104"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T106",
+  "desc": "ローカル音声ファイル読込機能: エディタ画面（および曲選択画面）にファイル選択（input type=file）およびドラッグ＆ドロップ読込を追加し、手持ちのローカル音声ファイル（mp3/flac/wav/ogg）をブラウザ上で直接デコード・再生・譜面作成可能にする。自動テストで検証可能にする。",
+  "depends_on": [
+   "T105"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T107",
+  "desc": "オーサリングツール機能改善(8/10): 波形の上下表示領域を拡張（canvasの縦幅・描画マップを広げ、SCORE/COMBO/操作ヒントに侵食しない範囲で）。自動テストで検証可能にする。",
+  "depends_on": [
+   "T106"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T108",
+  "desc": "オーサリングツール機能改善(9/10): Canvasホイールズーム時にページがスクロールしないよう preventDefault を確実に適用。自動テストで検証可能にする。",
+  "depends_on": [
+   "T107"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T109",
+  "desc": "オーサリングツール機能改善(10/10): 録音の上書き範囲を「開始beat〜終了beat」に限定し、それ以降のセグメントへの過剰上書きを防止。自動テストで検証可能にする。",
+  "depends_on": [
+   "T108"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T110",
+  "desc": "ホーム画面ローカル譜面・音源DnD（文化祭GDriveワークフロー対応）: SelectScreenに譜面TOMLと音源ファイルの個別ドラッグ＆ドロップ＋ファイル選択UIを追加。TOML内audioはファイル名のみで統一し、basename一致で紐付け。GameScreenは /play/custom で {chart, buffer} をin-memory受け取り、ChartCache/AudioCache(Map<basename,AudioBuffer>)で共有。順不同・片方のみでもメトロノームでプレイ可。pairが揃ったら「この譜面でプレイ」活性化。",
+  "depends_on": [
+   "T109"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T111",
+  "desc": "プレイテスト音源共有の修正: EditorScreenのplaytestを {chart, buffer} 直渡しにし、T110のAudioCacheを再利用してGameScreenがloadAudio再fetchせずに再生。ローカルFile時はurl=file.nameでfetch不能になるメトロノームのみ問題を解消。TOML audioはbasenameのみ。",
+  "depends_on": [
+   "T110"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T112",
+  "desc": "振幅の正規化(0.0-1.0)化: Chart.amplitudeの単位をpxから正規化(1.0=上端/-1.0=下端/0.0=中央)に変更。NORM_TO_PX=130は描画層のみの定数に。waveEngine/cursorは正規化で計算し最後にNORM_TO_PXを乗算。BpmEditorは0.1-1.0スライダー。loaderは旧px値(>1.5)をamplitude/130にマイグレーション。serializeは正規化のみ出力。縦目盛りは追加しない。BPMが変わっても拍基準のキリの良さが崩れないことを検証。",
+  "depends_on": [
+   "T111"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T113",
+  "desc": "replyハードコード依存排除: EditorScreenのlink.download='reply.toml'や初期title/url='/rhythm_game/audio/08.Reply.flac'固定を汎用化。exportはslugify(title)||'untitled'で${slug}.toml。初期title/urlは空文字。tests 5件のsuggestedFilename()=reply.toml固定期待をtoMatch(/\\.toml$/)に緩和。",
+  "depends_on": [
+   "T112"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T114",
+  "desc": "スタート位置指定: Chartにstart_position(-1.0〜1.0, 0.0=中央)を追加。WaveEngine/Cursorは初期Y=CENTER - start_position * NORM_TO_PXで開始。旧チャート互換は中央(0.0)にリセット。loaderは未定義時0.0、serializeは正規化で出力。Editorの譜面情報ペインに-1.0〜1.0スライダー追加。BPMが変わっても拍基準でスタート位置が固定されることを検証。",
+  "depends_on": [
+   "T113"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T115",
+  "desc": "エディタ自動スクロール追従 ＆ Space再生・R録画ショートカット: プレビュー再生中に現在の拍位置がビュー右端に近づいたとき自動スクロール。Spaceで再生/停止、Rで録画開始/停止のグローバルショートカット。",
+  "depends_on": [
+   "T114"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T116",
+  "desc": "Blender風3モード切替式エディタ ([V] 頂点モード, [E] 辺モード, [R] リング配置モード): プレビュー上の3つの独立した編集モードの切替トグルおよびショートカット(V/E/R)による波形・リング編集の完全分離。",
+  "depends_on": [
+   "T115"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T117",
+  "desc": "メトロノームON/OFFスイッチ: エディタ左ペインの音楽制御セクションにメトロノーム音のチェックボックスを追加し、再生ループ中のスケジューラへ動的反映。",
+  "depends_on": [
+   "T116"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T118",
+  "desc": "アコーディオン ⇄ 波形プレビューの相互ハイライト連動: 右ペインのリスト要素ホバー/選択とプレビュー上の対応セグメント/リングの強調表示、およびプレビュー上の要素クリックによるアコーディオン展開フォーカス連動。",
+  "depends_on": [
+   "T117"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T119",
+  "desc": "通常プレイ時の難易度緩和アシスト「波の磁力（ウェーブ・アトラクション）」: 通常ゲームプレイ時、1拍境界を通過する瞬間にカーソル位置が波の目標位置へ向かって自動吸着（プル）されるアシスト機能の実装。",
+  "depends_on": [
+   "T118"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T120",
+  "desc": "ホーム画面のカスタム譜面インポート「追加」機能: SelectScreenのインポートセクションで「この譜面でプレイ」ボタンを「追加」に変更し、読み込んだカスタム譜面を曲一覧（カードグリッド）に新しいSongEntryとして登録する。追加されたカスタム曲は通常の楽曲と同様にカードクリックでプレイ可能にし、AudioCache/ChartCacheと状態管理で保持する。",
+  "depends_on": [
+   "T119"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T121",
+  "desc": "スクロール速度(scroll_speed)のゲームプレイ反映修正: RingSpawner等でハードコードされていたTW_SCROLLを廃止し、チャートのscroll_speedを動的に使用してノーツのスクロール速度を正しく反映させる。",
+  "depends_on": [
+   "T120"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T122",
+  "desc": "振幅(amplitude)1以上の設定対応とローダー閾値修正: BpmEditorの振幅入力上限(1.0)を撤廃し1以上を設定可能にする。またloader.tsの旧px値判定閾値を1.5から10に修正し、1以上の正規化振幅が誤ってピクセル値として除算されるバグを防止する。",
+  "depends_on": [
+   "T121"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T124",
+  "desc": "振幅(amplitude)の物理的な固定と速度係数化の反映修正。WaveEngineでTW_AMP（固定）と速度係数（amplitude）を分離し、波形の描画高さが変わらず移動速度だけが変わるよう修正する。",
+  "depends_on": [
+   "T123"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T125",
+  "desc": "振幅(amplitude)連動型の波形編集ロジック修正: 頂点/辺編集時のドラッグ操作において、マウス位置から直接座標を計算する仕様を廃止。WaveEngineの物理計算（振幅に基づく速度係数）と整合するようにドラッグ時の座標算出を再設計する。",
+  "depends_on": [
+   "T124"
+  ],
+  "ui": true
+ },
+ {
+  "id": "T126",
+  "desc": "録音時のセグメント長クオンタイズの物理整合性修正: segmentize関数において、録音時のrawな拍数ではなく、amplitudeに基づく物理的に正しい拍数（整合性のある拍数）へ強制的に丸めるロジックを実装し、自由な長さのセグメント生成を禁止する。",
+  "depends_on": [
+   "T125"
+  ],
+  "type": "fix",
+  "ui": true
+ },
+ {
+  "id": "T127",
+  "desc": "速度係数(amplitude)の規約全体の再統一と波形状の修復: 全幅(2*TW_AMP)移動に必要な拍数 = 1/amplitude という規約（amplitude=1なら1拍で全幅移動、amplitude=2なら0.5拍で全幅移動、高いほど急峻・速い）を全実装箇所で統一する。現状 cursor.ts / quantize.ts が「高いほど速い」で正しい一方、waveEngine.ts の buildPoints だけが move = 2*TW_AMP/amplitude と「高いほど遅い」に逆転しており、カーソルが波形に追従せずゲーム内トレース判定( |cursor.y - waveYAt| )や録音カーソル・波形プレビューが不一致になる。修正: buildPoints のセグメント移動量を 2*TW_AMP*amplitude*beats（TW_AMP上下幅でclamp）に変更し、cursor/quantize と同一規約に統一する。あわせて WavePreview の頂点ドラッグ(T125)、EditorScreen の録音カーソル初期Y・truncateSegmentsTo、cursor.ts のコメントも同一規約に明文化・整合させる。物理上下幅は TW_AMP=130 で固定のまま（T123/T124の成果を維持）。完了条件: 振幅設定を変更しても波の上下幅が不変で、移動速度のみが変化し、カーソルが波形に追従すること。",
+  "depends_on": [
+   "T126"
+  ],
+  "type": "fix",
+  "ui": true
+ },
+ {
+  "id": "T128",
+  "desc": "波形のクリップ時傾斜崩壊の修正: T127で buildPoints の移動量式(2*TW_AMP*amplitude*beats)は正規化・clamp済みだが、WaveEngine.waveYAt() が「2点間(clamp済み端点)の線形補間」をしているため、区間が上下幅にクランプされたセグメントで「実変位÷フル拍数」の傾斜となり速度係数より緩やか(遅く)になってしまう。カーソル(2*TW_AMP*amplitude)と波形が乖離し、トレース判定や波形プレビューが不一致になる(速度係数より速くなる事は無く、緩やか･遅い側のみ発生)。修正方針: (1) WavePointにセグメント開始点の1拍あたり変位 dY(up=-2*TW_AMP*amp, down=+2*TW_AMP*amp, stay=0)を持たせ、waveYAt(beat)は区間内で y=clamp(p0.y + p0.dY*(beat-p0.beat), waveTop, waveBottom) と補間中にもクランプし、急峻な傾斜+境界到達後の水平stayを表現する。(2) getPoints() は {beat,y} 構造と長さ(セグメント数+1)を不変に保つ(エディタの1点=1セグメント対応を維持。頂点ハンドル/辺選択/ドラッグに干渉しない)。(3) WavePreview.tsx のセグメント描画を waveYAt-sampledポリライン化し、nearestEdgeIndexも同一clampポリラインで判定してエディタ表示とゲーム波形を一致させる。完了条件: クランプ区間の途中拍で waveYAt のYが cursor移動量(clamp(CENTER±2*TW_AMP*amp*beat))と一致すること(端数タイミング0.37/1.23拍含む)。既存T127不変量(端点min値、上下幅TW_AMP=130不変、segmentize)が回帰しないこと。最大で緩やか(遅い)側に倒れるバグが無いこと。",
+  "depends_on": [
+   "T127"
+  ],
+  "type": "fix",
+  "ui": true
+ },
+ {
+  "id": "T129",
+  "desc": "録音モードのセグメント長クオンタイズ修正：現行 segmentize() は T126 由来の physicalSnap = quantizeBeat(1/amplitude, snap) により、amplitude>=1 かつ snap<=1 で1拍(全幅移動)へ強制スナップするため、(a)スナップ解像度(0.125/0.25/0.5/1)が無視され必ず全幅移動しか生成されない、(b)録音範囲[startBeat,endBeat)と newSegs 総拍数が不一致になり波形上書きが「加算(ずれ/隙間)」に見える。修正方針: segmentize() の各ランの長さを「ユーザー選択の snap 解像度の整数倍」(最小1snap、quantizeBeatを1/amplitudeで無くsnap基準に)へ丸める。1/amplitude による強制を廃止する。T128のdY補間モデルにより端数セグメント(例 0.25拍)も部分移動として正しく描画されるため、物理整合性は保たれる。finishRecording の keptBefore/newSegs/keptAfter 合成は既に正しいため変更不要(segmentize の修正だけで上書きが正しく機能する)。完了条件(オフグリッド必須): (1) snap別(0.125/0.25/0.5/1)で、端数タイミングの短押し(例 0.30拍)が snap の整数倍セグメント(0.25/0.25/0.5/1)を生成し、各セグメントのbeatsが snap の整数倍であること。(2) 録音範囲 [startBeat,endBeat) と newSegs の総ビートが(グリッド整列で)一致し、finishRecording 合成が連続した上書き波形になる(隙間・重複・端数がぶれない)こと。(3) 既存の snap 整合性テスト(dynamic.test.ts の本セクション、t101.spec.ts)が回帰しないこと。(4) isSnapAligned を保ったまま、1/amplitude ではないことを検証(例: snap=0.25, amp=1 の短押し0.30拍 -> 0.25であり1.0でない)。",
+  "depends_on": [
+   "T128"
+  ],
+  "type": "fix",
+  "ui": true
+ }
 ]
