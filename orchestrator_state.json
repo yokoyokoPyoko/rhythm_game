@@ -722,7 +722,7 @@
         "coder": "ses_fa33b9b6effek5BM1ogtbtkGjl",
         "postmortem": "ses_fa33d3666ffeOOCeA808Sq7KYR"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
