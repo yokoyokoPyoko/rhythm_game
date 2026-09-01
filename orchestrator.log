@@ -5111,3 +5111,8 @@ Error: No tests found.
 2026-09-01 16:17:28,871 [INFO]   Plan: T128 <- 波形のクリップ時傾斜崩壊の修正: T127で buildPoints の移動量式(2*TW_AMP*amplitude*beats)は正規化・clamp済みだが、WaveEngine.waveYAt() が「2点間(clamp済み端点)の線形補間」をしているため、区間が上下幅にクランプされたセグメントで「実変位÷フル拍数」の傾斜となり速度係数より緩やか(遅く)になってしまう。カーソル(2*TW_AMP*amplitude)と波形が乖離し、トレース判定や波形プレビューが不一致になる(速度係数より速くなる事は無く、緩やか･遅い側のみ発生)。修正方針: (1) WavePointにセグメント開始点の1拍あたり変位 dY(up=-2*TW_AMP*amp, down=+2*TW_AMP*amp, stay=0)を持たせ、waveYAt(beat)は区間内で y=clamp(p0.y + p0.dY*(beat-p0.beat), waveTop, waveBottom) と補間中にもクランプし、急峻な傾斜+境界到達後の水平stayを表現する。(2) getPoints() は {beat,y} 構造と長さ(セグメント数+1)を不変に保つ(エディタの1点=1セグメント対応を維持。頂点ハンドル/辺選択/ドラッグに干渉しない)。(3) WavePreview.tsx のセグメント描画を waveYAt-sampledポリライン化し、nearestEdgeIndexも同一clampポリラインで判定してエディタ表示とゲーム波形を一致させる。完了条件: クランプ区間の途中拍で waveYAt のYが cursor移動量(clamp(CENTER±2*TW_AMP*amp*beat))と一致すること(端数タイミング0.37/1.23拍含む)。既存T127不変量(端点min値、上下幅TW_AMP=130不変、segmentize)が回帰しないこと。最大で緩やか(遅い)側に倒れるバグが無いこと。
 2026-09-01 16:24:34,640 [INFO] Orchestrator range execution: 1 tasks (from=T128, to=T128, budget=600m)
 2026-09-01 16:24:34,640 [INFO] [T128] --only mode: skipping dependency checks.
+2026-09-01 16:24:34,666 [INFO] [T128] tests/dynamic.test.ts already exists → skipping QA-Gen (use --force-qa-gen to regenerate)
+2026-09-01 16:24:34,666 [INFO] Starting implementation [T128] (attempt 1, cycle 1/10)
+2026-09-01 16:24:34,667 [INFO] Running Vitest execution (flaky-retry enabled, test_runner=vitest)...
+2026-09-01 16:24:35,772 [INFO] Vitest execution completed (0 test(s) passed).
+2026-09-01 16:24:35,772 [INFO] [T128] [38;2;74;222;128mGate B (Dynamic Test) PASS[0m

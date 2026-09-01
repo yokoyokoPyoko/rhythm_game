@@ -672,9 +672,11 @@
       "finished": 1788244783.8576763
     },
     "T128": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788247474.6403298
+      "started": 1788247474.6403298,
+      "cycles": 1,
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
