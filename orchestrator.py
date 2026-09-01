@@ -1586,12 +1586,30 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         log.info("[%s] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.", task.id)
     coder_commit = None
 
+    # Task-start cleanup (prevents cross-task test leakage): the dynamic test file is SHARED across
+    # tasks (tests/dynamic.test.ts), so a leftover from a previous task (e.g. T127's test lingering
+    # into T128) would otherwise be silently reused. For UI tasks, clear the shared test at start so
+    # QA-Gen writes a fresh task-specific acceptance test. --force-qa-gen keeps this behavior by
+    # forcing regeneration regardless. A manually written test can still be preserved per-task via the
+    # golden restore path if it is missing here.
+    if need_test and not getattr(args, "force_qa_gen", False):
+        if test_file.exists():
+            try:
+                test_file.unlink()
+                log.info("[%s] Removed shared tests/%s at task start so a task-specific test is regenerated.", task.id, test_filename)
+            except Exception:
+                pass
+
     # Fast-path: if the dynamic test already exists (e.g. written manually or from previous run),
-    # skip QA-Gen and go straight to Red check / Gate B.
+    # skip QA-Gen and go straight to Red check / Gate B — unless --force-qa-gen regenerates it.
+    # Note: the dynamic test file is SHARED across tasks (tests/dynamic.test.ts), so a leftover
+    # from a previous task (e.g. T127's test) must NOT be silently reused as this task's acceptance
+    # test. --force-qa-gen always regenerates. Otherwise an existing file is validated via Red check
+    # in the main TDD loop rather than trusted blindly.
     if need_test and test_file.exists() and not getattr(args, "force_qa_gen", False):
-        log.info("[%s] tests/%s already exists → skipping QA-Gen (use --force-qa-gen to regenerate)", task.id, test_filename)
+        log.info("[%s] tests/%s already exists → skipping QA-Gen (use --force-qa-gen to regenerate); will validate via Red check.", task.id, test_filename)
         need_test = False
-        need_coder = False  # will be set True if Red check fails (not yet implemented)
+        need_coder = False  # will be set True inside the loop if the existing test genuinely fails on unimplemented code
 
     def mark_stage(stage: int) -> None:
         nonlocal best_stage, no_progress_streak
@@ -1619,7 +1637,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         save_state(state)
         log.info("Starting implementation [%s] (attempt %d, cycle %d/%d)", task.id, st["attempts"], cycles + 1, MAX_CYCLES)
 
-        # --- TDD Phase 1: QA-Gen writes the acceptance test (Red stage) ---
+        # --- TDD Phase 1: obtain the acceptance test (Red stage) ---
         if need_test:
             if test_file.exists():
                 try:
@@ -1635,106 +1653,131 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 mark_stage(0)
                 maybe_reset_cycle()
                 continue
-            # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
-            red_passed, red_broken, red_out, red_timed_out = run_dynamic_test_red(task, tr)
-            if red_timed_out:
-                log.error("[%s] Gate B Red check HUNG (timed out). QA test is bogus/unrunnable. Regenerating test from QA...", task.id)
-                generate_postmortem(
-                    task,
-                    f"QA test HUNG/timed out during Red check (test_runner={tr}). "
-                    "The test did not exit within the timeout — likely bad/browser-side vitest usage, infinite loop, "
-                    "or waiting on DOM that never resolves. Rewrite as a pure node unit test (vi.useFakeTimers()) that "
-                    "exits promptly even when the feature is unimplemented.",
-                    models.postmortem, state=state, fresh_sessions=fresh_sessions,
-                )
-                need_test = True
-                need_coder = False
-                mark_stage(0)
-                maybe_reset_cycle()
-                continue
-            if red_broken:
-                log.error("[%s] Gate B Red check: test file is BROKEN (compile/import error or no real tests). This is a FALSE Red. Regenerating test from QA...", task.id)
-                broken_lines = [l.strip() for l in red_out.splitlines() if re.search(r"Error|failed to|Cannot find|not assignable|transform|no test|Cannot find module", l)]
-                sample = "\n".join(broken_lines[:6]) if broken_lines else red_out[-400:]
-                generate_postmortem(
-                    task,
-                    f"QA test is BROKEN during Red check (test_runner={tr}) — the test file failed to compile/import "
-                    "or produced zero real test cases:\n"
-                    f"{sample}\n"
-                    "A genuine Red must show actual assertion FAILURES on real tests. Rewrite so the module(s) import "
-                    "cleanly, the tests collect, and they assert expected behavior on the (currently unimplemented) code "
-                    "such that at least one test genuinely fails.",
-                    models.postmortem, state=state, fresh_sessions=fresh_sessions,
-                )
-                need_test = True
-                need_coder = False
-                mark_stage(0)
-                maybe_reset_cycle()
-                continue
-            if red_passed:
-                log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
-                # Check if existing code builds cleanly (Gate A)
-                ga_result = check_gate_a()
-                if ga_result.ok:
-                    # Run strict Zero-Coder Gate C review (video for playwright, git diff code review for vitest)
-                    if tr == "vitest":
-                        gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
-                    else:
-                        gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
-                    if gc_audit.ok:
-                        log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
-                        golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
-                        try:
-                            import shutil
-                            shutil.copy(test_file, golden_file)
-                            if state and task.id in state.get("tasks", {}):
-                                state["tasks"][task.id]["gate_b_golden"] = True
-                        except Exception:
-                            pass
-                        git_checkpoint(f"feat({task.id}): complete (already implemented)")
-                        deploy_to_github_pages(task.id)
-                        st["status"] = "passed"
-                        st["finished"] = time.time()
-                        state["consecutive_no_action"] = 0
-                        save_state(state)
-                        ctx = load_task_context(task.id)
-                        ctx["status"] = "passed"
-                        save_task_context(task.id, ctx)
-                        print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (Already Implemented, duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
-                        return "passed"
-                    else:
-                        log.error("[%s] Gate C Audit rejected Zero-Coder pass (confirmed FALSE-POSITIVE): %s", task.id, gc_audit.detail)
-                else:
-                    log.error("[%s] Existing code fails Gate A (tsc). Cannot be Already Implemented.", task.id)
-
-                log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
-                passed_lines = [l.strip() for l in red_out.splitlines() if "passed" in l or "✓" in l or "›" in l]
-                sample_passed = "\n".join(passed_lines[:6]) if passed_lines else red_out[-400:]
-                pm_detail = (
-                    f"QA test is a FALSE-POSITIVE (all tests passed on UNIMPLEMENTED code):\n{sample_passed}\n"
-                    "The assertions were too weak (e.g. only verified initial DOM/state or default values). "
-                    "Rewrite strict 3-step state-transition assertions ([Capture Before] -> [Perform Action] -> [Assert Changed Outcome]) "
-                    "that GUARANTEE failure on unimplemented features."
-                )
-                generate_postmortem(task, pm_detail, models.postmortem, state=state, fresh_sessions=fresh_sessions)
-                need_test = True
-                need_coder = False
-                mark_stage(0)
-                maybe_reset_cycle()
-                continue
-            log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
-            # Red → Green handoff: Genuine Red confirmed (test FAILS for the right reason).
-            # Now the Coder must run to implement the feature BEFORE Gate B (Green) executes —
-            # otherwise Gate B runs against unimplemented code, fails spuriously, and wastes a
-            # full cycle + postmortem. (Fixes skipped-Coder bug.)
-            need_coder = True
         else:
-            # Reusing a previous test: ensure the test file exists (restore golden if rolled back).
+            # Reusing an existing test (leftover from a previous task, manually written, or a
+            # golden restored after rollback): ensure the test file exists, then validate it via
+            # the Red check below just like a freshly generated test — NEVER trust it blindly, since
+            # the shared tests/dynamic.test.ts may be a leftover from a DIFFERENT task (e.g. T127's
+            # test leaking into T128). A genuine Red sets need_coder; a false-positive (pass on
+            # unimplemented code) regenerates the test.
             if not test_file.exists():
                 golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
                 if golden_file.exists():
                     import shutil
                     shutil.copy(golden_file, test_file)
+                else:
+                    log.error("[%s] No test file (%s) and no golden available. Must regenerate from QA.", task.id, test_filename)
+                    generate_postmortem(task, f"No test file ({test_filename}) and no golden. QA-Gen did not write a test.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                    need_test = True
+                    need_coder = False
+                    mark_stage(0)
+                    maybe_reset_cycle()
+                    continue
+
+        # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
+        # Runs on BOTH freshly-QA-generated and reused/restored tests so need_coder is decided from
+        # actual evidence, not from whether a stale file happened to exist.
+        if not test_file.exists():
+            log.error("[%s] No test file found for Red check.", task.id)
+            generate_postmortem(task, f"No test file ({test_filename}) for Red check.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+            need_test = True
+            need_coder = False
+            mark_stage(0)
+            maybe_reset_cycle()
+            continue
+        red_passed, red_broken, red_out, red_timed_out = run_dynamic_test_red(task, tr)
+        if red_timed_out:
+            log.error("[%s] Gate B Red check HUNG (timed out). QA test is bogus/unrunnable. Regenerating test from QA...", task.id)
+            generate_postmortem(
+                task,
+                f"QA test HUNG/timed out during Red check (test_runner={tr}). "
+                "The test did not exit within the timeout — likely bad/browser-side vitest usage, infinite loop, "
+                "or waiting on DOM that never resolves. Rewrite as a pure node unit test (vi.useFakeTimers()) that "
+                "exits promptly even when the feature is unimplemented.",
+                models.postmortem, state=state, fresh_sessions=fresh_sessions,
+            )
+            need_test = True
+            need_coder = False
+            mark_stage(0)
+            maybe_reset_cycle()
+            continue
+        if red_broken:
+            log.error("[%s] Gate B Red check: test file is BROKEN (compile/import error or no real tests). This is a FALSE Red. Regenerating test from QA...", task.id)
+            broken_lines = [l.strip() for l in red_out.splitlines() if re.search(r"Error|failed to|Cannot find|not assignable|transform|no test|Cannot find module", l)]
+            sample = "\n".join(broken_lines[:6]) if broken_lines else red_out[-400:]
+            generate_postmortem(
+                task,
+                f"QA test is BROKEN during Red check (test_runner={tr}) — the test file failed to compile/import "
+                "or produced zero real test cases:\n"
+                f"{sample}\n"
+                "A genuine Red must show actual assertion FAILURES on real tests. Rewrite so the module(s) import "
+                "cleanly, the tests collect, and they assert expected behavior on the (currently unimplemented) code "
+                "such that at least one test genuinely fails.",
+                models.postmortem, state=state, fresh_sessions=fresh_sessions,
+            )
+            need_test = True
+            need_coder = False
+            mark_stage(0)
+            maybe_reset_cycle()
+            continue
+        if red_passed:
+            log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
+            # Check if existing code builds cleanly (Gate A)
+            ga_result = check_gate_a()
+            if ga_result.ok:
+                # Run strict Zero-Coder Gate C review (video for playwright, git diff code review for vitest)
+                if tr == "vitest":
+                    gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
+                else:
+                    gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
+                if gc_audit.ok:
+                    log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
+                    golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
+                    try:
+                        import shutil
+                        shutil.copy(test_file, golden_file)
+                        if state and task.id in state.get("tasks", {}):
+                            state["tasks"][task.id]["gate_b_golden"] = True
+                    except Exception:
+                        pass
+                    git_checkpoint(f"feat({task.id}): complete (already implemented)")
+                    deploy_to_github_pages(task.id)
+                    st["status"] = "passed"
+                    st["finished"] = time.time()
+                    state["consecutive_no_action"] = 0
+                    save_state(state)
+                    ctx = load_task_context(task.id)
+                    ctx["status"] = "passed"
+                    save_task_context(task.id, ctx)
+                    print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (Already Implemented, duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
+                    return "passed"
+                else:
+                    log.error("[%s] Gate C Audit rejected Zero-Coder pass (confirmed FALSE-POSITIVE): %s", task.id, gc_audit.detail)
+            else:
+                log.error("[%s] Existing code fails Gate A (tsc). Cannot be Already Implemented.", task.id)
+
+            log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
+            passed_lines = [l.strip() for l in red_out.splitlines() if "passed" in l or "✓" in l or "›" in l]
+            sample_passed = "\n".join(passed_lines[:6]) if passed_lines else red_out[-400:]
+            pm_detail = (
+                f"QA test is a FALSE-POSITIVE (all tests passed on UNIMPLEMENTED code):\n{sample_passed}\n"
+                "The assertions were too weak (e.g. only verified initial DOM/state or default values), "
+                "OR the test file is a leftover from a different task and does not actually test THIS task. "
+                "Rewrite strict 3-step state-transition assertions ([Capture Before] -> [Perform Action] -> [Assert Changed Outcome]) "
+                "that GUARANTEE failure on unimplemented features."
+            )
+            generate_postmortem(task, pm_detail, models.postmortem, state=state, fresh_sessions=fresh_sessions)
+            need_test = True
+            need_coder = False
+            mark_stage(0)
+            maybe_reset_cycle()
+            continue
+        log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
+        # Red → Green handoff: Genuine Red confirmed (test FAILS for the right reason).
+        # Now the Coder must run to implement the feature BEFORE Gate B (Green) executes —
+        # otherwise Gate B runs against unimplemented code, fails spuriously, and wastes a
+        # full cycle + postmortem. (Fixes skipped-Coder bug.)
+        need_coder = True
 
         # --- TDD Phase 2: Coder implements to make the test Green (+ Gate A) ---
         if need_coder:
