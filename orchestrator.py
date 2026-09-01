@@ -1952,7 +1952,11 @@ def main() -> None:
             log.info("Removed golden file %s", gf.name)
 
         print(f"\n{GREEN}Successfully reset task {tid} to its start checkpoint.{RESET}\n")
-        sys.exit(0)
+
+        # --only/--range と併用した場合はリセット後そのままタスク実行へ進む（1コマンドでリセット→実行）
+        running_now = bool(args.only) or bool(args.range)
+        if not running_now:
+            sys.exit(0)
 
     all_tasks = topo_sort(load_tasks())
     tasks_by_id = {t.id: t for t in all_tasks}

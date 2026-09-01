@@ -658,9 +658,11 @@
       "finished": 1788166991.4127579
     },
     "T127": {
-      "status": "pending",
+      "status": "running",
       "attempts": 0,
-      "cycles": 0
+      "cycles": 0,
+      "sessions": {},
+      "started": 1788243350.4660523
     }
   },
   "consecutive_no_action": 0
