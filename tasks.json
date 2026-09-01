@@ -663,5 +663,23 @@
   ],
   "type": "fix",
   "ui": true
+ },
+ {
+  "id": "T130",
+  "desc": "エディタ内限定の音量バー（メトロノーム/楽曲、各0~300%）。エディタ左ペイン #music-control 内に2本の音量バーを追加。エディタ専用ゲイン(musicGain/metronomeGain)を AudioManager.ctx.destination 前に作成し、playFrom の src.connect(ctx.destination) を src.connect(musicGain) に変更。metronome.ts の schedule(audioCtx,nextBeatTime,beat) に任意の出力先引数 out?: AudioNode を追加し、あれば gain.connect(out)・無ければ従来通り gain.connect(audioCtx.destination)。エディタの startMetronome は schedule(..., metronomeGain) を渡す。UIは <input type=range min=0 max=300 step=5> 2本(data-testid=music-volume / metronome-volume) + %表示。GameScreen/CalibrationScreen は引数なしのまま=エディタ限定。localStorageは使わない(グローバル影響を避ける)。完了条件: (1) #music-control 内に2バーが存在 (2) metronome-volume=0でエディタのメトロノームが無音・300で聞こえる(ゲイン値で検証) (3) music-volume がエディタ楽曲ゲインに反映 (4) ゲーム/キャリブレーションの音響ルートが未変更(schedule()のout省略でctx.destination接続のまま)。",
+  "depends_on": [
+   "T129"
+  ],
+  "type": "feature",
+  "ui": true
+ },
+ {
+  "id": "T131",
+  "desc": "速度係数(amplitude)を「BPM変更エントリー」の振幅としてリスト駆動で時変させる。メインの #amplitude 入力はリストではない注入値フィールドとし、値変更時の編集画面(波形/カーソル)への即時適用を廃止。追加ボタンで新規BPM変更エントリーの amplitude へ現在値をスタンプして登録。編集画面は bpm_changes[].amplitude のリストに従って変化する。モデル: BpmChange { beat; bpm; amplitude? } を追加。amplitudeAt(beat)=beat以下の変更でamplitudeを持つ最新の値を返すstep関数(該当なしはChart.amplitude/既定1.0)。実装: types.ts(BpmChange.amplitude?) / BpmEditor(addChangeでamplitudeをスタンプ、メイン#amplitudeは即時反映廃止+リスト各行に振幅編集) / bpmTimeline.ts(BpmSegmentにamplitude→amplitudeAt公開、base=Chart.amplitude) / waveEngine.ts(buildPointsをセグメント開始拍の振幅でper-beat変位2*TW_AMP*amplitudeAt()に。getPoints()の長さ・構造不変) / cursor.ts(現在拍の振幅を毎フレーム更新) / GameScreen.tsx(ループで cursor振幅=timeline.amplitudeAt(currentBeat)) / WavePreview+EditorScreen(時変振幅で描画・録音) / loader+serialize(bpm_changes[].amplitude取込/出力)。完了条件(オフグリッド必須): (1) 振幅変更点(例beat=4で1.0→2.0)の前後の端数拍(3.37/4.23)で amplitudeAt が1.0/2.0 (2) waveYAt区間傾斜=2*TW_AMP*amplitudeAt(segStartBeat)、getPoints().length=segments.length+1維持 (3) addChangeでメイン振幅2.5→追加→新規エントリー.amplitude=2.5 (4) メイン#amplitude変更のみでは即時変化しない (5) bpm_changes[].amplitude未設定の既存チャートはChart.amplitudeベースで後方互換。",
+  "depends_on": [
+   "T130"
+  ],
+  "type": "feature",
+  "ui": true
  }
 ]

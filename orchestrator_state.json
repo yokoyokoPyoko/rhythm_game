@@ -3,7 +3,7 @@
   "models": {
     "coder": "opencode/big-pickle",
     "qa": "opencode/muse-spark-1.2-contributor-free",
-    "reviewer": "google/gemini-3.1-flash-lite",
+    "reviewer": "google/gemini-3.5-flash-lite",
     "postmortem": "opencode/nemotron-3-ultra-free"
   },
   "tasks": {
@@ -686,7 +686,7 @@
       "finished": 1788249277.8508081
     },
     "T129": {
-      "status": "running",
+      "status": "passed",
       "attempts": 1,
       "cycles": 1,
       "started": 1788252923.0278246,
@@ -695,7 +695,13 @@
         "coder": "ses_fa3d01176ffevWVHCNlQb2gWhw",
         "reviewer": "ses_fa3ca0df3ffemLID3RIBHKUO3e"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788253448.2851555
+    },
+    "T130": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788260751.39657
     }
   },
   "consecutive_no_action": 0

@@ -1078,6 +1078,59 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T130] エディタ内限定の音量バー（メトロノーム / 楽曲、各 0~300%）
+
+**要件**: エディタ左ペイン `#music-control` 内に、メトロノーム音量と楽曲音量の2本のバー（0~300%）を追加。**エディタ内限定機能**（ゲーム画面・キャリブレーションには影響しない）。
+
+**実装**:
+- `EditorScreen` に `musicVolume`, `metronomeVolume` 状態（初期 100 = 100%）。`setMusicVolume`, `setMetronomeVolume` で値 0〜300 にクランプ。
+- **エディタ専用のゲイン**を `AudioManager.getInstance().ctx.destination` の前に2本作成（`musicGain`, `metronomeGain`）。`EditingScreen` の `playFrom`（内部で `src.connect(ctx.destination)`）を `src.connect(musicGain)` に変更（`musicGain.connect(ctx.destination)`）。
+- **メトロノーム**: `src/audio/metronome.ts` の `schedule(audioCtx, nextBeatTime, beat)` に任意の出力先引数 `out: AudioNode | undefined` を追加。`out` があれば `gain.connect(out)`、無ければ従来通り `gain.connect(audioCtx.destination)`。エディタの `startMetronome` は `schedule(audioCtx, nextBeatTime, beatIdx, metronomeGain)` を渡す。**ゲーム / キャリブレーションは引数なしのまま = エディタ限定**。
+- **UI**: `#music-control` 内（メトロノームON/OFFトグルの近く）に、`<input type="range" min={0} max={300} step={5}>` の2本を追加。
+  - メトロノーム音量: `data-testid="metronome-volume"` ラベル「メトロノーム音量」+ 現在%表示
+  - 楽曲音量: `data-testid="music-volume"` ラベル「楽曲音量」+ 現在%表示
+  - バー変更時にエディタの各gainへ即時反映。
+- 永続化は不要（エディタ内のUI状態のみ）。localStorageは使わない（グローバル影響を避けるため）。
+
+**完了条件（自動テスト）**:
+1. `#music-control` 内に `metronome-volume` と `music-volume` の2つの音量バーが存在する。
+2. `metronome-volume` を最小(0)にするとエディタ再生中のメトロノーム音が無音になり、最大(300)で聞こえる（ゲイン値で検証できる箇所、例 `__editorMetronomeGain` 等の露出、またはgain.gain.valueの検査で判定）。
+3. `music-volume` がエディタ楽曲再生のゲインに反映される（`__editorMusicGain` のgain.gain.value等で判定）。
+4. **エディタ限定**: ゲーム画面（GameScreen）とキャリブレーション（CalibrationScreen）の音響ルーティングが変更されていない（`schedule()` の `out` 引数なし呼び出しは従来どおり `ctx.destination` へ接続）。
+
+---
+
+### [T131] 速度係数を「BPM変更エントリー」の振幅としてリスト駆動で時変させる
+
+**要件（ユーザー確定）**: メインの `#amplitude` 入力欄（`BpmEditor`）は**リストではない注入値フィールド**。値変更時の編集画面（波形/カーソル）への**即時適用は廃止**。「BPM変更を追加」を押したとき、その時点の `#amplitude` の値を**新規BPM変更エントリーの `amplitude` としてスタンプ**して登録。**編集画面の波形・カーソルは `bpm_changes[].amplitude` のリストに従って変化**する（リスト駆動。`Chart.amplitude`（ベース）ではなくリストから決まる）。
+
+**モデル**:
+- `BpmChange` に `amplitude?: number`（速度係数、>0）を追加。
+- `amplitudeAt(beat)`: `bpm_changes` のうち `beat` 以下の変更で `amplitude` を持つ**最新**の値を返す（step関数、BPM と同様）。`beat` で適用する振幅を持つ変更が1つも無い場合は `Chart.amplitude`（ベース、既定1.0）を返す。
+- `Chart.amplitude` は後方互換・TOML出力用に維持（エディタの操作ではリストが主駆動源）。
+
+**実装**:
+- `src/types.ts`: `BpmChange { beat: number; bpm: number; amplitude?: number }`。
+- `src/screens/editor/BpmEditor.tsx`:
+  - `addChange()`: `onBpmChangesChange([...bpmChanges, { beat: defaultBeat, bpm: safeBpm(bpm), amplitude: safeAmp(amplitude) }])`（メイン入力欄の現在値をスタンプ）。
+  - メイン `#amplitude`（:104-119）: `onAmplitudeChange` による**即時レンダリング反映を廃止**。入力保持のみ（次エントリーへの注入値）。ラベルは「速度係数（BPM変更に注入する値）」等へ変更。
+  - BPM変更リストの各行に振幅の表示/編集（`input` で `.amplitude` を編集可能、空なら `Chart.amplitude` 継続）。
+- `src/audio/bpmTimeline.ts`: `BpmSegment` に `amplitude` を追加し、`bpm_changes[].amplitude` から `amplitudeAt(beat)` を公開（base = `Chart.amplitude`）。
+- `src/game/waveEngine.ts`: `buildPoints` を **セグメント開始拍の振幅** `amplitudeAt(segStartBeat)` で per-beat変位 `2*TW_AMP*amplitudeAt(...)` を算出し、T128の`dY`（`WavePoint.dY`）に反映（クランプは上下幅 `TW_AMP` 維持）。`getPoints()` の長さ（セグメント数+1）と `{beat,y}` 構造は不変。
+- `src/game/cursor.ts`: `update` で現在拍の振幅 `amplitudeAt(currentBeat)` を使うよう、毎フレーム振幅を更新（timeline またはゲッター持参）。
+- `src/screens/GameScreen.tsx`: ループ中 `currentBeat`（:312）から `cursor` の振幅を `timeline.amplitudeAt(currentBeat)` に更新。`WaveEngine` 構築は `(segments, timeline, chart.amplitude, chart.start_position)` のまま（timeline が `amplitudeAt` を持つ）。
+- `src/screens/editor/WavePreview.tsx` / `EditorScreen.tsx`: リスト駆動の時変振幅で描画・録音（`segmentize` のthreshold等）に反映。
+- `src/chart/loader.ts` / `serialize.ts`: `bpm_changes[].amplitude` を取り込む / 出力（`[[bpm_changes]]` に `amplitude = X`、設定時のみ）。
+
+**完了条件（オフグリッド必須）**:
+1. `amplitudeAt(beat)`: 振幅変更点（例 beat=4 で 1.0→2.0）に対し、変更前の端数拍（例 3.37）と変更後の端数拍（例 4.23, 4.37）で返す値がそれぞれ 1.0 / 2.0 になる（step、オフグリッド検証）。
+2. `WaveEngine.waveYAt` の区間傾斜が `2*TW_AMP*amplitudeAt(segStartBeat)` と一致（T128/T129の数値整合、複雑な振幅値で直接比較）。`getPoints().length === segments.length + 1` を維持。
+3. `BpmEditor.addChange` で、メイン `#amplitude` を変更（例 2.5）→「BPM変更を追加」→ 新規エントリーの `.amplitude` が 2.5 である。
+4. **即時適用の廃止**: メイン `#amplitude` を変更しても、追加ボタンを押すまで編集画面の波形/カーソル（`__editorSegments`/`__editorWaveEngine.waveYAt` 等）が変化しないこと。
+5. 既存チャート（`bpm_changes[].amplitude` 未設定）は従来どおり `Chart.amplitude` ベースで動作（後方互換）。T127/T128/T129の回帰なし。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
