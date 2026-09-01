@@ -15,6 +15,10 @@ function safeBeat (v: number): number {
   return v
 }
 
+function safeAmp (v: number): number {
+  return Number.isFinite(v) && v > 0 ? v : 1.0
+}
+
 interface BpmEditorProps {
   bpm: number
   onBpmChange: (bpm: number) => void
@@ -45,7 +49,11 @@ export default function BpmEditor({
 
   const addChange = () => {
     const defaultBeat = bpmChanges.length > 0 ? Math.floor(bpmChanges[bpmChanges.length - 1].beat) + 4 : 4
-    onBpmChangesChange([...bpmChanges, { beat: defaultBeat, bpm: safeBpm(bpm) }])
+    // T131: stamp the current main #amplitude value into the new entry
+    onBpmChangesChange([
+      ...bpmChanges,
+      { beat: defaultBeat, bpm: safeBpm(bpm), amplitude: safeAmp(amplitude) },
+    ])
   }
 
   const removeChange = (index: number) => {
@@ -103,7 +111,7 @@ export default function BpmEditor({
 
       <div className="editor-field">
         <label className="editor-label" htmlFor="amplitude">
-          振幅 (速度係数 0.1-5.0)
+          速度係数 (BPM変更に注入する値)
         </label>
         <input
           id="amplitude"
@@ -115,7 +123,7 @@ export default function BpmEditor({
           value={Number.isFinite(amplitude) ? amplitude : 1.0}
           onChange={(e) => onAmplitudeChange(Number(e.target.value))}
         />
-        <p className="editor-hint">物理高さは固定 (TW_AMP=130px)。値が大きいほど斜度が急峻 (1=1拍で全幅)</p>
+        <p className="editor-hint">「BPM変更を追加」時にこの値を新規エントリーの振幅へスタンプします（直接の波形反映なし）</p>
       </div>
 
       <div className="editor-field">
@@ -190,6 +198,22 @@ export default function BpmEditor({
                 value={safeBpm(change.bpm)}
                 onChange={(e) => updateChange(i, { bpm: safeBpm(Number(e.target.value)) })}
                 aria-label={`BPM変更${i + 1}のBPM`}
+              />
+              <input
+                className="editor-input bpm-change-amplitude"
+                type="number"
+                min={0.1}
+                max={5.0}
+                step={0.1}
+                value={change.amplitude !== undefined ? change.amplitude : amplitude}
+                placeholder="base"
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  const val = Number.isFinite(v) && v > 0 ? v : undefined
+                  updateChange(i, { amplitude: val })
+                }}
+                aria-label={`BPM変更${i + 1}の振幅`}
+                title="空欄なら基本振幅を継続"
               />
               <button
                 type="button"

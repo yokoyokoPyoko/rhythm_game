@@ -5,6 +5,7 @@ interface BpmSegment {
   endBeat: number;
   bpm: number;
   beatMs: number;
+  amplitude: number;
 }
 
 const MIN_BPM = 1;
@@ -18,14 +19,18 @@ function sanitizeBpm(value: number): number {
 
 export class BpmTimeline {
   private readonly baseBpm: number;
+  private readonly baseAmplitude: number;
   private readonly segments: BpmSegment[];
+  /** Sorted amplitude entries from bpm_changes (beat, amplitude). */
+  private readonly amplitudeEntries: { beat: number; amplitude: number }[];
 
-  constructor(baseBpm: number, bpmChanges: BpmChange[] = []) {
+  constructor(baseBpm: number, bpmChanges: BpmChange[] = [], baseAmplitude = 1.0) {
     this.baseBpm = sanitizeBpm(baseBpm);
+    this.baseAmplitude = Number.isFinite(baseAmplitude) && baseAmplitude > 0 ? baseAmplitude : 1.0;
 
     const changes = (bpmChanges ?? [])
       .filter((c): c is BpmChange => !!c && Number.isFinite(c.beat) && Number.isFinite(c.bpm))
-      .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm) }))
+      .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm), amplitude: c.amplitude }))
       .sort((a, b) => a.beat - b.beat);
 
     const segs: BpmSegment[] = [];
@@ -39,6 +44,7 @@ export class BpmTimeline {
         endBeat: change.beat,
         bpm: currentBpm,
         beatMs: 60000 / currentBpm,
+        amplitude: this.baseAmplitude,
       });
       currentBpm = change.bpm;
       currentBeat = change.beat;
@@ -49,9 +55,15 @@ export class BpmTimeline {
       endBeat: Infinity,
       bpm: currentBpm,
       beatMs: 60000 / currentBpm,
+      amplitude: this.baseAmplitude,
     });
 
     this.segments = segs;
+
+    // Build amplitude step entries from bpm_changes that carry an amplitude value
+    this.amplitudeEntries = changes
+      .filter((c) => Number.isFinite(c.amplitude) && (c.amplitude as number) > 0)
+      .map((c) => ({ beat: c.beat, amplitude: c.amplitude as number }));
   }
 
   private segmentAt(beat: number): BpmSegment {
@@ -99,5 +111,23 @@ export class BpmTimeline {
       beat += seg.endBeat - seg.startBeat;
     }
     return beat;
+  }
+
+  /**
+   * T131: Returns the amplitude (speed coefficient) that applies at the given beat.
+   * Step function: returns the amplitude from the most recent bpm_change entry
+   * (with amplitude set) at or before `beat`. Falls back to baseAmplitude if none.
+   */
+  amplitudeAt(beat: number): number {
+    let result = this.baseAmplitude;
+    const b = Number.isFinite(beat) ? beat : 0;
+    for (const entry of this.amplitudeEntries) {
+      if (entry.beat <= b) {
+        result = entry.amplitude;
+      } else {
+        break;
+      }
+    }
+    return result;
   }
 }

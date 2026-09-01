@@ -18,6 +18,12 @@ import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
 
+// T131: The editor's waveform/cursor is list-driven by bpm_changes[].amplitude.
+// The main #amplitude input is an injection-only field (stamped into new BPM-change
+// entries) and does not immediately change the rendered wave. The editor renders
+// with a fixed base amplitude and lets the list drive time-varying amplitude.
+const EDITOR_BASE_AMP = 1.0
+
 function formatSeconds(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
   const m = Math.floor(s / 60)
@@ -120,6 +126,7 @@ export default function EditorScreen() {
     w.__editorAudioOffset = audioOffset
     w.__editorView = view
     w.__editorTimeline = timeline
+    w.__editorWaveEngine = waveEngine
     w.__editorBeat = beat
     w.__editorRecTraj = recTrajRef.current
     w.__editorRecLive = recLive
@@ -137,6 +144,7 @@ export default function EditorScreen() {
     facade.selectedSegment = selectedSegment
     facade.hoveredSegment = hoveredSegment
     facade.hoveredRing = hoveredRing
+    facade.amplitude = amplitude
     w.__editorState = facade
   })
 
@@ -177,7 +185,18 @@ export default function EditorScreen() {
   }
 
   const safeBpm = bpm > 0 ? bpm : 120
-  const timeline = useMemo(() => new BpmTimeline(safeBpm, bpmChanges), [safeBpm, bpmChanges])
+  // T131: editor timeline uses a fixed base amplitude; bpm_changes[].amplitude
+  // (list) is the primary driver for time-varying wave/cursor.
+  const timeline = useMemo(
+    () => new BpmTimeline(safeBpm, bpmChanges, EDITOR_BASE_AMP),
+    [safeBpm, bpmChanges],
+  )
+  // T131: list-driven wave engine used for editing/recording/preview.
+  // Not derived from the live #amplitude injection field (no immediate apply).
+  const waveEngine = useMemo(
+    () => new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition),
+    [segments, timeline, startPosition],
+  )
   const beat = timeline.msToBeat(positionMs)
   const contentBeats = Math.max(
     segments.reduce((s, seg) => s + seg.beats, 0),
@@ -277,8 +296,9 @@ export default function EditorScreen() {
       const sorted = [...traj].sort((a, b) => a.beat - b.beat)
       const endBeat = sorted[sorted.length - 1].beat
 
-      const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, amplitude, startPosition)
-      const newSegs = segmentize(traj, snap, amplitude)
+      const { kept: keptBefore } = truncateSegmentsTo(segments, startBeat, timeline, EDITOR_BASE_AMP, startPosition)
+      // T131: threshold uses the time-varying amplitude at the recording start
+      const newSegs = segmentize(traj, snap, timeline.amplitudeAt(startBeat))
 
       // Keep only whole segments that start at or after endBeat (no split remainder)
       // This matches the spec: overwrite [startBeat, endBeat) range, preserve segments starting at/after endBeat intact
@@ -309,7 +329,7 @@ export default function EditorScreen() {
     setRecLive(null)
     recCursorRef.current = null
     recTrajRef.current = []
-  }, [segments, snap, amplitude, timeline, notify])
+  }, [segments, snap, timeline, notify, startPosition])
 
   // T115: auto-scroll follow - when playhead nears right edge, advance viewStartBeat
   useEffect(() => {
@@ -352,6 +372,8 @@ export default function EditorScreen() {
           const rawBeat = timeline.msToBeat(pos)
           const beat = quantizeBeat(rawBeat, snap)
           const beatMs = timeline.beatMsAt(rawBeat)
+          // T131: update cursor amplitude from the list each frame (time-varying)
+          recCursorRef.current.setAmplitude(timeline.amplitudeAt(rawBeat))
           recCursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, beatMs)
           recTrajRef.current.push({ beat, y: recCursorRef.current.y, down: keysRef.current.up || keysRef.current.down })
           setRecLive({
@@ -512,17 +534,18 @@ export default function EditorScreen() {
     }
     const startBeat = quantizeBeat(rawStartBeat, snap)
     recStartBeatRef.current = startBeat
-    const engine = new WaveEngine(segments, timeline, amplitude, startPosition)
-    const startY = segments.length > 0 ? engine.waveYAt(startBeat) : engine.waveYAt(0)
+    // T131: recording uses the list-driven wave engine (not the injection field).
+    const startY =
+      segments.length > 0 ? waveEngine.waveYAt(startBeat) : waveEngine.waveYAt(0)
     recStartYRef.current = startY
-    const cursor = new Cursor(amplitude, startPosition)
+    const cursor = new Cursor(timeline.amplitudeAt(startBeat), startPosition)
     cursor.y = startY
     recCursorRef.current = cursor
     recTrajRef.current = [{ beat: startBeat, y: startY, down: false }]
     modeRef.current = 'record'
     setMode('record')
     setRecLive({ beat: startBeat, y: startY, trajectory: recTrajRef.current.slice() })
-  }, [timeline, segments, amplitude, startPosition, positionMs, snap])
+  }, [timeline, waveEngine, startPosition, positionMs, snap])
 
   const stop = useCallback(() => {
     stopMetronome()

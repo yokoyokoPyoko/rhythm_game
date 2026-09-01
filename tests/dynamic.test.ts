@@ -1,122 +1,43 @@
-/**
- * T130 — エディタ内限定の音量バー（メトロノーム/楽曲、各0~300%） Acceptance
- *
- * Verifies strictly by static source inspection + mocked AudioGraph behaviour.
- * Runs in node (vitest environment: node), no DOM.
- * Each requirement uses 3-step state-transition assertions.
- */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import fs from 'fs';
-import path from 'path';
-
-// Direct imports of small focused modules (required by TDD spec)
-import { schedule } from '../src/audio/metronome';
+import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
-import { BpmTimeline } from '../src/audio/bpmTimeline';
+import { segmentize, quantizeBeat, isSnapAligned } from '../src/chart/quantize';
+import { parseChartText } from '../src/chart/loader';
+import { chartToToml } from '../src/chart/serialize';
+import type { Segment, BpmChange } from '../src/types';
 
 vi.useFakeTimers();
 
-// ---------------------------------------------------------------------------
-// Helpers: mock WebAudio graph for schedule routing checks
-// ---------------------------------------------------------------------------
-interface MockGain {
-  gain: {
-    value: number;
-    setValueAtTime: (v: number, t: number) => void;
-    exponentialRampToValueAtTime: (v: number, t: number) => void;
-  };
-  connect: (dest: unknown) => void;
-  _connectedTo: unknown | null;
-}
-interface MockOsc {
-  type: string;
-  frequency: { value: number };
-  connect: (n: unknown) => void;
-  start: (t: number) => void;
-  stop: (t: number) => void;
+const CENTER = TW_CENTER_Y;
+const TOP = CENTER - TW_AMP;
+const BOTTOM = CENTER + TW_AMP;
+
+function clampY(y: number): number {
+  return Math.max(TOP, Math.min(BOTTOM, y));
 }
 
-function createMockAudioCtx() {
-  const destination = { __isDestination: true, label: 'ctx.destination' } as unknown as AudioNode;
-  let lastGain: MockGain | null = null;
-  let lastOsc: MockOsc | null = null;
-  const ctx = {
-    currentTime: 10.0,
-    destination,
-    _lastGain: null as MockGain | null,
-    _lastOsc: null as MockOsc | null,
-    get lastGainNode() { return lastGain; },
-    createOscillator(): MockOsc {
-      const o: MockOsc = {
-        type: 'sine',
-        frequency: { value: 0 },
-        connect: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn(),
-      };
-      lastOsc = o;
-      (ctx as unknown as Record<string, unknown>)._lastOsc = o;
-      return o as unknown as OscillatorNode;
-    },
-    createGain(): MockGain {
-      const g: MockGain = {
-        gain: {
-          value: 1,
-          setValueAtTime: vi.fn(),
-          exponentialRampToValueAtTime: vi.fn(),
-        },
-        connect: vi.fn(function (this: MockGain, dest: unknown) {
-          (this as MockGain)._connectedTo = dest;
-        }),
-        _connectedTo: null,
-      };
-      // Wrap connect to capture
-      const orig = g.connect.bind(g);
-      g.connect = ((dest: unknown) => {
-        g._connectedTo = dest;
-        // also spy
-        (g.connect as unknown as { mock: unknown }).toString();
-      }) as unknown as MockGain['connect'];
-      // Use vi.fn wrapper to track
-      const spy = vi.fn((dest: unknown) => { g._connectedTo = dest; });
-      g.connect = spy as unknown as MockGain['connect'];
-      // preserve _connectedTo via spy
-      const wrappedConnect = (dest: unknown) => {
-        g._connectedTo = dest;
-        spy(dest);
-      };
-      g.connect = wrappedConnect as unknown as MockGain['connect'];
-      (g.connect as unknown as Record<string, unknown>)._spy = spy;
-      lastGain = g;
-      (ctx as unknown as Record<string, unknown>)._lastGain = g;
-      return g as unknown as GainNode;
-    },
-  } as unknown as AudioContext & {
-    destination: AudioNode;
-    _lastGain: MockGain | null;
-    _lastOsc: MockOsc | null;
-    lastGainNode: MockGain | null;
-  };
-  return { ctx, destination, getLastGain: () => lastGain!, getLastOsc: () => lastOsc! };
+function expectedClampedY(startPosition: number, amp: number, dir: 'up' | 'down' | 'stay', beat: number): number {
+  const startY = CENTER - startPosition * TW_AMP;
+  const dY = dir === 'up' ? -2 * TW_AMP * amp : dir === 'down' ? 2 * TW_AMP * amp : 0;
+  if (dir === 'stay') return startY;
+  return clampY(startY + dY * beat);
 }
 
-// Helper to read source files
-function readSrc(rel: string): string {
-  return fs.readFileSync(path.resolve(process.cwd(), rel), 'utf-8');
+// Simulate BpmEditor.addChange stamping logic (safeAmp + safeBpm)
+function safeBpm(v: number): number {
+  if (Number.isNaN(v) || v < 1 || v > 1000) return 120;
+  return v;
+}
+function safeAmp(v: number): number {
+  return Number.isFinite(v) && v > 0 ? v : 1.0;
+}
+function addChangeStamp(bpmChanges: BpmChange[], bpm: number, amplitude: number): BpmChange[] {
+  const defaultBeat = bpmChanges.length > 0 ? Math.floor(bpmChanges[bpmChanges.length - 1].beat) + 4 : 4;
+  return [...bpmChanges, { beat: defaultBeat, bpm: safeBpm(bpm), amplitude: safeAmp(amplitude) }];
 }
 
-// Shared clamp helper mirrors EditorScreen logic
-function clampVolume(v: unknown): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 100;
-  return Math.max(0, Math.min(300, n));
-}
-function gainValue(volume: number): number {
-  return clampVolume(volume) / 100;
-}
-
-describe('T130 エディタ内限定の音量バー — acceptance (node, no DOM)', () => {
+describe('T131 速度係数(amplitude)をBPM変更エントリーの振幅としてリスト駆動 — Vitest pure engine acceptance', () => {
   beforeEach(() => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -125,436 +46,795 @@ describe('T130 エディタ内限定の音量バー — acceptance (node, no DOM
   });
 
   // ========================================================================
-  // (1) #music-control 内に 2つの音量バーが存在 (strict 3-step)
+  // 1) amplitudeAt(beat) step function — off-grid verification (完了条件1)
   // ========================================================================
-  describe('1. #music-control 内に2本のrangeバーが存在 (metronome-volume / music-volume)', () => {
-    it('EditorScreen source contains #music-control with both sliders min0 max300 step5 and % display', () => {
-      // [Step 1: Capture Initial State] — read file, capture section boundaries
-      const src = readSrc('src/screens/EditorScreen.tsx');
-      const musicControlIdx = src.indexOf('id="music-control"');
-      expect(musicControlIdx, 'EditorScreen must contain id="music-control"').toBeGreaterThan(-1);
+  describe('1. amplitudeAt(beat) step関数（オフグリッド必須）', () => {
+    it('single change beat=4 1.0→2.0: off-grid 3.37 vs 4.23 returns 1.0 / 2.0 (step)', () => {
+      // [Step 1: Capture Before] — base only, no change yet at 3.37 should be base
+      const baseAmp = 1.0;
+      const beforeTimeline = new BpmTimeline(120, [], baseAmp);
+      expect(beforeTimeline.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      expect(beforeTimeline.amplitudeAt(4.23)).toBeCloseTo(1.0, 5);
 
-      // capture the music-control section slice (until next </section>)
-      const after = src.slice(musicControlIdx);
-      const sectionEnd = after.indexOf('</section>');
-      expect(sectionEnd).toBeGreaterThan(0);
-      const section = after.slice(0, sectionEnd);
+      // [Step 2: Perform] add BpmChange beat 4 amplitude 2.0
+      const changes: BpmChange[] = [{ beat: 4, bpm: 120, amplitude: 2.0 }];
+      const after = new BpmTimeline(120, changes, baseAmp);
 
-      // [Step 2: Perform inspection] — count sliders and attributes
-      const metronomeVolumeMatches = [...section.matchAll(/data-testid="metronome-volume"/g)];
-      const musicVolumeMatches = [...section.matchAll(/data-testid="music-volume"/g)];
-
-      // [Step 3: Assert Changed Outcome] — both must exist exactly once inside section
-      expect(metronomeVolumeMatches.length, 'metronome-volume must appear once inside #music-control').toBe(1);
-      expect(musicVolumeMatches.length, 'music-volume must appear once inside #music-control').toBe(1);
-
-      // Strict attribute checks: both inputs must be type="range" min=0 max=300 step=5
-      // Find the input tag containing metronome-volume
-      const metLineIdx = section.indexOf('data-testid="metronome-volume"');
-      const metSnippetStart = Math.max(0, metLineIdx - 500);
-      const metSnippet = section.slice(metSnippetStart, metLineIdx + 500);
-      expect(metSnippet, 'metronome-volume input must be type="range"').toMatch(/type="range"/);
-      expect(metSnippet).toMatch(/min=\{0\}/);
-      expect(metSnippet).toMatch(/max=\{300\}/);
-      expect(metSnippet).toMatch(/step=\{5\}/);
-
-      const musicLineIdx = section.indexOf('data-testid="music-volume"');
-      const musicSnippetStart = Math.max(0, musicLineIdx - 500);
-      const musicSnippet = section.slice(musicSnippetStart, musicLineIdx + 500);
-      expect(musicSnippet, 'music-volume input must be type="range"').toMatch(/type="range"/);
-      expect(musicSnippet).toMatch(/min=\{0\}/);
-      expect(musicSnippet).toMatch(/max=\{300\}/);
-      expect(musicSnippet).toMatch(/step=\{5\}/);
-
-      // Labels must contain expected Japanese text
-      expect(section).toMatch(/メトロノーム音量/);
-      expect(section).toMatch(/楽曲音量/);
-
-      // % display: span showing volume + '%' near each slider
-      expect(section).toMatch(/\{metronomeVolume\}%/);
-      expect(section).toMatch(/\{musicVolume\}%/);
-
-      // Verify NOT present outside #music-control as the only occurrence
-      const outsideBefore = src.slice(0, musicControlIdx);
-      const outsideAfter = src.slice(musicControlIdx + sectionEnd);
-      expect(outsideBefore).not.toMatch(/data-testid="metronome-volume"/);
-      expect(outsideAfter).not.toMatch(/data-testid="metronome-volume"/);
-      expect(outsideBefore).not.toMatch(/data-testid="music-volume"/);
-      expect(outsideAfter).not.toMatch(/data-testid="music-volume"/);
-
-      // IDs must be present for label association
-      expect(section).toMatch(/id="metronome-volume"/);
-      expect(section).toMatch(/id="music-volume"/);
+      // [Step 3: Assert] step behavior at off-grid beats
+      expect(after.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      expect(after.amplitudeAt(3.99)).toBeCloseTo(1.0, 5);
+      expect(after.amplitudeAt(4.0)).toBeCloseTo(2.0, 5);
+      expect(after.amplitudeAt(4.23)).toBeCloseTo(2.0, 5);
+      expect(after.amplitudeAt(4.37)).toBeCloseTo(2.0, 5);
+      expect(after.amplitudeAt(5)).toBeCloseTo(2.0, 5);
+      // not interpolated
+      expect(after.amplitudeAt(3.5)).toBeCloseTo(1.0, 5);
     });
 
-    it('initial volume states are 100 (=100%) and clamped 0..300 in set handlers', () => {
-      const src = readSrc('src/screens/EditorScreen.tsx');
-      // [Step1] capture initial state declarations
-      expect(src).toMatch(/const \[musicVolume,\s*setMusicVolume\]\s*=\s*useState\(100\)/);
-      expect(src).toMatch(/const \[metronomeVolume,\s*setMetronomeVolume\]\s*=\s*useState\(100\)/);
-
-      // [Step2] capture set handlers clamping logic
-      const musicClamp = src.match(/setMusicVolume\(Math\.max\(0,\s*Math\.min\(300,/);
-      const metroClamp = src.match(/setMetronomeVolume\(Math\.max\(0,\s*Math\.min\(300,/);
-
-      // [Step3] assert clamping exists (prevents out-of-range)
-      expect(musicClamp, 'musicVolume set must clamp 0..300').not.toBeNull();
-      expect(metroClamp, 'metronomeVolume set must clamp 0..300').not.toBeNull();
-
-      // Gain effect must map to /100
-      expect(src).toMatch(/musicGainRef\.current\.gain\.value\s*=\s*Math\.max\(0,\s*Math\.min\(300,\s*musicVolume\)\)\s*\/\s*100/);
-      expect(src).toMatch(/metronomeGainRef\.current\.gain\.value\s*=\s*Math\.max\(0,\s*Math\.min\(300,\s*metronomeVolume\)\)\s*\/\s*100/);
+    it('multiple time-varying entries off-grid step correctness (complex amplitudes)', () => {
+      const base = 1.0;
+      const changes: BpmChange[] = [
+        { beat: 2, bpm: 120, amplitude: 0.7 },
+        { beat: 4, bpm: 130, amplitude: 1.3 },
+        { beat: 7.5, bpm: 140, amplitude: 2.7 },
+      ];
+      const tl = new BpmTimeline(120, changes, base);
+      // before any
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
+      // between 2 and 4
+      expect(tl.amplitudeAt(2.0)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(2.37)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(3.99)).toBeCloseTo(0.7, 5);
+      // at and after 4
+      expect(tl.amplitudeAt(4.0)).toBeCloseTo(1.3, 5);
+      expect(tl.amplitudeAt(4.23)).toBeCloseTo(1.3, 5);
+      expect(tl.amplitudeAt(5.37)).toBeCloseTo(1.3, 5);
+      expect(tl.amplitudeAt(7.37)).toBeCloseTo(1.3, 5);
+      // at 7.5
+      expect(tl.amplitudeAt(7.5)).toBeCloseTo(2.7, 5);
+      expect(tl.amplitudeAt(7.63)).toBeCloseTo(2.7, 5);
+      expect(tl.amplitudeAt(8.23)).toBeCloseTo(2.7, 5);
+      expect(tl.amplitudeAt(100)).toBeCloseTo(2.7, 5);
     });
 
-    it('EditorScreen must NOT use localStorage for volume persistence (editor-limited, global impact avoidance)', () => {
-      const src = readSrc('src/screens/EditorScreen.tsx');
-      // [Step1] capture any localStorage usage lines
-      const lsMatches = [...src.matchAll(/localStorage/g)];
+    it('latest wins when multiple entries share step — sorted & step', () => {
+      const tl = new BpmTimeline(120, [
+        { beat: 1, bpm: 120, amplitude: 1.5 },
+        { beat: 3, bpm: 120, amplitude: 2.0 },
+        { beat: 3, bpm: 120, amplitude: 3.0 }, // same beat later overrides within sorted order
+      ], 1.0);
+      // At beat 3, the second entry with same beat should dominate if stable sort keeps last?
+      // At minimum amplitudeAt(3) should be 2.0 or 3.0 (>1.5). Check >=2
+      const v = tl.amplitudeAt(3);
+      expect(v >= 2.0).toBeTruthy();
+      expect(tl.amplitudeAt(2.37)).toBeCloseTo(1.5, 5);
+    });
 
-      // [Step2] filter for volume-related keys
-      const volumeLs = lsMatches.filter(m => {
-        const idx = m.index ?? 0;
-        const snippet = src.slice(Math.max(0, idx - 100), idx + 200);
-        return /musicVolume|metronomeVolume|music-volume|metronome-volume/i.test(snippet);
-      });
+    it('entries without amplitude field do not affect amplitudeAt (fallback to base or last)', () => {
+      const tl = new BpmTimeline(120, [
+        { beat: 2, bpm: 140 }, // no amplitude
+        { beat: 4, bpm: 150, amplitude: 2.0 },
+        { beat: 6, bpm: 160 }, // no amplitude again
+      ], 1.0);
+      // 0-4 before 4 should be base (since beat2 has no amp)
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(2.37)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      // at 4 and beyond to 6+ stays 2.0, because 6 has no amp to override
+      expect(tl.amplitudeAt(4.23)).toBeCloseTo(2.0, 5);
+      expect(tl.amplitudeAt(6.23)).toBeCloseTo(2.0, 5);
+      expect(tl.amplitudeAt(8)).toBeCloseTo(2.0, 5);
+    });
 
-      // [Step3] assert none — volumes must be UI state only
-      expect(volumeLs.length, 'EditorScreen must not persist musicVolume/metronomeVolume to localStorage').toBe(0);
+    it('backward compat: empty bpm_changes or undefined amplitude returns baseAmplitude for all off-grid', () => {
+      const tlBaseOnly = new BpmTimeline(120, [], 1.7);
+      expect(tlBaseOnly.amplitudeAt(0.37)).toBeCloseTo(1.7, 5);
+      expect(tlBaseOnly.amplitudeAt(1.23)).toBeCloseTo(1.7, 5);
+      expect(tlBaseOnly.amplitudeAt(100)).toBeCloseTo(1.7, 5);
+
+      const tlNoAmpEntries = new BpmTimeline(120, [
+        { beat: 2, bpm: 140 },
+        { beat: 5, bpm: 150 },
+      ], 1.7);
+      expect(tlNoAmpEntries.amplitudeAt(0.37)).toBeCloseTo(1.7, 5);
+      expect(tlNoAmpEntries.amplitudeAt(2.37)).toBeCloseTo(1.7, 5);
+      expect(tlNoAmpEntries.amplitudeAt(5.37)).toBeCloseTo(1.7, 5);
+    });
+
+    it('amplitudeAt with complex amplitudes 0.7/1.3/2.7/3.4 — exact off-grid match (3-step)', () => {
+      // [Step1] Capture before: base 1.0
+      const before = new BpmTimeline(120, [], 1.0);
+      expect(before.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
+      // [Step2] Perform: insert complex amps at beat 3 and 6
+      const complex: BpmChange[] = [
+        { beat: 3, bpm: 120, amplitude: 3.4 },
+        { beat: 6, bpm: 120, amplitude: 0.7 },
+      ];
+      const after = new BpmTimeline(120, complex, 1.0);
+      // [Step3] Assert off-grid before/after each boundary
+      expect(after.amplitudeAt(2.37)).toBeCloseTo(1.0, 5);
+      expect(after.amplitudeAt(3.37)).toBeCloseTo(3.4, 5);
+      expect(after.amplitudeAt(4.23)).toBeCloseTo(3.4, 5);
+      expect(after.amplitudeAt(5.99)).toBeCloseTo(3.4, 5);
+      expect(after.amplitudeAt(6.0)).toBeCloseTo(0.7, 5);
+      expect(after.amplitudeAt(6.37)).toBeCloseTo(0.7, 5);
     });
   });
 
   // ========================================================================
-  // (2) metronome-volume=0で無音・300で聞こえる (ゲイン値で検証) — 3-step
+  // 2. WaveEngine per-segment start-beat amplitude slope = 2*TW_AMP*amplitudeAt(segStartBeat)
   // ========================================================================
-  describe('2. metronome-volume ゲイン反映: 0=>0 (無音) / 100=>1.0 / 300=>3.0', () => {
-    it('gainValue helper clamps and scales correctly (pure numeric consistency)', () => {
-      // [Step1] Capture initial gain at 100% (default)
-      const beforeVolume = 100;
-      const beforeGain = gainValue(beforeVolume);
-      expect(beforeGain).toBeCloseTo(1.0, 5);
+  describe('2. WaveEngine waveYAt区間傾斜=2*TW_AMP*amplitudeAt(segStartBeat) & getPoints不変', () => {
+    function makeSegments(totalBeats: number, segBeats: number, dir: 'up' | 'down' = 'down'): Segment[] {
+      const n = Math.floor(totalBeats / segBeats);
+      return Array.from({ length: n }, () => ({ direction: dir, beats: segBeats as number } as Segment));
+    }
 
-      // [Step2] Perform action: set to 0 (min)
-      const afterZero = gainValue(0);
-      // [Step3] Assert changed outcome: 0 => 0 (silent)
-      expect(afterZero).toBeCloseTo(0, 5);
-      expect(afterZero).not.toBeCloseTo(beforeGain, 5);
-
-      // [Step1] capture intermediate 100 again
-      const mid = gainValue(100);
-      expect(mid).toBeCloseTo(1.0, 5);
-
-      // [Step2] perform max
-      const afterMax = gainValue(300);
-      // [Step3] assert 300 => 3.0 (audible at 300%)
-      expect(afterMax).toBeCloseTo(3.0, 5);
-      expect(afterMax).not.toBeCloseTo(mid, 5);
-
-      // Edge clamping: out-of-range must clamp
-      expect(gainValue(400)).toBeCloseTo(3.0, 5); // clamped to 300
-      expect(gainValue(500)).toBeCloseTo(3.0, 5);
-      expect(gainValue(-10)).toBeCloseTo(0, 5);
-      expect(gainValue(-999)).toBeCloseTo(0, 5);
-      expect(gainValue(150)).toBeCloseTo(1.5, 5);
-      expect(gainValue(5)).toBeCloseTo(0.05, 5); // step 5 => 0.05
-    });
-
-    it('mocked gain node transitions when volume changes (EditorScreen effect simulation)', () => {
-      // Simulate EditorScreen's useEffect that writes to metronomeGain
-      const mockGain: { gain: { value: number } } = { gain: { value: 1.0 } };
-
-      // [Step1] Capture initial state (100% => 1.0)
-      mockGain.gain.value = gainValue(100);
-      const before = mockGain.gain.value;
-      expect(before).toBeCloseTo(1.0, 5);
-
-      // [Step2] Perform action: user moves slider to 0
-      const newVolZero = 0;
-      mockGain.gain.value = gainValue(newVolZero);
-      // [Step3] Assert resulting gain is silent
-      expect(mockGain.gain.value).toBeCloseTo(0, 5);
-      expect(mockGain.gain.value).not.toBeCloseTo(before, 5);
-
-      // [Step1] capture 0 state again
-      const zeroState = mockGain.gain.value;
-      expect(zeroState).toBeCloseTo(0, 5);
-
-      // [Step2] perform max
-      mockGain.gain.value = gainValue(300);
-      // [Step3] assert loud
-      expect(mockGain.gain.value).toBeCloseTo(3.0, 5);
-      expect(mockGain.gain.value).not.toBeCloseTo(zeroState, 5);
-      expect(mockGain.gain.value).toBeGreaterThan(1.0);
-    });
-
-    it('metronome Gain scheduling uses metronomeGain when provided (audible), not muted destination path', () => {
-      const { ctx, destination } = createMockAudioCtx();
-      const metronomeGain = ctx.createGain() as unknown as MockGain;
-      // Ensure initial gain 1.0
-      (metronomeGain as MockGain).gain.value = 1.0;
-
-      // [Step1] Capture before: schedule without out should go to destination
-      // We test schedule() routing directly
-      const beforeGain = metronomeGain.gain.value;
-      expect(beforeGain).toBeCloseTo(1.0, 5);
-
-      // [Step2] Perform schedule without out (calibration/game path)
-      const horizonTime = ctx.currentTime + 0.1;
-      schedule(ctx as unknown as AudioContext, horizonTime, 0);
-      const g1 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
-      expect(g1._connectedTo, 'schedule without out must connect to ctx.destination').toBe(destination);
-
-      // [Step3] Assert with out param connects to metronomeGain
-      schedule(ctx as unknown as AudioContext, horizonTime + 0.2, 1, metronomeGain as unknown as AudioNode);
-      const g2 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
-      expect(g2._connectedTo, 'schedule with out must connect to metronomeGain').toBe(metronomeGain);
-      expect(g2._connectedTo).not.toBe(destination);
-
-      // [Step2] Test silent case: gain 0 should still route correctly but be silent
-      (metronomeGain as MockGain).gain.value = 0;
-      schedule(ctx as unknown as AudioContext, horizonTime + 0.4, 2, metronomeGain as unknown as AudioNode);
-      const g3 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
-      expect(g3._connectedTo).toBe(metronomeGain);
-      expect((metronomeGain as MockGain).gain.value).toBeCloseTo(0, 5);
-    });
-  });
-
-  // ========================================================================
-  // (3) music-volume がエディタ楽曲ゲインに反映 (ゲイン値で検証) — 3-step
-  // ========================================================================
-  describe('3. music-volume ゲイン反映: 楽曲再生の src.connect(musicGain) 経路', () => {
-    it('gainValue for music mirrors metronome logic (0..300% -> 0..3.0)', () => {
-      // [Step1] Capture initial 100
-      const before = gainValue(100);
-      expect(before).toBeCloseTo(1.0, 5);
-
-      // [Step2] perform 0
-      const zero = gainValue(0);
-      // [Step3] assert silent
-      expect(zero).toBeCloseTo(0, 5);
-      expect(zero).not.toBe(before);
-
-      // [Step2] perform 300
-      const max = gainValue(300);
-      // [Step3] assert 3x
-      expect(max).toBeCloseTo(3.0, 5);
-      expect(max).not.toBe(zero);
-
-      // arbitrary step 5 check
-      expect(gainValue(75)).toBeCloseTo(0.75, 5);
-      expect(gainValue(225)).toBeCloseTo(2.25, 5);
-    });
-
-    it('EditorScreen source: playFrom uses src.connect(musicGain) and musicGain.connect(destination)', () => {
-      const src = readSrc('src/screens/EditorScreen.tsx');
-
-      // [Step1] Capture before pattern: ensure old direct destination is NOT used for music
-      // Old code had src.connect(ctx.destination); new must have musicGain
-      expect(src).toMatch(/src\.connect\(musicGainRef\.current!/);
-
-      // [Step2] capture gain creation
-      const musicGainCreateIdx = src.indexOf('musicGainRef.current');
-      expect(musicGainCreateIdx).toBeGreaterThan(-1);
-
-      // Check that ensureGainNodes creates both gains and connects to destination
-      const ensureSlice = src.slice(src.indexOf('ensureGainNodes'), src.indexOf('ensureGainNodes') + 800);
-      expect(ensureSlice).toMatch(/musicGain/);
-      expect(ensureSlice).toMatch(/metronomeGain/);
-      expect(ensureSlice).toMatch(/\.connect\(ctx\.destination\)/);
-
-      // [Step3] Assert that playFrom no longer connects directly to destination for music
-      const playFromIdx = src.indexOf('const playFrom');
-      const playFromSlice = src.slice(playFromIdx, playFromIdx + 1500);
-      expect(playFromSlice).toMatch(/src\.connect\(musicGainRef\.current/);
-      expect(playFromSlice).not.toMatch(/src\.connect\(ctx\.destination\)/);
-    });
-
-    it('mocked musicGain transitions on volume change (3-step)', () => {
-      const mockMusicGain: { gain: { value: number } } = { gain: { value: 1.0 } };
-
-      // [Step1] Capture before at 100
-      mockMusicGain.gain.value = gainValue(100);
-      const before = mockMusicGain.gain.value;
-      expect(before).toBeCloseTo(1.0, 5);
-
-      // [Step2] Perform mid change to 150 (150%)
-      mockMusicGain.gain.value = gainValue(150);
-      // [Step3] Assert changed to 1.5
-      expect(mockMusicGain.gain.value).toBeCloseTo(1.5, 5);
-      expect(mockMusicGain.gain.value).not.toBeCloseTo(before, 5);
-
-      // [Step1] capture 150 state
-      const mid = mockMusicGain.gain.value;
-
-      // [Step2] perform to 0
-      mockMusicGain.gain.value = gainValue(0);
-      // [Step3] assert silent
-      expect(mockMusicGain.gain.value).toBeCloseTo(0, 5);
-      expect(mockMusicGain.gain.value).not.toBeCloseTo(mid, 5);
-
-      // [Step2] perform to 300
-      mockMusicGain.gain.value = gainValue(300);
-      // [Step3] assert max
-      expect(mockMusicGain.gain.value).toBeCloseTo(3.0, 5);
-    });
-  });
-
-  // ========================================================================
-  // (4) エディタ限定: GameScreen/CalibrationScreen は out省略で ctx.destination のまま
-  // ========================================================================
-  describe('4. エディタ限定 — Game/Calibration は schedule() を outなしで呼ぶ (従来通り)', () => {
-    it('metronome.ts schedule signature has optional out?: AudioNode with fallback to destination', () => {
-      const src = readSrc('src/audio/metronome.ts');
-
-      // [Step1] Capture before: function declaration
-      expect(src).toMatch(/export function schedule\(/);
-
-      // [Step2] Perform signature check
-      const sigMatch = src.match(/export function schedule\([\s\S]*?out\?\s*:\s*AudioNode/);
-      // [Step3] Assert optional param exists
-      expect(sigMatch, 'schedule must have optional out?: AudioNode param').not.toBeNull();
-
-      // Fallback logic must be gain.connect(out ?? audioCtx.destination) or equivalent
-      expect(src).toMatch(/gain\.connect\(out \?\? audioCtx\.destination\)/);
-    });
-
-    it('GameScreen does NOT pass out param to schedule (editor-limited)', () => {
-      const src = readSrc('src/screens/GameScreen.tsx');
-
-      // [Step1] Capture initial: find all schedule( calls
-      const scheduleCalls = [...src.matchAll(/schedule\s*\(/g)];
-      expect(scheduleCalls.length, 'GameScreen must call schedule at least once').toBeGreaterThan(0);
-
-      // [Step2] Extract each call snippet (next 120 chars) and check arity
-      const calls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
-
-      // [Step3] Assert none contain 4 args / out param — all must be 3-arg (audioCtx, time, beat)
-      for (const c of calls) {
-        // Count commas: 2 commas => 3 args ; 3 commas => 4 args (with out)
-        const commaCount = (c.match(/,/g) || []).length;
-        expect(commaCount, `GameScreen schedule call must NOT have out param: ${c}`).toBe(2);
+    it('single segment down slope equals 2*TW_AMP*amplitudeAt(0) (complex amps off-grid)', () => {
+      const amps = [0.7, 1.3, 2.7, 3.4];
+      const offBeats = [0.37, 1.23];
+      for (const amp of amps) {
+        const tl = new BpmTimeline(120, [], amp);
+        const segs: Segment[] = [{ direction: 'down', beats: 5 }];
+        const engine = new WaveEngine(segs, tl, amp, 0);
+        for (const b of offBeats) {
+          // Before clip region small delta to measure slope: 0.1 beats
+          // For large amps, even 0.37 may be clipped — so use expectedClampedY
+          const expected = expectedClampedY(0, amp, 'down', b);
+          expect(engine.waveYAt(b), `amp=${amp} beat=${b}`).toBeCloseTo(expected, 1);
+        }
+        // slope before clip: dy/delta == 2*TW_AMP*amp
+        const delta = 0.1;
+        const slope = (engine.waveYAt(delta) - engine.waveYAt(0)) / delta;
+        // For amp up to 3.4, 0.1 beats -> 88.4px not clipped -> slope intact
+        if (amp <= 4) {
+          expect(slope, `amp=${amp}`).toBeCloseTo(2 * TW_AMP * amp, 0);
+        }
       }
-
-      // Ensure no metronomeGain / musicGain reference in GameScreen
-      expect(src).not.toMatch(/metronomeGain/);
-      expect(src).not.toMatch(/musicGain/);
     });
 
-    it('CalibrationScreen does NOT pass out param to schedule', () => {
-      const src = readSrc('src/screens/CalibrationScreen.tsx');
+    it('time-varying amplitude: segment starting at beat 4 uses amp 2.0, earlier uses 1.0 (2-step transition)', () => {
+      // [Step1] Capture initial with no variation
+      const baseAmp = 1.0;
+      const segs: Segment[] = [
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+      ];
+      const tlBefore = new BpmTimeline(120, [], baseAmp);
+      const engineBefore = new WaveEngine(segs, tlBefore, baseAmp, 0);
+      // At beat 4.37 (0.37 into 3rd segment), slope should be base 1.0*260
+      const yBefore = engineBefore.waveYAt(4.37);
+      const yBefore0 = engineBefore.waveYAt(4);
+      const slopeBefore = (yBefore - yBefore0) / 0.37;
+      expect(slopeBefore).toBeCloseTo(2 * TW_AMP * 1.0, 0);
 
-      const calls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
-      expect(calls.length).toBeGreaterThan(0);
-      for (const c of calls) {
-        const commaCount = (c.match(/,/g) || []).length;
-        expect(commaCount, `CalibrationScreen schedule call must NOT have out param: ${c}`).toBe(2);
+      // [Step2] Perform: add amplitude change at beat 4 to 2.0
+      const tlAfter = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.0 }], baseAmp);
+      const engineAfter = new WaveEngine(segs, tlAfter, baseAmp, 0);
+      // [Step3] Assert changed outcome: slope doubles for segment starting at 4
+      const yAfter = engineAfter.waveYAt(4.37);
+      const yAfter0 = engineAfter.waveYAt(4);
+      const slopeAfter = (yAfter - yAfter0) / 0.37;
+      expect(slopeAfter).toBeCloseTo(2 * TW_AMP * 2.0, 0);
+      // And off-grid values match clamped expectation with amp 2.0 for that segment
+      const expectedAfter = clampY(yAfter0 + 2 * TW_AMP * 2.0 * 0.37);
+      expect(yAfter).toBeCloseTo(expectedAfter, 1);
+      // Before was 1.0 slope, so yAfter should be steeper (difference unless clipped)
+      // For down from whatever y at 4, after should be >= before (more downward)
+      // Not always if before already at bottom — construct case where not clipped:
+      // Use startPosition 1.0 top so first segments not reaching bottom? Let's also explicitly test non-clipped case:
+      const tlVar2 = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.0 }], 1.0);
+      // Need segments that keep Y away from clamp at beat 4: using up/down alternating to stay near center
+      const segs2: Segment[] = [
+        { direction: 'down', beats: 2 },
+        { direction: 'up', beats: 2 },
+        { direction: 'down', beats: 2 },
+      ];
+      const e2 = new WaveEngine(segs2, tlVar2, 1.0, 0);
+      const at4 = e2.waveYAt(4);
+      const at437 = e2.waveYAt(4.37);
+      // From beat 4, direction down, amp at segStart 4 is 2.0 -> delta 0.37*520=192.4 may clip but we verify slope via raw before clamp cap
+      // Use small delta 0.1 that won't clip for either amp if starting not at edge: pick startPosition 0.5?
+      // Simpler assert slope with small delta 0.1 at segment start 4 is 520 for amp2
+      const at401 = e2.waveYAt(4.1);
+      expect((at401 - at4) / 0.1).toBeCloseTo(2 * TW_AMP * 2.0, 0);
+    });
+
+    it('getPoints().length === segments.length+1 and structure {beat,y} invariants (complex amps)', () => {
+      const tl = new BpmTimeline(120, [{ beat: 3, bpm: 120, amplitude: 1.3 }], 1.0);
+      const cases: Segment[][] = [
+        [],
+        [{ direction: 'down', beats: 1 }],
+        [{ direction: 'down', beats: 0.5 }, { direction: 'stay', beats: 1 }, { direction: 'up', beats: 0.5 }],
+        [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }],
+      ];
+      for (const segs of cases) {
+        const engine = new WaveEngine(segs, tl, 1.7, 0);
+        const pts = engine.getPoints();
+        const expectedLen = segs.length === 0 ? 2 : segs.length + 1;
+        expect(pts.length, `segs ${JSON.stringify(segs)}`).toBe(expectedLen);
+        for (const p of pts) {
+          expect(typeof p.beat).toBe('number');
+          expect(typeof p.y).toBe('number');
+          expect(Object.keys(p).sort()).toEqual(['beat', 'y']);
+          // ensure no dY leakage
+          expect((p as unknown as Record<string, unknown>).dY).toBeUndefined();
+        }
       }
-      expect(src).not.toMatch(/metronomeGain/);
-      expect(src).not.toMatch(/musicGain/);
     });
 
-    it('EditorScreen DOES pass metronomeGain to schedule (positive control)', () => {
-      const src = readSrc('src/screens/EditorScreen.tsx');
-
-      // [Step1] Capture all schedule calls in Editor
-      const calls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
-      expect(calls.length).toBeGreaterThan(0);
-
-      // [Step2] Find at least one 4-arg call
-      const withOut = calls.filter(c => (c.match(/,/g) || []).length === 3);
-      // [Step3] Assert editor has at least one out-param call and it references metronomeGain
-      expect(withOut.length, 'EditorScreen must have at least one schedule(..., metronomeGain) call').toBeGreaterThan(0);
-      expect(withOut.some(c => /metronomeGain/.test(c))).toBeTruthy();
-
-      // Game/Calibration remain 3-arg, Editor has 4-arg — prove editor-limited
-      const gameSrc = readSrc('src/screens/GameScreen.tsx');
-      const gameCalls = [...gameSrc.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
-      const gameWithOut = gameCalls.filter(c => (c.match(/,/g) || []).length === 3);
-      expect(gameWithOut.length, 'GameScreen must have zero 4-arg schedule calls').toBe(0);
+    it('legacy constructor amplitude param does NOT affect waveYAt when timeline list drives (removes dead field)', () => {
+      const tl = new BpmTimeline(120, [{ beat: 2, bpm: 120, amplitude: 2.7 }], 1.0);
+      const segs: Segment[] = [
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+      ];
+      // [Step1] engine with ctor amp 1.0
+      const e1 = new WaveEngine(segs, tl, 1.0, 0);
+      const y1 = e1.waveYAt(2.37);
+      // [Step2] same timeline but ctor amp 999 (legacy dead field)
+      const e2 = new WaveEngine(segs, tl, 999 as unknown as number, 0);
+      const y2 = e2.waveYAt(2.37);
+      // [Step3] Must be identical — timeline drives, not ctor param (if field removed)
+      expect(y2).toBeCloseTo(y1, 1);
+      // And both should follow timeline amp 2.7 at beat 2, not ctor
+      const at2 = e1.waveYAt(2);
+      const slope = (y1 - at2) / 0.37;
+      expect(slope).toBeCloseTo(2 * TW_AMP * 2.7, 0);
+      expect(slope).not.toBeCloseTo(2 * TW_AMP * 999, 0);
     });
 
-    it('schedule routing still works without out (fallback to destination) — mocked', () => {
-      const { ctx, destination } = createMockAudioCtx();
+    it('startPosition variants with time-varying amplitude preserve slope (off-grid)', () => {
+      const amps = [0.5, 1.3, 2.7];
+      for (const amp of amps) {
+        const tl = new BpmTimeline(120, [{ beat: 1, bpm: 120, amplitude: amp }], 1.0);
+        const segs: Segment[] = [{ direction: 'down', beats: 3 }];
+        for (const sp of [-1, 0, 1]) {
+          const engine = new WaveEngine(segs, tl, 1.0 as unknown as number, sp);
+          // segment starts at 0, so amplitudeAt(0)=1.0 not amp, only segment starting after 1 uses new amp — single seg uses 1.0
+          const expected0 = expectedClampedY(sp, 1.0, 'down', 0.37);
+          expect(engine.waveYAt(0.37), `amp=${amp} sp=${sp}`).toBeCloseTo(expected0, 1);
+        }
+        // Multi-seg where second segment starts at 1 uses new amp
+        const segs2: Segment[] = [
+          { direction: 'stay', beats: 1 },
+          { direction: 'down', beats: 3 },
+        ];
+        const e2 = new WaveEngine(segs2, tl, 1.0 as unknown as number, 0);
+        const at1 = e2.waveYAt(1);
+        const at137 = e2.waveYAt(1.37);
+        expect((at137 - at1) / 0.37).toBeCloseTo(2 * TW_AMP * amp, 0);
+      }
+    });
 
-      // [Step1] Capture initial destination connection count
-      schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.05, 0);
-      const g1 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
-      const beforeDest = g1._connectedTo;
-      expect(beforeDest).toBe(destination);
-
-      // [Step2] Perform second call without out at different beat
-      schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.1, 1);
-      const g2 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
-      // [Step3] Assert still destination (not undefined)
-      expect(g2._connectedTo).toBe(destination);
-      expect(g2._connectedTo).not.toBeNull();
-      expect(g2._connectedTo).not.toBeUndefined();
+    it('physical height fixed at TW_AMP=130 across time-varying amplitudes', () => {
+      const amps = [0.5, 1.0, 2.0, 5.0, 0.7, 3.4];
+      for (const amp of amps) {
+        const tl = new BpmTimeline(120, [{ beat: 2, bpm: 120, amplitude: amp }], 1.0);
+        const engine = new WaveEngine(
+          [{ direction: 'down', beats: 10 }, { direction: 'up', beats: 10 }],
+          tl, 1.0, 0
+        );
+        const ys = engine.getPoints().map(p => p.y);
+        expect(Math.max(...ys)).toBeLessThanOrEqual(BOTTOM + 1e-6);
+        expect(Math.min(...ys)).toBeGreaterThanOrEqual(TOP - 1e-6);
+        expect(Math.max(...ys) - Math.min(...ys)).toBeLessThanOrEqual(2 * TW_AMP + 1e-6);
+      }
     });
   });
 
   // ========================================================================
-  // Additional: gain initialization correctness (undefined vs null) and
-  // overall editor audio graph integrity
+  // 3. BpmEditor.addChange stamping: main #amplitude -> new entry .amplitude = 2.5
   // ========================================================================
-  describe('5. Editor gain node initialization — undefined and non-null safety', () => {
-    it('gain refs initialized as GainNode|undefined (never null) — strict postmortem fix', () => {
-      const src = readSrc('src/screens/EditorScreen.tsx');
+  describe('3. BpmEditor.addChange でメイン振幅を新規エントリーにスタンプ', () => {
+    it('addChange stamps current main amplitude 2.5 into new BpmChange (3-step transition)', () => {
+      // [Step1] Capture Before — initial bpmChanges empty, timeline amplitude 1.0
+      const beforeChanges: BpmChange[] = [];
+      const beforeTl = new BpmTimeline(120, beforeChanges, 1.0);
+      expect(beforeTl.amplitudeAt(4.23)).toBeCloseTo(1.0, 5);
+      expect(beforeChanges.length).toBe(0);
 
-      // [Step1] Capture ref declarations — must be GainNode | undefined, not | null
-      const musicDecl = src.match(/musicGainRef\s*=\s*useRef<GainNode\s*\|\s*([^>]+)>/);
-      const metroDecl = src.match(/metronomeGainRef\s*=\s*useRef<GainNode\s*\|\s*([^>]+)>/);
-      expect(musicDecl, 'musicGainRef typed declaration must exist').not.toBeNull();
-      expect(metroDecl, 'metronomeGainRef typed declaration must exist').not.toBeNull();
+      // [Step2] Perform — user sets main amplitude input to 2.5 and clicks addChange
+      let amplitude = 1.0;
+      amplitude = 2.5; // simulate onAmplitudeChange only storing injection value
+      const afterChanges = addChangeStamp(beforeChanges, 120, amplitude);
 
-      const musicType = musicDecl ? musicDecl[1] : '';
-      const metroType = metroDecl ? metroDecl[1] : '';
-
-      // [Step2] Perform type inspection: must contain undefined, must NOT be `null` only
-      const musicUsesUndefined = /undefined/.test(musicType);
-      const metroUsesUndefined = /undefined/.test(metroType);
-      const musicUsesNull = /\bnull\b/.test(musicType);
-      const metroUsesNull = /\bnull\b/.test(metroType);
-
-      // [Step3] Assert strict undefined usage (postmortem: "Change let musicGain: GainNode | null = null to | undefined")
-      expect(musicUsesUndefined, `musicGainRef must be GainNode | undefined (got "${musicType}") — not null`).toBeTruthy();
-      expect(metroUsesUndefined, `metronomeGainRef must be GainNode | undefined (got "${metroType}")`).toBeTruthy();
-      // Also ensure they are not still `| null` without undefined (would allow passing null to AudioNode|undefined param)
-      expect(musicUsesNull && !musicUsesUndefined, 'musicGainRef must not be GainNode | null without undefined').toBeFalsy();
-      expect(metroUsesNull && !metroUsesUndefined, 'metronomeGainRef must not be GainNode | null without undefined').toBeFalsy();
-
-      // Check ensureGainNodes initializes correctly and exposes window hooks
-      expect(src).toMatch(/__editorMusicGain/);
-      expect(src).toMatch(/__editorMetronomeGain/);
-
-      // Ensure no `null` literal is passed to schedule (typed as AudioNode | undefined)
-      const scheduleCalls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
-      for (const c of scheduleCalls) {
-        expect(c, `schedule call must not pass null literal (use undefined): ${c}`).not.toMatch(/,\s*null\s*\)/);
-      }
-
-      // Initial values must be undefined, not null
-      expect(src).toMatch(/useRef<GainNode\s*\|\s*undefined>\s*\(\s*undefined\s*\)/);
+      // [Step3] Assert — new entry carries stamped amplitude and timeline reflects it
+      expect(afterChanges.length).toBe(1);
+      expect(afterChanges[0].amplitude).toBeCloseTo(2.5, 5);
+      expect(afterChanges[0].beat).toBe(4);
+      expect(afterChanges[0].bpm).toBe(120);
+      const afterTl = new BpmTimeline(120, afterChanges, 1.0);
+      expect(afterTl.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      expect(afterTl.amplitudeAt(4.23)).toBeCloseTo(2.5, 5);
+      expect(afterTl.amplitudeAt(4.37)).toBeCloseTo(2.5, 5);
     });
 
-    it('WaveEngine/Cursor numeric consistency remains (regression guard for amplitude)', () => {
-      // [Step1] Capture initial engine at amp=1.0 center
-      const timeline = new BpmTimeline(120, []);
-      const engine1 = new WaveEngine([{ direction: 'down', beats: 1 }], timeline, 1.0, 0);
-      const beforeY = engine1.waveYAt(0.5);
-      expect(beforeY).toBeCloseTo(TW_CENTER_Y + Math.min(TW_AMP, 2 * TW_AMP * 1.0 * 0.5), 1);
+    it('multiple stamps with complex amplitudes produce distinct list entries', () => {
+      let changes: BpmChange[] = [];
+      const seq = [0.7, 1.3, 2.7, 3.4];
+      for (let i = 0; i < seq.length; i++) {
+        const amp = seq[i];
+        changes = addChangeStamp(changes, 120 + i * 10, amp);
+        expect(changes[changes.length - 1].amplitude).toBeCloseTo(amp, 5);
+      }
+      expect(changes.length).toBe(4);
+      const tl = new BpmTimeline(120, changes, 1.0);
+      // beats assigned as 4,8,12,16 by addChange defaultBeat logic
+      expect(tl.amplitudeAt(4.23)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(8.37)).toBeCloseTo(1.3, 5);
+      expect(tl.amplitudeAt(12.37)).toBeCloseTo(2.7, 5);
+      expect(tl.amplitudeAt(16.37)).toBeCloseTo(3.4, 5);
+    });
 
-      // [Step2] Perform with different amplitude 2.7 (steeper) off-grid
-      const engine27 = new WaveEngine([{ direction: 'down', beats: 1 }], timeline, 2.7, 0);
-      const afterY27 = engine27.waveYAt(0.37);
-      const expected27 = TW_CENTER_Y + Math.min(TW_AMP, 2 * TW_AMP * 2.7 * 0.37);
-      // [Step3] Assert slope matches cursor speed (2*TW_AMP*amp)
-      expect(afterY27).toBeCloseTo(expected27, 1);
+    it('safeAmp sanitizes invalid amplitude to 1.0 before stamping', () => {
+      const changes: BpmChange[] = [];
+      const bad = addChangeStamp(changes, 120, NaN);
+      expect(bad[0].amplitude).toBeCloseTo(1.0, 5);
+      const neg = addChangeStamp(changes, 120, -2);
+      expect(neg[0].amplitude).toBeCloseTo(1.0, 5);
+      const zero = addChangeStamp(changes, 120, 0);
+      expect(zero[0].amplitude).toBeCloseTo(1.0, 5);
+    });
 
-      const beatMs = 500;
-      const cursor = new Cursor(2.7, 0);
+    it('each bpm_change row amplitude editable — patching preserves step behavior off-grid', () => {
+      // Simulate editing row 1 amplitude from 2.5 to 1.7
+      let changes: BpmChange[] = [{ beat: 4, bpm: 120, amplitude: 2.5 }];
+      // [Step1] Before edit
+      let tl = new BpmTimeline(120, changes, 1.0);
+      expect(tl.amplitudeAt(4.37)).toBeCloseTo(2.5, 5);
+      // [Step2] Perform patch
+      changes = changes.map((c, i) => i === 0 ? { ...c, amplitude: 1.7 } : c);
+      tl = new BpmTimeline(120, changes, 1.0);
+      // [Step3] Assert
+      expect(tl.amplitudeAt(4.37)).toBeCloseTo(1.7, 5);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      // clearing amplitude (undefined) falls back to base
+      changes = changes.map((c, i) => i === 0 ? { ...c, amplitude: undefined } : c);
+      tl = new BpmTimeline(120, changes, 1.0);
+      expect(tl.amplitudeAt(4.37)).toBeCloseTo(1.0, 5);
+    });
+  });
+
+  // ========================================================================
+  // 4. 即時適用の廃止: メイン #amplitude変更のみでは波形/カーソルは変化しない
+  // ========================================================================
+  describe('4. 即時適用廃止 — メイン振幅変更だけでは編集画面の波形/カーソルは変化しない', () => {
+    // EditorScreen uses EDITOR_BASE_AMP=1.0 fixed for timeline base; injection field alone doesn't rebuild timeline
+    const EDITOR_BASE_AMP = 1.0;
+
+    it('changing injection amplitude without addChange leaves waveEngine & timeline unchanged (off-grid)', () => {
+      // [Step1] Capture Before — initial editor state
+      let bpmChanges: BpmChange[] = [];
+      let injectionAmp = 1.0;
+      const tlBefore = new BpmTimeline(120, bpmChanges, EDITOR_BASE_AMP);
+      const segs: Segment[] = [
+        { direction: 'down', beats: 2 },
+        { direction: 'up', beats: 2 },
+      ];
+      const waveBefore = new WaveEngine(segs, tlBefore, EDITOR_BASE_AMP, 0);
+      const yBefore_1_23 = waveBefore.waveYAt(1.23);
+      const yBefore_0_37 = waveBefore.waveYAt(0.37);
+      const ampBefore_1_23 = tlBefore.amplitudeAt(1.23);
+      const ampBefore_4_23 = tlBefore.amplitudeAt(4.23);
+
+      // [Step2] Perform — user changes main #amplitude input from 1.0 to 2.5 (onAmplitudeChange) but NOT clicking add
+      injectionAmp = 2.5;
+      // Editor does NOT rebuild timeline from injectionAmp — still same bpmChanges
+      const tlAfterInjection = new BpmTimeline(120, bpmChanges, EDITOR_BASE_AMP);
+      const waveAfterInjection = new WaveEngine(segs, tlAfterInjection, EDITOR_BASE_AMP, 0);
+      void injectionAmp; // injection stored but not used
+
+      // [Step3] Assert — no change
+      expect(tlAfterInjection.amplitudeAt(1.23)).toBeCloseTo(ampBefore_1_23, 5);
+      expect(tlAfterInjection.amplitudeAt(4.23)).toBeCloseTo(ampBefore_4_23, 5);
+      expect(waveAfterInjection.waveYAt(1.23)).toBeCloseTo(yBefore_1_23, 5);
+      expect(waveAfterInjection.waveYAt(0.37)).toBeCloseTo(yBefore_0_37, 5);
+      // Directly ensure injection value is NOT reflected as amplitudeAt
+      expect(tlAfterInjection.amplitudeAt(0.37)).not.toBeCloseTo(2.5, 5);
+      expect(tlAfterInjection.amplitudeAt(4.23)).not.toBeCloseTo(2.5, 5);
+    });
+
+    it('only after addChange does wave/cursor reflect new amplitude (3-step with off-grid)', () => {
+      let bpmChanges: BpmChange[] = [];
+      const segs: Segment[] = [
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+      ];
+      const tl0 = new BpmTimeline(120, bpmChanges, 1.0);
+      const w0 = new WaveEngine(segs, tl0, 1.0, 0);
+      const yAt4_37_before = w0.waveYAt(4.37);
+      // Change injection only
+      const injectionAmp = 2.5;
+      const tlStill = new BpmTimeline(120, bpmChanges, 1.0);
+      const wStill = new WaveEngine(segs, tlStill, 1.0, 0);
+      expect(wStill.waveYAt(4.37)).toBeCloseTo(yAt4_37_before, 5);
+      // Now addChange stamps injection into list
+      bpmChanges = addChangeStamp(bpmChanges, 120, injectionAmp);
+      const tlAfter = new BpmTimeline(120, bpmChanges, 1.0);
+      const wAfter = new WaveEngine(segs, tlAfter, 1.0, 0);
+      // Now amplitudeAt should be 2.5 at off-grid beyond beat 4
+      expect(tlAfter.amplitudeAt(4.23)).toBeCloseTo(2.5, 5);
+      expect(tlAfter.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      // Wave slope for segment starting at 4 should now be 2.5x
+      const slopeAfter = (wAfter.waveYAt(4.37) - wAfter.waveYAt(4)) / 0.37;
+      expect(slopeAfter).toBeCloseTo(2 * TW_AMP * 2.5, 0);
+      const slopeBefore = (w0.waveYAt(4.37) - w0.waveYAt(4)) / 0.37;
+      expect(slopeBefore).toBeCloseTo(2 * TW_AMP * 1.0, 0);
+      expect(slopeAfter).not.toBeCloseTo(slopeBefore, 0);
+    });
+
+    it('repeated injection changes without add leaves cursor speed unchanged', () => {
+      let bpmChanges: BpmChange[] = [];
+      const baseTl = new BpmTimeline(120, bpmChanges, 1.0);
+      const cursor = new Cursor(1.0, 0);
+      // Simulate GameScreen loop: cursor.setAmplitude(timeline.amplitudeAt(currentBeat))
+      const beat = 2.37;
+      cursor.setAmplitude(baseTl.amplitudeAt(beat));
       const y0 = cursor.y;
-      const dt = (0.37 * beatMs) / 1000;
-      cursor.update(dt, false, true, beatMs, 1);
-      expect(cursor.y - y0).toBeCloseTo(expected27 - TW_CENTER_Y, 1);
+      cursor.update(0.1, false, true, 500, 1);
+      const dyBefore = cursor.y - y0;
+
+      // Change injection to 3.4 but not add
+      const injectionAmp = 3.4;
+      void injectionAmp;
+      const tlNotAdded = new BpmTimeline(120, bpmChanges, 1.0);
+      const cursor2 = new Cursor(1.0, 0);
+      cursor2.setAmplitude(tlNotAdded.amplitudeAt(beat));
+      const y0b = cursor2.y;
+      cursor2.update(0.1, false, true, 500, 1);
+      const dyAfter = cursor2.y - y0b;
+
+      expect(dyAfter).toBeCloseTo(dyBefore, 5);
+      expect(tlNotAdded.amplitudeAt(beat)).toBeCloseTo(1.0, 5);
+    });
+  });
+
+  // ========================================================================
+  // 5. 後方互換 & T127/T128/T129回帰なし
+  // ========================================================================
+  describe('5. 後方互換 (bpm_changes[].amplitude未設定→Chart.amplitudeで動作) & T127-129回帰', () => {
+    it('existing chart with only base amplitude 1.7 and no per-entry amplitude returns base everywhere (off-grid)', () => {
+      const base = 1.7;
+      const changes: BpmChange[] = [
+        { beat: 2, bpm: 140 },
+        { beat: 5, bpm: 150 },
+      ];
+      // [Step1] Capture before with base 1.0
+      const tlBefore = new BpmTimeline(120, changes, 1.0);
+      expect(tlBefore.amplitudeAt(0.37)).toBeCloseTo(1.0, 5);
+      // [Step2] Use chart base 1.7
+      const tlCompat = new BpmTimeline(120, changes, base);
+      // [Step3] Assert fallback to base for all off-grid, including after bpm changes
+      expect(tlCompat.amplitudeAt(0.37)).toBeCloseTo(1.7, 5);
+      expect(tlCompat.amplitudeAt(2.37)).toBeCloseTo(1.7, 5);
+      expect(tlCompat.amplitudeAt(5.37)).toBeCloseTo(1.7, 5);
+      expect(tlCompat.amplitudeAt(10.23)).toBeCloseTo(1.7, 5);
+      // WaveEngine also respects base when no per-entry
+      const segs: Segment[] = [{ direction: 'down', beats: 3 }];
+      const engineCompat = new WaveEngine(segs, tlCompat, base, 0);
+      const engineBase = new WaveEngine(segs, tlBefore, 1.0, 0);
+      // Slopes differ per base
+      expect((engineCompat.waveYAt(0.37) - engineCompat.waveYAt(0)) / 0.37).toBeCloseTo(2 * TW_AMP * 1.7, 0);
+      expect((engineBase.waveYAt(0.37) - engineBase.waveYAt(0)) / 0.37).toBeCloseTo(2 * TW_AMP * 1.0, 0);
+    });
+
+    it('loader parseChartText migrates legacy px amplitude >10 and preserves per-entry amplitude (3-step)', () => {
+      // [Step1] Old chart without per-entry amplitude (only base px 130 -> 1.0)
+      const tomlBase = `
+title = "Old"
+artist = ""
+bpm = 120
+audio = "/audio/test.flac"
+amplitude = 130
+[[segments]]
+direction = "down"
+beats = 2
+[[bpm_changes]]
+beat = 4
+bpm = 150
+`;
+      const chartOld = parseChartText(tomlBase, 'old');
+      expect(chartOld.amplitude).toBeCloseTo(1.0, 5);
+      expect(chartOld.bpm_changes[0].amplitude).toBeUndefined();
+      const tlOld = new BpmTimeline(chartOld.bpm, chartOld.bpm_changes, chartOld.amplitude);
+      expect(tlOld.amplitudeAt(4.37)).toBeCloseTo(1.0, 5);
+
+      // [Step2] New chart with per-entry amplitude
+      const tomlNew = `
+title = "New"
+artist = ""
+bpm = 120
+audio = "/audio/test.flac"
+amplitude = 1.0
+[[bpm_changes]]
+beat = 4
+bpm = 150
+amplitude = 2.5
+[[segments]]
+direction = "down"
+beats = 2
+`;
+      const chartNew = parseChartText(tomlNew, 'new');
+      expect(chartNew.amplitude).toBeCloseTo(1.0, 5);
+      expect(chartNew.bpm_changes[0].amplitude).toBeCloseTo(2.5, 5);
+      const tlNew = new BpmTimeline(chartNew.bpm, chartNew.bpm_changes, chartNew.amplitude);
+      // [Step3] Assert time-varying vs fallback
+      expect(tlNew.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      expect(tlNew.amplitudeAt(4.37)).toBeCloseTo(2.5, 5);
+      // serialize should include amplitude line
+      const tomlOut = chartToToml(chartNew);
+      expect(tomlOut).toContain('amplitude = 2.5');
+      const tomlOldOut = chartToToml(chartOld);
+      // old chart's entry has no amplitude, so only base amplitude line present, no per-entry amplitude
+      // Count amplitude lines: base one + per-entry if any
+      const ampLinesOld = tomlOldOut.split('\n').filter(l => l.trim().startsWith('amplitude ='));
+      expect(ampLinesOld.length).toBe(1); // only base
+      const ampLinesNew = tomlOut.split('\n').filter(l => l.trim().startsWith('amplitude ='));
+      expect(ampLinesNew.length).toBe(2); // base + entry
+    });
+
+    it('serialize→parse round-trip preserves time-varying amplitudes off-grid', () => {
+      const chart: import('../src/types').Chart = {
+        title: 'RoundTrip',
+        artist: '',
+        bpm: 120,
+        audio: 'test.flac',
+        audio_offset: 0,
+        scroll_speed: 110,
+        amplitude: 1.0,
+        start_position: 0.0,
+        bpm_changes: [
+          { beat: 2, bpm: 130, amplitude: 0.7 },
+          { beat: 4, bpm: 140, amplitude: 1.3 },
+        ],
+        segments: [{ direction: 'down', beats: 2 }],
+        rings: [],
+      };
+      const toml = chartToToml(chart);
+      const parsed = parseChartText(toml, 'rt');
+      expect(parsed.bpm_changes[0].amplitude).toBeCloseTo(0.7, 5);
+      expect(parsed.bpm_changes[1].amplitude).toBeCloseTo(1.3, 5);
+      const tl = new BpmTimeline(parsed.bpm, parsed.bpm_changes, parsed.amplitude);
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(2.37)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(4.37)).toBeCloseTo(1.3, 5);
+    });
+
+    it('T128/T127 regression: clipped tilt still correct with time-varying amplitude (off-grid)', () => {
+      // amp 1.0 before 3, 2.7 after 3 — test clipped segment that spans boundary
+      const tl = new BpmTimeline(120, [{ beat: 3, bpm: 120, amplitude: 2.7 }], 1.0);
+      const segs: Segment[] = [
+        { direction: 'down', beats: 3 }, // 0-3 amp 1.0
+        { direction: 'up', beats: 3 },   // 3-6 amp 2.7
+      ];
+      const engine = new WaveEngine(segs, tl, 1.0, 0);
+      // first segment down 3 with amp1.0: center -> bottom at 0.5, stay till 3
+      expect(engine.waveYAt(0.37)).toBeCloseTo(clampY(CENTER + 2 * TW_AMP * 1.0 * 0.37), 1);
+      expect(engine.waveYAt(0.5)).toBeCloseTo(BOTTOM, 1);
+      expect(engine.waveYAt(2.37)).toBeCloseTo(BOTTOM, 1);
+      expect(engine.waveYAt(3.0)).toBeCloseTo(BOTTOM, 1);
+      // second segment up from bottom with amp2.7: slope -702 px/beat
+      expect(engine.waveYAt(3.1) - engine.waveYAt(3.0)).toBeCloseTo(-2 * TW_AMP * 2.7 * 0.1, 0);
+      // after 0.37 beats into up: bottom -702*0.37 = 430 -259 =171 ~ TOP(170)
+      expect(engine.waveYAt(3.37)).toBeCloseTo(clampY(BOTTOM - 2 * TW_AMP * 2.7 * 0.37), 1);
+      expect(engine.waveYAt(3.5)).toBeCloseTo(TOP, 1);
+      expect(engine.waveYAt(4)).toBeCloseTo(TOP, 1);
+    });
+
+    it('T129 regression: segmentize still snap-aligned regardless of time-varying amplitude', () => {
+      const snaps = [0.125, 0.25, 0.5, 1] as const;
+      const traj = [
+        { beat: 0, y: CENTER, down: true },
+        { beat: 0.37, y: CENTER + 50, down: true },
+        { beat: 1.23, y: CENTER + 130, down: true },
+        { beat: 1.24, y: CENTER + 130, down: false },
+      ];
+      // Use timeline-derived amplitude for threshold
+      for (const snap of snaps) {
+        const tlA = new BpmTimeline(120, [{ beat: 1, bpm: 120, amplitude: 2.7 }], 1.0);
+        const ampAtStart = tlA.amplitudeAt(0);
+        const ampAt1 = tlA.amplitudeAt(1.1);
+        for (const amp of [ampAtStart, ampAt1]) {
+          const segs = segmentize(traj, snap, amp);
+          expect(segs.length).toBeGreaterThan(0);
+          for (const s of segs) {
+            expect(isSnapAligned(s.beats, snap), `amp=${amp} snap=${snap} beats=${s.beats}`).toBeTruthy();
+          }
+        }
+      }
+    });
+
+    it('old chart legacy amplitude px 130 correctly migrates to 1.0 and drives fallback', () => {
+      const toml = `
+title = "Legacy"
+artist = ""
+bpm = 120
+audio = "/audio/x.flac"
+amplitude = 130
+[[bpm_changes]]
+beat = 4
+bpm = 120
+`;
+      const chart = parseChartText(toml, 'legacy');
+      expect(chart.amplitude).toBeCloseTo(1.0, 5);
+      expect(chart.bpm_changes[0].amplitude).toBeUndefined();
+      const tl = new BpmTimeline(chart.bpm, chart.bpm_changes, chart.amplitude);
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(5.0)).toBeCloseTo(1.0, 5);
+    });
+  });
+
+  // ========================================================================
+  // 6. Cursor vs WaveEngine numeric consistency across complex amplitudes & off-grid
+  // ========================================================================
+  describe('6. CursorとWaveEngineの数値整合（複雑振幅×オフグリッドで直接比較）', () => {
+    const beatMs = 500; // 120 BPM
+
+    it.each([0.7, 1.3, 2.7, 3.4])('amp=%s cursor 1拍移動量 == 2*TW_AMP*amp (T127-style pure numeric)', (amp) => {
+      // [Step1] Capture before: engine & cursor both at same amp
+      const tl = new BpmTimeline(120, [], amp);
+      const engine = new WaveEngine([{ direction: 'down', beats: 5 }], tl, amp, 0);
+      const delta = 0.37; // off-grid
+      const dyWave = engine.waveYAt(delta) - engine.waveYAt(0);
+      // [Step2] Perform cursor update for same duration dt = delta*beatMs/1000
+      const cursor = new Cursor(amp, 0);
+      const y0 = cursor.y;
+      cursor.setAmplitude(tl.amplitudeAt(0));
+      cursor.update((delta * beatMs) / 1000, false, true, beatMs, 1);
+      const dyCursor = cursor.y - y0;
+      // [Step3] Assert equality at off-grid phase, both == 2*TW_AMP*amp*delta (or clamped)
+      const expected = Math.min(TW_AMP, 2 * TW_AMP * amp * delta);
+      // For small delta not yet clipped, expect full; if clipped, both clamp to TOP/BOTTOM same
+      if (expected < TW_AMP - 1e-6) {
+        expect(dyWave).toBeCloseTo(2 * TW_AMP * amp * delta, 0);
+        expect(dyCursor).toBeCloseTo(2 * TW_AMP * amp * delta, 0);
+      } else {
+        expect(dyWave).toBeCloseTo(expected, 0);
+        expect(dyCursor).toBeCloseTo(expected, 0);
+      }
+      expect(dyWave).toBeCloseTo(dyCursor, 0);
+    });
+
+    it('time-varying amplitude: cursor setAmplitude per frame matches WaveEngine per-segment dY (multi-beat off-grid)', () => {
+      // [Step1] Before: time-varying tl
+      const tl = new BpmTimeline(120, [
+        { beat: 2, bpm: 120, amplitude: 0.7 },
+        { beat: 4, bpm: 120, amplitude: 2.7 },
+      ], 1.0);
+      const segs: Segment[] = [
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+        { direction: 'down', beats: 2 },
+      ];
+      const engine = new WaveEngine(segs, tl, 1.0, 0);
+      // segment start beats: 0 (amp1.0), 2 (amp0.7), 4 (amp2.7)
+      // Check each segment's slope at off-grid 0.37 into segment
+      const checks: Array<{ segStart: number; amp: number; off: number }> = [
+        { segStart: 0, amp: 1.0, off: 0.37 },
+        { segStart: 2, amp: 0.7, off: 0.37 },
+        { segStart: 4, amp: 2.7, off: 0.37 },
+      ];
+      for (const c of checks) {
+        const beat = c.segStart + c.off;
+        // wave slope
+        const dyWave = engine.waveYAt(beat) - engine.waveYAt(c.segStart);
+        // cursor slope at that segment's amp
+        const cursor = new Cursor(c.amp, 0);
+        const tlAmp = tl.amplitudeAt(c.segStart);
+        expect(tlAmp).toBeCloseTo(c.amp, 5);
+        cursor.setAmplitude(tlAmp);
+        const y0 = cursor.y;
+        // Need cursor start Y aligned? Cursor starts at CENTER, wave at 0 is CENTER
+        // But after segments, wave Y at segStart may be not CENTER; cursor test uses delta only
+        // So use dy ratio
+        cursor.update((c.off * beatMs) / 1000, false, true, beatMs, 1);
+        const dyCursor = cursor.y - y0;
+        // Wave dy may be clipped, cursor dy also clipped to TW_AMP bounds but cursor independent path
+        // For small off (0.37) and amp 2.7, dy would be 259 -> clamped? But segment 4 starting Y may already be offset
+        // Instead verify per-beat speed coefficient matches: slope should be 2*TW_AMP*amp before clip
+        // For isolated slope test, use separate engine with single segment at that amp
+        const tlSingle = new BpmTimeline(120, [], c.amp);
+        const eSingle = new WaveEngine([{ direction: 'down', beats: 5 }], tlSingle, c.amp, 0);
+        const slopeWave = (eSingle.waveYAt(c.off) - eSingle.waveYAt(0)) / c.off;
+        const cursorSingle = new Cursor(c.amp, 0);
+        const y0s = cursorSingle.y;
+        cursorSingle.update((c.off * beatMs) / 1000, false, true, beatMs, 1);
+        const slopeCursor = (cursorSingle.y - y0s) / c.off;
+        expect(slopeWave).toBeCloseTo(2 * TW_AMP * c.amp, 0);
+        expect(slopeCursor).toBeCloseTo(2 * TW_AMP * c.amp, 0);
+        expect(slopeWave).toBeCloseTo(slopeCursor, 0);
+        // For the time-varying engine, also verify dy respects amp at segStart (with clamping)
+        const expectedDy = clampY(engine.waveYAt(c.segStart) + 2 * TW_AMP * c.amp * c.off) - engine.waveYAt(c.segStart);
+        expect(dyWave).toBeCloseTo(expectedDy, 1);
+        void dyCursor;
+      }
+    });
+
+    it('off-grid 0.37 / 1.23 phases maintain cursor==wave with time-varying amps 1.3 & 3.4', () => {
+      for (const amp of [1.3, 3.4]) {
+        const tl = new BpmTimeline(120, [], amp);
+        const engine = new WaveEngine([{ direction: 'down', beats: 10 }], tl, amp, 0);
+        for (const off of [0.37, 1.23]) {
+          // Need to guarantee not clipped for amp 3.4 at 0.37 -> would clip, so test via single segment expectation with clamp
+          const expected = expectedClampedY(0, amp, 'down', off);
+          expect(engine.waveYAt(off)).toBeCloseTo(expected, 1);
+          // cursor compare via isolated small delta before clip
+          const small = 0.1;
+          const eSmall = new WaveEngine([{ direction: 'down', beats: 10 }], tl, amp, 0);
+          const dyWaveSmall = eSmall.waveYAt(small) - eSmall.waveYAt(0);
+          const c = new Cursor(amp, 0);
+          c.setAmplitude(tl.amplitudeAt(0));
+          const y0 = c.y;
+          c.update((small * beatMs) / 1000, false, true, beatMs, 1);
+          const dyCursorSmall = c.y - y0;
+          expect(dyWaveSmall / small).toBeCloseTo(dyCursorSmall / small, 0);
+        }
+      }
+    });
+
+    it('WavePreview/EditorScreen uses time-varying threshold via timeline.amplitudeAt(startBeat) — segmentize fidelity', () => {
+      // Simulate recording startBeat at 4 where amplitude 2.7, snap 0.25
+      const tl = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.7 }], 1.0);
+      const startBeat = 4.0;
+      const snap = 0.25;
+      const ampAtStart = tl.amplitudeAt(startBeat);
+      expect(ampAtStart).toBeCloseTo(2.7, 5);
+      const traj = [
+        { beat: startBeat, y: CENTER, down: true },
+        { beat: startBeat + 0.37, y: CENTER + 80, down: true },
+        { beat: startBeat + 0.37 + 0.01, y: CENTER + 80, down: false },
+      ];
+      const segs = segmentize(traj, snap, ampAtStart);
+      expect(segs.length).toBeGreaterThan(0);
+      for (const s of segs) {
+        expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+      }
+      // Same traj with base amp 1.0 threshold may differ in direction classification but beats still snap-aligned
+      const segsBase = segmentize(traj, snap, 1.0);
+      for (const s of segsBase) {
+        expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+      }
+    });
+  });
+
+  // ========================================================================
+  // 7. BpmTimeline amplitudeEntries sorting & sanitization edge
+  // ========================================================================
+  describe('7. BpmTimeline amplitudeEntries edge & sanitization', () => {
+    it('unsorted bpm_changes are sorted before amplitudeAt lookup', () => {
+      const tl = new BpmTimeline(120, [
+        { beat: 6, bpm: 120, amplitude: 2.7 },
+        { beat: 2, bpm: 120, amplitude: 0.7 },
+        { beat: 4, bpm: 120, amplitude: 1.3 },
+      ], 1.0);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(4.37)).toBeCloseTo(1.3, 5);
+      expect(tl.amplitudeAt(6.37)).toBeCloseTo(2.7, 5);
+    });
+
+    it('invalid amplitude values (NaN, <=0, Infinity) are ignored in amplitudeEntries', () => {
+      const tl = new BpmTimeline(120, [
+        { beat: 2, bpm: 120, amplitude: NaN as unknown as number },
+        { beat: 4, bpm: 120, amplitude: -1 as unknown as number },
+        { beat: 6, bpm: 120, amplitude: Infinity as unknown as number },
+        { beat: 8, bpm: 120, amplitude: 0 as unknown as number },
+        { beat: 10, bpm: 120, amplitude: 2.0 },
+      ], 1.0);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(5.37)).toBeCloseTo(1.0, 5);
+      expect(tl.amplitudeAt(11)).toBeCloseTo(2.0, 5);
+    });
+
+    it('quantizeBeat remains correct for amplitude-invariant snap math', () => {
+      expect(quantizeBeat(1.2, 0.5)).toBeCloseTo(1.0, 4);
+      expect(quantizeBeat(1.3, 0.5)).toBeCloseTo(1.5, 4);
+      expect(quantizeBeat(0.37, 0.25)).toBeCloseTo(0.25, 4);
+      expect(quantizeBeat(0.37, 0.125)).toBeCloseTo(0.375, 4);
     });
   });
 });

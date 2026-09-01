@@ -19,7 +19,12 @@ function parseBpmChanges(v: unknown): BpmChange[] {
   return v
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
     .filter((item) => isFiniteNumber(item.beat) && item.beat > 0 && isFiniteNumber(item.bpm) && item.bpm > 0)
-    .map((item) => ({ beat: item.beat as number, bpm: item.bpm as number }));
+    .map((item) => ({
+      beat: item.beat as number,
+      bpm: item.bpm as number,
+      // T131: preserve per-entry amplitude (speed coefficient) when set
+      amplitude: isFiniteNumber(item.amplitude) && (item.amplitude as number) > 0 ? (item.amplitude as number) : undefined,
+    }));
 }
 
 function parseRings(v: unknown): RingDef[] {

@@ -713,9 +713,16 @@
       "finished": 1788261635.0127058
     },
     "T131": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1788261635.0153182
+      "started": 1788261635.0153182,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_fa340539affeuh6vN4sPb1EM9A",
+        "coder": "ses_fa33eacf4ffeBNjaGolFLbpvYk",
+        "postmortem": "ses_fa3439462ffeCDGzV46HT0JuiE"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

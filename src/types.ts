@@ -1,5 +1,5 @@
 export interface Segment { direction: 'up' | 'down' | 'stay'; beats: number; }
-export interface BpmChange { beat: number; bpm: number; }
+export interface BpmChange { beat: number; bpm: number; amplitude?: number; }
 export interface RingDef {
   beat: number;
   duration?: number;

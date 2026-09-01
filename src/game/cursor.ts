@@ -7,7 +7,7 @@ function sanitizeStartPosition(v: unknown): number {
 
 export class Cursor {
   y: number;
-  private readonly amplitude: number;
+  private amplitude: number;
 
   constructor(amplitude = 1.0, startPosition = 0) {
     this.amplitude = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0;
@@ -15,10 +15,20 @@ export class Cursor {
     this.y = TW_CENTER_Y - sp * TW_AMP;
   }
 
+  /**
+   * T131: Set the current amplitude (speed coefficient) each frame from the
+   * timeline's time-varying value (bpm_changes[].amplitude list).
+   */
+  setAmplitude(amplitude: number): void {
+    if (Number.isFinite(amplitude) && amplitude >= 0) {
+      this.amplitude = amplitude;
+    }
+  }
+
   update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, _segmentBeats = 1): void {
     const waveTop = TW_CENTER_Y - TW_AMP;
     const waveBottom = TW_CENTER_Y + TW_AMP;
-    // T127: amplitude is speed coefficient (higher amplitude = faster/steeper).
+    // T127/T131: amplitude is speed coefficient (higher amplitude = faster/steeper).
     // Physical height fixed at TW_AMP; speed scales with amplitude.
     const speed = (2 * TW_AMP * this.amplitude) / (beatMs / 1000);
     let delta = 0;

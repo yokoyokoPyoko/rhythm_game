@@ -224,7 +224,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           }
         }
         await audioMgr.ensure()
-        const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes)
+        const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes, chart.amplitude)
         chartRef.current = chart
         timelineRef.current = timeline
         waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)
@@ -311,6 +311,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
 
       const currentBeat = timeline.msToBeat(songTimeMs)
       const currentBeatMs = timeline.beatMsAt(currentBeat)
+      // T131: time-varying amplitude — cursor speed follows the bpm_changes amplitude list
+      cursorRef.current.setAmplitude(timeline.amplitudeAt(currentBeat))
       cursorRef.current.update(
         dt,
         keysRef.current.up,

@@ -8,6 +8,10 @@ const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
 const STAY_COLOR = '#fbbf24'
 const SELECT_COLOR = '#ededed'
+// T131: the preview is list-driven by bpm_changes[].amplitude. It renders with a
+// fixed base amplitude (matching the editor) so editing the main #amplitude input
+// does not immediately change the wave.
+const EDITOR_BASE_AMP = 1.0
 
 export interface WaveView {
   startBeat: number
@@ -127,10 +131,9 @@ export default function WavePreview({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cssW, cssH)
 
-    const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
     const startPosNorm = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-    const engine = new WaveEngine(segments, timeline, ampNorm, startPosNorm)
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosNorm)
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H
@@ -427,9 +430,8 @@ export default function WavePreview({
         const x = e.clientX - rect.left
         let beat = xToBeatLocal(x, rect.width)
         beat = Math.round(beat / safeSnap) * safeSnap
-        const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-        const engineTmp = new WaveEngine(segments, timeline, ampNorm, startPosition)
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
         const pts = engineTmp.getPoints()
         const idx = vertexDragRef.current.index
         if (idx <= 0 || idx >= pts.length - 1) {
@@ -458,7 +460,7 @@ export default function WavePreview({
           return s
         })
         // Ensure the candidate respects WaveEngine clamping by constructing an engine and reading back Y
-        const candidateEngine = new WaveEngine(candidateSegs, timeline, ampNorm, startPosition)
+        const candidateEngine = new WaveEngine(candidateSegs, timeline, EDITOR_BASE_AMP, startPosition)
         // candidateEngine.waveYAt(clamped) is the amplitude-consistent Y; no direct mouse Y is used
         void candidateEngine.waveYAt(clamped)
         onSegmentsChange(candidateSegs)
@@ -536,9 +538,8 @@ export default function WavePreview({
     if (!canvas) return -1
     const rect = canvas.getBoundingClientRect()
     const g = geoRef.current
-    const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-    const engine = new WaveEngine(segments, timeline, ampNorm, startPosition)
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
     const pts = engine.getPoints()
     const centerY = RULER_H + (rect.height - RULER_H) / 2
     const fieldH = rect.height - RULER_H
@@ -567,9 +568,8 @@ export default function WavePreview({
     if (!canvas) return -1
     const rect = canvas.getBoundingClientRect()
     const g = geoRef.current
-    const ampNorm = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges)
-    const engine = new WaveEngine(segments, timeline, ampNorm, startPosition)
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
     const pts = engine.getPoints()
     const centerY = RULER_H + (rect.height - RULER_H) / 2
     const fieldH = rect.height - RULER_H

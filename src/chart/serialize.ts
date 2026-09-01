@@ -25,7 +25,12 @@ export function chartToToml(chart: Chart): string {
     lines.push(`bpm_changes = []`)
   } else {
     for (const change of chart.bpm_changes) {
-      lines.push('', '[[bpm_changes]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`)
+      const changeLines = ['', '[[bpm_changes]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`]
+      // T131: output per-entry amplitude (speed coefficient) only when set
+      if (typeof change.amplitude === 'number' && Number.isFinite(change.amplitude) && change.amplitude > 0) {
+        changeLines.push(`amplitude = ${fmt(change.amplitude)}`)
+      }
+      lines.push(...changeLines)
     }
   }
 

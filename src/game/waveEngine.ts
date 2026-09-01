@@ -34,17 +34,15 @@ function sanitizeDirection(value: unknown): 'up' | 'down' | 'stay' {
 export class WaveEngine {
   private readonly timeline: BpmTimeline;
   private readonly points: WavePoint[];
-  private readonly amplitude: number;
   private readonly startPosition: number;
 
   constructor(
     segments: Segment[],
     bpmTimeline: BpmTimeline,
-    amplitude = 1.0,
+    _amplitude = 1.0,
     startPosition = 0.0,
   ) {
     this.timeline = bpmTimeline;
-    this.amplitude = Number.isFinite(amplitude) && amplitude >= 0 ? amplitude : 1.0;
     this.startPosition = sanitizeStartPosition(startPosition);
     this.points = this.buildPoints(segments ?? []);
   }
@@ -53,9 +51,12 @@ export class WaveEngine {
     const waveTop = TW_CENTER_Y - TW_AMP;
     const waveBottom = TW_CENTER_Y + TW_AMP;
     const startY = TW_CENTER_Y - this.startPosition * TW_AMP;
-    const perBeatPx = 2 * TW_AMP * this.amplitude;
-    const dYOf = (dir: 'up' | 'down' | 'stay') =>
-      dir === 'up' ? -perBeatPx : dir === 'down' ? perBeatPx : 0;
+    const ampAt = (beat: number) => this.timeline.amplitudeAt(beat);
+    const perBeatPx = (beat: number) => 2 * TW_AMP * ampAt(beat);
+    const dYOf = (beat: number, dir: 'up' | 'down' | 'stay') => {
+      const pp = perBeatPx(beat);
+      return dir === 'up' ? -pp : dir === 'down' ? pp : 0;
+    };
 
     const validSegs: { beats: number; dir: 'up' | 'down' | 'stay' }[] = [];
     for (const seg of segments ?? []) {
@@ -69,28 +70,32 @@ export class WaveEngine {
       validSegs.push({ beats, dir: sanitizeDirection(seg.direction) });
     }
 
-    // T127/T128: amplitude is speed coefficient. Per-beat displacement = 2*TW_AMP*amplitude.
+    // T127/T128/T131: amplitude is a speed coefficient. Per-beat displacement
+    // = 2*TW_AMP*amplitudeAt(segStartBeat) — the amplitude is time-varying and
+    // driven by the bpm_changes list (step function via BpmTimeline.amplitudeAt).
     // Segment total displacement = perBeatPx * beats, clamped to [waveTop, waveBottom].
     // points[k] is the start vertex of segment k, so its dY = dY of segment k.
     const points: WavePoint[] = [];
     points.push({
       beat: 0,
       y: startY,
-      dY: validSegs.length > 0 ? dYOf(validSegs[0].dir) : 0,
+      dY: validSegs.length > 0 ? dYOf(0, validSegs[0].dir) : 0,
     });
     let beat = 0;
     let currentY = startY;
     for (let k = 0; k < validSegs.length; k++) {
       const vs = validSegs[k];
+      const segStartBeat = beat;
       beat += vs.beats;
-      const delta = perBeatPx * vs.beats;
+      const delta = perBeatPx(segStartBeat) * vs.beats;
       if (vs.dir === 'up') {
         currentY = Math.max(waveTop, Math.min(waveBottom, currentY - delta));
       } else if (vs.dir === 'down') {
         currentY = Math.max(waveTop, Math.min(waveBottom, currentY + delta));
       }
       // stay: no change
-      const nextDY = k + 1 < validSegs.length ? dYOf(validSegs[k + 1].dir) : 0;
+      const nextStartBeat = beat;
+      const nextDY = k + 1 < validSegs.length ? dYOf(nextStartBeat, validSegs[k + 1].dir) : 0;
       points.push({ beat, y: currentY, dY: nextDY });
     }
     if (points.length === 1) {
