@@ -720,7 +720,8 @@
       "sessions": {
         "qa": "ses_fa340539affeuh6vN4sPb1EM9A",
         "coder": "ses_fa33b9b6effek5BM1ogtbtkGjl",
-        "postmortem": "ses_fa33d3666ffeOOCeA808Sq7KYR"
+        "postmortem": "ses_fa33d3666ffeOOCeA808Sq7KYR",
+        "reviewer": "ses_fa332f483ffePSz3Y0PoCnqUUo"
       },
       "gate_b_golden": true
     }
