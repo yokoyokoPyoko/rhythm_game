@@ -1131,6 +1131,37 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T132] エディタ録音時の判定オフセット（`</>`微調整＋エディタ内キャリブレーション）
+
+**背景**: 環境によってスペースキーの遅延が発生し、プレイモードでは `</>` キー（T60）と CalibrationScreen（T61）で判定オフセット（`manualOffsetMs`）を調整できる。しかしエディタの録音打刻は `positionRef.current` を無補正で beat 化しており、キーレイテンシ分だけリング/セグメントがずれて記録される。エディタ録音時にも同じオフセットを反映し、同じ仕組みのキャリブレーションをエディタ内で実行できるようにする（ユーザー確認済みの方針）。
+
+**1. 録音時のオフセット補正（リング＋セグメント両方）**
+- `src/screens/EditorScreen.tsx`: 録音中の**キー打刻イベント**の基準位置を `pos' = positionRef.current - getManualOffsetMs()` に補正してから `timeline.msToBeat(pos')` で beat 化する（タップが遅れて記録される分を前に引く）。
+- 適用箇所（すべて `timeline.msToBeat(...)` の引数を補正済み `pos'` へ）:
+  - リング Space 押下（開始beat）: `spacePressBeatRef.current = quantizeBeat(msToBeat(pos'), snap)`（:620-622）
+  - リング Space 離し（hold長の終端）: `snapped`（:714-715）
+  - セグメント矢印キー離し打刻（T105 `releaseBeat`）: `:690` の `releaseBeat` 算出
+- **連続軌跡サンプル（録音ループの `beat = quantizeBeat(msToBeat(pos), snap)`）は補正しない**（真の曲位置を記録するため）。`finishRecording` の `startBeat`（`recStartBeatRef`）は録音開始位置なので補正しない。
+- 補正は `mode === 'record' && isPlaying` 中のキー打刻に限定（T102/T103 の「再生中スタンプ禁止」を壊さない）。
+
+**2. エディタに `</>` のオフセット微調整切手（±10ms）＋表示**
+- `EditorScreen` の `onKeyDown` に `,`/`<` と `.`/`>` のハンドラを追加（`setManualOffset(getManualOffsetMs() + delta)`、delta=∓10）。`GameScreen.tsx:408-412` の `adjustOffset` と同様の実装。
+- 音楽制御ペイン `#music-control` に `offset: +Xms` 表示を追加（`GameScreen.tsx:509` と同形式）。`data-testid="editor-offset"`。
+- `getManualOffsetMs` / `setManualOffset` は `src/audio/clock.ts` から import。
+
+**3. エディタ内キャリブレーションモーダル（プレイモードと同一仕組み）**
+- `#music-control` に「キャリブレーション」ボタン（`data-testid="editor-calibration-button"`）→ エディタ内モーダル（`src/screens/editor/CalibrationModal.tsx` を新規作成。画面遷移せず編集中状態を保持）。
+- ロジックは `CalibrationScreen.tsx` と同一: CAL_BPM=120、Space×8回、最初の2サンプル破棄、残り6の平均を `setManualOffset`。初回Spaceで `setManualOffset(0)` してから計測。メトロノームは `schedule(audioCtx, nextBeatTime, beat)`（エディタ限定の音量適用は任意）。ESC と「閉じる」ボタンでキャンセル。
+- **キャンセル時の復元**: モーダルオープン時に直前オフセットを保持し、ESC/閉じるでキャンセルした場合は `setManualOffset(直前値)` で復元（変更を保存しない）。
+
+**完了条件（自動テスト）**:
+1. `setManualOffset(+80)` 状態でエディタ録音（stub AudioContext 可）→ Space押下で記録されるリングの beat が `quantizeBeat(msToBeat(tapPos - 80), snap)` に一致（hold の終端・矢印離しのセグメント打刻も同式）。
+2. エディタで `<`/`>` キー → `getManualOffsetMs()` が ±10 変化し、`#music-control` 内の `editor-offset` 表示が更新される。
+3. エディタ内キャリブレーションモーダル: Space×8 計測完了で `getManualOffsetMs()` が平均値になる。ESC/閉じるでキャンセルした場合は直前オフセットへ復元される。
+4. 回帰なし: T102/T103（playモード中のリング/セグメントスタンプ禁止）、T100（hold録音反映）、T105（リリース吸着）、T129（snap整合性）。録音ループの連続軌跡 beat が補正されないこと。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |

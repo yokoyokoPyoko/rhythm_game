@@ -681,5 +681,14 @@
   ],
   "type": "feature",
   "ui": true
+ },
+ {
+  "id": "T132",
+  "desc": "エディタ録音時の判定オフセット反映（</>微調整＋エディタ内キャリブレーション）。背景: 環境によりスペースキー遅延があり、プレイモードでは </> キー(T60)と CalibrationScreen(T61)で manualOffsetMs を調整できるが、エディタの録音打刻は positionRef.current を無補正で beat 化しておりキーレイテンシ分ずれる。修正: (1) 録音中のキー打刻イベント(リングSpace押下 spacePressBeatRef:620-622、リングSpace離し snapped:714-715、セグメント矢印キー離し T105 releaseBeat:690)の基準位置を pos=positionRef.current-getManualOffsetMs() に補正して timeline.msToBeat(pos) で beat 化。連続軌跡サンプル(録音ループ beat=msToBeat(pos))は補正しない。補正は mode==record かつ isPlaying 中の打刻に限定。(2) EditorScreen の onKeyDown に ,/</. > ハンドラ追加(setManualOffset(getManualOffsetMs()+-10))。#music-control 内に offset 表示 data-testid=editor-offset を追加(GameScreen:509と同形式)。(3) #music-control に「キャリブレーション」ボタン data-testid=editor-calibration-button を追加し、src/screens/editor/CalibrationModal.tsx を新規作成(画面遷移せず編集中状態を保持)。ロジックは CalibrationScreen と同一(CAL_BPM=120、Space×8、最初の2サンプル破棄、残り平均を setManualOffset、初回Spaceで setManualOffset(0))。ESCと閉じるでキャンセル。モーダルオープン時に直前オフセットを保持しキャンセル時は setManualOffset(直前値) で復元(変更を保存しない)。完了条件: (1) setManualOffset(+80) 状態でエディタ録音→Space押下で記録されるリングbeatが quantizeBeat(msToBeat(tapPos-80), snap) に一致(hold終端・矢印離しも同式) (2) エディタで</> キーで getManualOffsetMs() が±10変化し editor-offset 表示が更新 (3) エディタ内キャリブレーションモーダルで Space×8 完了→平均値、ESC/閉じると直前値へ復元 (4) 回帰なし: T102/T103(play中スタンプ禁止)、T100(hold録音)、T105(リリース吸着)、T129(snap整合性)、連続軌跡beatの非補正を維持。",
+  "depends_on": [
+   "T131"
+  ],
+  "type": "feature",
+  "ui": true
  }
 ]
