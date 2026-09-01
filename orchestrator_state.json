@@ -692,7 +692,8 @@
       "started": 1788252923.0278246,
       "sessions": {
         "qa": "ses_fa3d1c1bcffewmtAm2Pe7wkNvX",
-        "coder": "ses_fa3d01176ffevWVHCNlQb2gWhw"
+        "coder": "ses_fa3d01176ffevWVHCNlQb2gWhw",
+        "reviewer": "ses_fa3ca0df3ffemLID3RIBHKUO3e"
       },
       "gate_b_golden": true
     }
