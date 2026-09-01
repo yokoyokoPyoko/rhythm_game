@@ -58,6 +58,7 @@ export function schedule(
   audioCtx: AudioContext,
   nextBeatTime: number,
   beat: number,
+  out?: AudioNode,
 ): void {
   const isStrong = beat % 4 === 0;
   const freq = isStrong ? STRONG_FREQ : WEAK_FREQ;
@@ -73,7 +74,7 @@ export function schedule(
   gain.gain.exponentialRampToValueAtTime(0.0001, when + CLICK_DURATION);
 
   osc.connect(gain);
-  gain.connect(audioCtx.destination);
+  gain.connect(out ?? audioCtx.destination);
 
   osc.start(when);
   osc.stop(when + CLICK_DURATION + 0.01);

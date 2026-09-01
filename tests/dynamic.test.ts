@@ -1,61 +1,122 @@
+/**
+ * T130 — エディタ内限定の音量バー（メトロノーム/楽曲、各0~300%） Acceptance
+ *
+ * Verifies strictly by static source inspection + mocked AudioGraph behaviour.
+ * Runs in node (vitest environment: node), no DOM.
+ * Each requirement uses 3-step state-transition assertions.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { segmentize, quantizeBeat, isSnapAligned, type TrajPoint } from '../src/chart/quantize';
+import fs from 'fs';
+import path from 'path';
+
+// Direct imports of small focused modules (required by TDD spec)
+import { schedule } from '../src/audio/metronome';
 import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import type { Segment } from '../src/types';
 
 vi.useFakeTimers();
 
-const TIMELINE_120 = new BpmTimeline(120, []);
-const CENTER = TW_CENTER_Y;
-const TOP = TW_CENTER_Y - TW_AMP;
-const BOTTOM = TW_CENTER_Y + TW_AMP;
-
-// Helper: quantize raw beats to snap grid with minimal snap clamp (mirrors fixed spec)
-function expectedSnapBeats(raw: number, snap: number): number {
-  let q = quantizeBeat(raw, snap);
-  if (q < 1e-6) q = snap;
-  // also ensure snap alignment (for 0.30 with snap=1, q=0 -> snap)
-  if (q < snap - 1e-9 && q < snap) {
-    // if quantized to 0, clamp to snap
-    if (q < 1e-6) return snap;
-  }
-  return Number(q.toFixed(4));
+// ---------------------------------------------------------------------------
+// Helpers: mock WebAudio graph for schedule routing checks
+// ---------------------------------------------------------------------------
+interface MockGain {
+  gain: {
+    value: number;
+    setValueAtTime: (v: number, t: number) => void;
+    exponentialRampToValueAtTime: (v: number, t: number) => void;
+  };
+  connect: (dest: unknown) => void;
+  _connectedTo: unknown | null;
+}
+interface MockOsc {
+  type: string;
+  frequency: { value: number };
+  connect: (n: unknown) => void;
+  start: (t: number) => void;
+  stop: (t: number) => void;
 }
 
-function isAligned(beats: number, snap: number): boolean {
-  return isSnapAligned(beats, snap);
+function createMockAudioCtx() {
+  const destination = { __isDestination: true, label: 'ctx.destination' } as unknown as AudioNode;
+  let lastGain: MockGain | null = null;
+  let lastOsc: MockOsc | null = null;
+  const ctx = {
+    currentTime: 10.0,
+    destination,
+    _lastGain: null as MockGain | null,
+    _lastOsc: null as MockOsc | null,
+    get lastGainNode() { return lastGain; },
+    createOscillator(): MockOsc {
+      const o: MockOsc = {
+        type: 'sine',
+        frequency: { value: 0 },
+        connect: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      };
+      lastOsc = o;
+      (ctx as unknown as Record<string, unknown>)._lastOsc = o;
+      return o as unknown as OscillatorNode;
+    },
+    createGain(): MockGain {
+      const g: MockGain = {
+        gain: {
+          value: 1,
+          setValueAtTime: vi.fn(),
+          exponentialRampToValueAtTime: vi.fn(),
+        },
+        connect: vi.fn(function (this: MockGain, dest: unknown) {
+          (this as MockGain)._connectedTo = dest;
+        }),
+        _connectedTo: null,
+      };
+      // Wrap connect to capture
+      const orig = g.connect.bind(g);
+      g.connect = ((dest: unknown) => {
+        g._connectedTo = dest;
+        // also spy
+        (g.connect as unknown as { mock: unknown }).toString();
+      }) as unknown as MockGain['connect'];
+      // Use vi.fn wrapper to track
+      const spy = vi.fn((dest: unknown) => { g._connectedTo = dest; });
+      g.connect = spy as unknown as MockGain['connect'];
+      // preserve _connectedTo via spy
+      const wrappedConnect = (dest: unknown) => {
+        g._connectedTo = dest;
+        spy(dest);
+      };
+      g.connect = wrappedConnect as unknown as MockGain['connect'];
+      (g.connect as unknown as Record<string, unknown>)._spy = spy;
+      lastGain = g;
+      (ctx as unknown as Record<string, unknown>)._lastGain = g;
+      return g as unknown as GainNode;
+    },
+  } as unknown as AudioContext & {
+    destination: AudioNode;
+    _lastGain: MockGain | null;
+    _lastOsc: MockOsc | null;
+    lastGainNode: MockGain | null;
+  };
+  return { ctx, destination, getLastGain: () => lastGain!, getLastOsc: () => lastOsc! };
 }
 
-// Build a minimal trajectory that yields a single moving run of `duration` beats
-// starting at `startBeat`. Uses y delta large enough to exceed threshold.
-function shortPressTraj(startBeat: number, duration: number, direction: 'up' | 'down' = 'down'): TrajPoint[] {
-  const release = Number((startBeat + duration).toFixed(4));
-  // One true point at start, one false at release. dy large to be classified as moving.
-  const yStart = CENTER;
-  const yEnd = direction === 'down' ? CENTER + 90 : CENTER - 90;
-  return [
-    { beat: startBeat, y: yStart, down: true },
-    { beat: release, y: yEnd, down: false },
-  ];
+// Helper to read source files
+function readSrc(rel: string): string {
+  return fs.readFileSync(path.resolve(process.cwd(), rel), 'utf-8');
 }
 
-function movingTraj(startBeat: number, duration: number, direction: 'up' | 'down' = 'down'): TrajPoint[] {
-  const release = Number((startBeat + duration).toFixed(4));
-  const yStart = CENTER;
-  const yEnd = direction === 'down' ? CENTER + 80 : CENTER - 80;
-  // include intermediate true point to ensure run detection
-  const mid = Number((startBeat + duration * 0.5).toFixed(4));
-  const yMid = direction === 'down' ? CENTER + 40 : CENTER - 40;
-  return [
-    { beat: startBeat, y: yStart, down: true },
-    { beat: mid, y: yMid, down: true },
-    { beat: release, y: yEnd, down: false },
-  ];
+// Shared clamp helper mirrors EditorScreen logic
+function clampVolume(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 100;
+  return Math.max(0, Math.min(300, n));
+}
+function gainValue(volume: number): number {
+  return clampVolume(volume) / 100;
 }
 
-describe('T129 録音モードのセグメント長クオンタイズ修正 — snap解像度優先 (Red before fix)', () => {
+describe('T130 エディタ内限定の音量バー — acceptance (node, no DOM)', () => {
   beforeEach(() => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -63,502 +124,437 @@ describe('T129 録音モードのセグメント長クオンタイズ修正 — 
     vi.clearAllTimers();
   });
 
-  // ------------------------------------------------------------
-  // 1. snap別 short press 0.30 -> beats は snap整数倍 (0.25/0.25/0.5/1)
-  // ------------------------------------------------------------
-  describe('1. snap別 端数タイミング短押し 0.30拍 の量子化', () => {
-    const snapCases: Array<{ snap: number; expected: number }> = [
-      { snap: 0.125, expected: 0.25 },
-      { snap: 0.25, expected: 0.25 },
-      { snap: 0.5, expected: 0.5 },
-      { snap: 1, expected: 1 },
-    ];
+  // ========================================================================
+  // (1) #music-control 内に 2つの音量バーが存在 (strict 3-step)
+  // ========================================================================
+  describe('1. #music-control 内に2本のrangeバーが存在 (metronome-volume / music-volume)', () => {
+    it('EditorScreen source contains #music-control with both sliders min0 max300 step5 and % display', () => {
+      // [Step 1: Capture Initial State] — read file, capture section boundaries
+      const src = readSrc('src/screens/EditorScreen.tsx');
+      const musicControlIdx = src.indexOf('id="music-control"');
+      expect(musicControlIdx, 'EditorScreen must contain id="music-control"').toBeGreaterThan(-1);
 
-    it.each(snapCases)('snap=$snap shortPress 0.30 -> beats=$expected (amp=1)', ({ snap, expected }) => {
-      // [Step 1: Capture Initial State] - confirm empty or baseline
-      const empty = segmentize([], snap, 1);
-      expect(empty).toEqual([]);
+      // capture the music-control section slice (until next </section>)
+      const after = src.slice(musicControlIdx);
+      const sectionEnd = after.indexOf('</section>');
+      expect(sectionEnd).toBeGreaterThan(0);
+      const section = after.slice(0, sectionEnd);
 
-      // [Step 2: Perform] short press 0.30 beats
-      const traj = shortPressTraj(0, 0.30, 'down');
-      const segs = segmentize(traj, snap, 1.0);
+      // [Step 2: Perform inspection] — count sliders and attributes
+      const metronomeVolumeMatches = [...section.matchAll(/data-testid="metronome-volume"/g)];
+      const musicVolumeMatches = [...section.matchAll(/data-testid="music-volume"/g)];
 
-      // [Step 3: Assert] beats equals snap-based expectation
-      expect(segs.length).toBeGreaterThan(0);
-      // Sum of moving beats should be expected (single segment)
-      const moving = segs.filter(s => s.direction !== 'stay');
-      const totalMoving = moving.reduce((a, b) => a + b.beats, 0);
-      expect(totalMoving).toBeCloseTo(expected, 4);
-      // Each beats must be snap-aligned
-      for (const s of segs) {
-        expect(isAligned(s.beats, snap), `beats ${s.beats} not snap ${snap}`).toBeTruthy();
-      }
-      // Must NOT be forced to 1/amplitude=1.0 when snap smaller
-      if (snap < 1) {
-        // For snap 0.125/0.25/0.5, total should NOT be 1.0 (the buggy physicalSnap)
-        if (expected !== 1.0) {
-          expect(totalMoving).not.toBeCloseTo(1.0, 4);
-        }
-      }
+      // [Step 3: Assert Changed Outcome] — both must exist exactly once inside section
+      expect(metronomeVolumeMatches.length, 'metronome-volume must appear once inside #music-control').toBe(1);
+      expect(musicVolumeMatches.length, 'music-volume must appear once inside #music-control').toBe(1);
+
+      // Strict attribute checks: both inputs must be type="range" min=0 max=300 step=5
+      // Find the input tag containing metronome-volume
+      const metLineIdx = section.indexOf('data-testid="metronome-volume"');
+      const metSnippetStart = Math.max(0, metLineIdx - 500);
+      const metSnippet = section.slice(metSnippetStart, metLineIdx + 500);
+      expect(metSnippet, 'metronome-volume input must be type="range"').toMatch(/type="range"/);
+      expect(metSnippet).toMatch(/min=\{0\}/);
+      expect(metSnippet).toMatch(/max=\{300\}/);
+      expect(metSnippet).toMatch(/step=\{5\}/);
+
+      const musicLineIdx = section.indexOf('data-testid="music-volume"');
+      const musicSnippetStart = Math.max(0, musicLineIdx - 500);
+      const musicSnippet = section.slice(musicSnippetStart, musicLineIdx + 500);
+      expect(musicSnippet, 'music-volume input must be type="range"').toMatch(/type="range"/);
+      expect(musicSnippet).toMatch(/min=\{0\}/);
+      expect(musicSnippet).toMatch(/max=\{300\}/);
+      expect(musicSnippet).toMatch(/step=\{5\}/);
+
+      // Labels must contain expected Japanese text
+      expect(section).toMatch(/メトロノーム音量/);
+      expect(section).toMatch(/楽曲音量/);
+
+      // % display: span showing volume + '%' near each slider
+      expect(section).toMatch(/\{metronomeVolume\}%/);
+      expect(section).toMatch(/\{musicVolume\}%/);
+
+      // Verify NOT present outside #music-control as the only occurrence
+      const outsideBefore = src.slice(0, musicControlIdx);
+      const outsideAfter = src.slice(musicControlIdx + sectionEnd);
+      expect(outsideBefore).not.toMatch(/data-testid="metronome-volume"/);
+      expect(outsideAfter).not.toMatch(/data-testid="metronome-volume"/);
+      expect(outsideBefore).not.toMatch(/data-testid="music-volume"/);
+      expect(outsideAfter).not.toMatch(/data-testid="music-volume"/);
+
+      // IDs must be present for label association
+      expect(section).toMatch(/id="metronome-volume"/);
+      expect(section).toMatch(/id="music-volume"/);
     });
 
-    it.each([0.125, 0.25, 0.5, 1] as const)('snap=%s each beats is snap整数倍 (amp=1, off-grid)', (snap) => {
-      const traj = movingTraj(1.0, 0.30, 'up');
-      const segs = segmentize(traj, snap, 1);
-      expect(segs.length).toBeGreaterThan(0);
-      for (const s of segs) {
-        expect(isAligned(s.beats, snap)).toBeTruthy();
-        // also verify Beats % snap approx 0 via isSnapAligned helper
-        const remainder = ((s.beats % snap) + snap) % snap;
-        expect(remainder < 1e-6 || Math.abs(remainder - snap) < 1e-6).toBeTruthy();
-      }
-    });
-  });
+    it('initial volume states are 100 (=100%) and clamped 0..300 in set handlers', () => {
+      const src = readSrc('src/screens/EditorScreen.tsx');
+      // [Step1] capture initial state declarations
+      expect(src).toMatch(/const \[musicVolume,\s*setMusicVolume\]\s*=\s*useState\(100\)/);
+      expect(src).toMatch(/const \[metronomeVolume,\s*setMetronomeVolume\]\s*=\s*useState\(100\)/);
 
-  // ------------------------------------------------------------
-  // 2. 1/amplitude でないこと検証 (snap=0.25 amp=1 0.30 -> 0.25 not 1.0)
-  // ------------------------------------------------------------
-  describe('2. 1/amplitude強制の廃止検証', () => {
-    it('snap=0.25 amp=1 short 0.30 -> 0.25 not 1.0 (physicalSnap bug)', () => {
-      // [Step1] baseline
-      const snap = 0.25;
-      const amp = 1.0;
-      const raw = 0.30;
-      const before = segmentize(shortPressTraj(0, raw), snap, amp);
-      expect(before.length).toBeGreaterThan(0);
+      // [Step2] capture set handlers clamping logic
+      const musicClamp = src.match(/setMusicVolume\(Math\.max\(0,\s*Math\.min\(300,/);
+      const metroClamp = src.match(/setMetronomeVolume\(Math\.max\(0,\s*Math\.min\(300,/);
 
-      // [Step2] perform
-      const segs = segmentize(shortPressTraj(0, raw), snap, amp);
-      const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
+      // [Step3] assert clamping exists (prevents out-of-range)
+      expect(musicClamp, 'musicVolume set must clamp 0..300').not.toBeNull();
+      expect(metroClamp, 'metronomeVolume set must clamp 0..300').not.toBeNull();
 
-      // [Step3] assert snap-based not physical
-      expect(isAligned(total, snap)).toBeTruthy();
-      expect(total).toBeCloseTo(0.25, 4);
-      expect(total).not.toBeCloseTo(1.0, 4);
-      // Also not equal to quantizeBeat(1/amplitude, snap) = 1.0
-      const physicalForced = quantizeBeat(1 / amp, snap);
-      expect(total).not.toBeCloseTo(physicalForced, 4);
+      // Gain effect must map to /100
+      expect(src).toMatch(/musicGainRef\.current\.gain\.value\s*=\s*Math\.max\(0,\s*Math\.min\(300,\s*musicVolume\)\)\s*\/\s*100/);
+      expect(src).toMatch(/metronomeGainRef\.current\.gain\.value\s*=\s*Math\.max\(0,\s*Math\.min\(300,\s*metronomeVolume\)\)\s*\/\s*100/);
     });
 
-    it('snap=0.125 amp=1 short 0.30 -> 0.25 not 1.0', () => {
-      const segs = segmentize(shortPressTraj(0, 0.30), 0.125, 1.0);
-      const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-      expect(total).toBeCloseTo(0.25, 4);
-      expect(total).not.toBeCloseTo(1.0, 4);
-    });
+    it('EditorScreen must NOT use localStorage for volume persistence (editor-limited, global impact avoidance)', () => {
+      const src = readSrc('src/screens/EditorScreen.tsx');
+      // [Step1] capture any localStorage usage lines
+      const lsMatches = [...src.matchAll(/localStorage/g)];
 
-    it('snap=0.5 amp=1 short 0.30 -> 0.5 not 1.0', () => {
-      const segs = segmentize(shortPressTraj(0, 0.30), 0.5, 1.0);
-      const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-      expect(total).toBeCloseTo(0.5, 4);
-      expect(total).not.toBeCloseTo(1.0, 4);
-    });
-
-    it('snap=1 amp=1 short 0.30 -> 1.0 (clamped to minimal snap, not free)', () => {
-      const segs = segmentize(shortPressTraj(0, 0.30), 1, 1.0);
-      const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-      expect(total).toBeCloseTo(1.0, 4);
-      expect(isAligned(total, 1)).toBeTruthy();
-    });
-  });
-
-  // ------------------------------------------------------------
-  // 3. amplitude独立性（高い振幅でも snap優先）
-  // ------------------------------------------------------------
-  describe('3. amplitudeが振幅速度に影響しても beatsはsnap優先', () => {
-    const amps = [0.7, 1.0, 1.3, 2.7, 3.4];
-    const snaps = [0.125, 0.25, 0.5, 1] as const;
-    it.each(amps)('amp=%s does not force physicalSnap for short 0.30 (snap 0.25)', (amp) => {
-      const snap = 0.25;
-      const raw = 0.30;
-      const expected = expectedSnapBeats(raw, snap); // 0.25
-      // [Step1] capture initial
-      const initial = segmentize([], snap, amp);
-      expect(initial).toEqual([]);
-      // [Step2] perform
-      const segs = segmentize(shortPressTraj(0, raw), snap, amp);
-      const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-      // [Step3] assert amplitude-independent snap quantization
-      expect(total).toBeCloseTo(expected, 4);
-      expect(isAligned(total, snap)).toBeTruthy();
-      // Must NOT be quantizeBeat(1/amp, snap) unless that happens to equal expected by chance
-      const physicalSnap = quantizeBeat(1 / amp, snap);
-      if (Math.abs(physicalSnap - expected) > 1e-6) {
-        expect(total).not.toBeCloseTo(physicalSnap, 4);
-      }
-    });
-
-    for (const snap of snaps) {
-      it(`snap=${snap} amplitude 1.3/2.7 still produces snap-aligned beats for off-grid 0.37`, () => {
-        for (const amp of [1.3, 2.7]) {
-          const raw = 0.37;
-          const expected = expectedSnapBeats(raw, snap);
-          const segs = segmentize(movingTraj(0, raw), snap, amp);
-          expect(segs.length).toBeGreaterThan(0);
-          for (const s of segs) expect(isAligned(s.beats, snap)).toBeTruthy();
-          const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-          // For snap that yields expected < snap, clamp to snap; else quantizeBeat
-          expect(total).toBeCloseTo(expected, 4);
-        }
+      // [Step2] filter for volume-related keys
+      const volumeLs = lsMatches.filter(m => {
+        const idx = m.index ?? 0;
+        const snippet = src.slice(Math.max(0, idx - 100), idx + 200);
+        return /musicVolume|metronomeVolume|music-volume|metronome-volume/i.test(snippet);
       });
-    }
-  });
 
-  // ------------------------------------------------------------
-  // 4. 端数タイミング off-grid release variety
-  // ------------------------------------------------------------
-  describe('4. off-grid variety (0.37, 1.2, 1.23, 0.44) across snaps', () => {
-    const snaps = [0.125, 0.25, 0.5, 1] as const;
-    const offGridRaws = [0.37, 0.44, 1.2, 1.23, 0.30];
-
-    for (const snap of snaps) {
-      for (const raw of offGridRaws) {
-        it(`snap=${snap} raw=${raw} -> snap-aligned`, () => {
-          const amp = 1.0;
-          const expected = expectedSnapBeats(raw, snap);
-          // [Step1] capture
-          const beforeLen = segmentize([], snap, amp).length;
-          expect(beforeLen).toBe(0);
-          // [Step2] perform with off-grid raw
-          const traj: TrajPoint[] = [
-            { beat: 0, y: CENTER, down: true },
-            { beat: raw * 0.5, y: CENTER + 30, down: true },
-            { beat: Number((raw).toFixed(4)), y: CENTER + 60, down: true },
-            { beat: Number((raw + 0.01).toFixed(4)), y: CENTER + 60, down: false },
-          ];
-          // Actually use shortPress style to ensure raw is exactly end-start of moving run
-          const traj2 = movingTraj(0, raw, 'down');
-          const segs = segmentize(traj2, snap, amp);
-          expect(segs.length).toBeGreaterThan(0);
-          // [Step3] assert
-          for (const s of segs) {
-            expect(isAligned(s.beats, snap), `snap ${snap} raw ${raw} beats ${s.beats}`).toBeTruthy();
-          }
-          // total moving approx expected (or at least snap-aligned)
-          const totalMoving = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-          // totalMoving should be snap-aligned; for single moving run it should equal expected
-          expect(isAligned(totalMoving, snap)).toBeTruthy();
-          // prohibit retaining raw arbitrary residue when off-grid
-          if (Math.abs(raw - expected) > 1e-6) {
-            expect(totalMoving).not.toBeCloseTo(raw, 2);
-          }
-        });
-      }
-    }
-  });
-
-  // ------------------------------------------------------------
-  // 5. 録音範囲 [startBeat,endBeat) と newSegs 総拍数の一致＆上書き連続性
-  // ------------------------------------------------------------
-  describe('5. 録音範囲と newSegs 総ビート一致 — finishRecording 上書きが gapなし', () => {
-    function simulateFinishRecording(
-      initialSegs: Segment[],
-      startBeat: number,
-      endBeat: number,
-      snap: number,
-      amp: number,
-    ): { keptBefore: Segment[]; newSegs: Segment[]; keptAfter: Segment[]; final: Segment[] } {
-      // Replicates EditorScreen truncateSegmentsTo + keptAfter logic
-      // keptBefore: truncate at startBeat (partial)
-      let cum = 0;
-      const keptBefore: Segment[] = [];
-      for (const seg of initialSegs) {
-        const end = cum + seg.beats;
-        if (end <= startBeat + 1e-9) {
-          keptBefore.push(seg);
-          cum = end;
-        } else {
-          const part = startBeat - cum;
-          if (part > 0.0001) keptBefore.push({ direction: seg.direction, beats: Number(part.toFixed(4)) });
-          break;
-        }
-      }
-      // newSegs from traj covering [startBeat, endBeat)
-      const duration = endBeat - startBeat;
-      const traj = shortPressTraj(startBeat, duration, 'down');
-      const newSegs = segmentize(traj, snap, amp);
-
-      // keptAfter: whole segments starting at >= endBeat (spec current logic)
-      let cum2 = 0;
-      let endIdx = initialSegs.length;
-      for (let i = 0; i < initialSegs.length; i++) {
-        if (cum2 >= endBeat - 1e-9) {
-          endIdx = i;
-          break;
-        }
-        cum2 += initialSegs[i].beats;
-      }
-      // if loop completed without break, endIdx stays length
-      const keptAfter = initialSegs.slice(endIdx);
-      const final = [...keptBefore, ...newSegs, ...keptAfter];
-      return { keptBefore, newSegs, keptAfter, final };
-    }
-
-    it('snap=0.25 range 0.30 (start 1.0 -> 1.30 quant to 1.25) newSegs total == 0.25 and no gap', () => {
-      const snap = 0.25;
-      const amp = 1.0;
-      const initial: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'stay', beats: 2 },
-      ];
-      const startBeat = 1.0;
-      const rawDuration = 0.30; // endBeat quant 1.25? Let's use snapped endBeat directly for determinism
-      const endBeat = quantizeBeat(startBeat + rawDuration, snap); // 1.25
-      const durationSnapped = endBeat - startBeat; // 0.25
-      expect(durationSnapped).toBeCloseTo(0.25, 4);
-
-      // [Step1] capture initial total
-      const initialTotal = initial.reduce((a, b) => a + b.beats, 0);
-      expect(initialTotal).toBeCloseTo(8, 4);
-
-      // [Step2] perform recording simulation
-      const { keptBefore, newSegs, keptAfter, final } = simulateFinishRecording(initial, startBeat, endBeat, snap, amp);
-
-      // [Step3] assert newSegs total == range (snap-aligned)
-      const newTotal = newSegs.reduce((a, b) => a + b.beats, 0);
-      expect(newTotal).toBeCloseTo(durationSnapped, 4);
-      expect(isAligned(newTotal, snap)).toBeTruthy();
-      // Must NOT be 1.0 (physicalSnap bug)
-      expect(newTotal).not.toBeCloseTo(1.0, 4);
-
-      // Verify gap-less: keptBefore covers [0,start) and newSegs covers [start,end), so keptBeforeSum + newTotal == endBeat
-      const keptBeforeSum = keptBefore.reduce((a, b) => a + b.beats, 0);
-      expect(keptBeforeSum).toBeCloseTo(startBeat, 4);
-      expect(keptBeforeSum + newTotal).toBeCloseTo(endBeat, 4);
-
-      // Also each segment in final must be snap-aligned? Not required but newSegs must be.
-      for (const s of newSegs) expect(isAligned(s.beats, snap)).toBeTruthy();
-    });
-
-    it('snap=0.5 range raw 0.37 -> quant 0.5 newSegs 0.5 not 1.0', () => {
-      const snap = 0.5;
-      const amp = 1.0;
-      const startBeat = 0.5;
-      const raw = 0.37;
-      const endBeat = quantizeBeat(startBeat + raw, snap); // 1.0? 0.5+0.37=0.87 -> 1.0
-      const duration = endBeat - startBeat; // 0.5
-      const traj = shortPressTraj(startBeat, duration, 'down');
-      const newSegs = segmentize(traj, snap, amp);
-      const total = newSegs.reduce((a, b) => a + b.beats, 0);
-      expect(total).toBeCloseTo(duration, 4);
-      expect(total).toBeCloseTo(0.5, 4);
-      expect(total).not.toBeCloseTo(1.0, 4);
-      expect(isAligned(total, snap)).toBeTruthy();
-    });
-
-    it('snap=0.125 range 0.30 -> 0.25 gap-less overwrite with keptBefore/keptAfter aligned boundaries', () => {
-      const snap = 0.125;
-      const amp = 1.0;
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-      ];
-      // Choose start 1.0 (boundary), end 1.25 (boundary for snap 0.125/0.25)
-      const startBeat = 1.0;
-      const endBeat = 1.25;
-      const duration = endBeat - startBeat; // 0.25
-      const traj = shortPressTraj(startBeat, duration, 'down');
-      const newSegs = segmentize(traj, snap, amp);
-      const total = newSegs.reduce((a, b) => a + b.beats, 0);
-      expect(total).toBeCloseTo(0.25, 4);
-      expect(total).not.toBeCloseTo(1.0, 4);
-      for (const s of newSegs) expect(isAligned(s.beats, snap)).toBeTruthy();
-
-      // Simulate full overwrite continuity with boundary-aligned start/end
-      const { keptBefore, keptAfter, final } = simulateFinishRecording(initial, startBeat, endBeat, snap, amp);
-      const keptBeforeSum = keptBefore.reduce((a, b) => a + b.beats, 0);
-      expect(keptBeforeSum).toBeCloseTo(startBeat, 4);
-      // Since endBeat 1.25 is inside segment 1-2, keptAfter will start at next boundary (2.0) leaving gap if logic discards partial.
-      // We instead assert newSegs total == duration (snap) which is the core fix; gap due to segment boundary discard is expected for this configuration.
-      // For boundary-aligned case 1.0->2.0 (1.0 range)
-      const start2 = 1.0;
-      const end2 = 2.0;
-      const { newSegs: ns2 } = simulateFinishRecording(initial, start2, end2, snap, amp);
-      expect(ns2.reduce((a, b) => a + b.beats, 0)).toBeCloseTo(1.0, 4);
-    });
-
-    it('snap=0.25 range 1.25 (1.0->2.25) newSegs 1.25 not 1.0 — wave overwrite not additive', () => {
-      const snap = 0.25;
-      const amp = 1.0;
-      const startBeat = 1.0;
-      const endBeat = 2.25;
-      const duration = endBeat - startBeat; // 1.25
-      const traj = shortPressTraj(startBeat, duration, 'down');
-      // Need intermediate true points to ensure traj reflects 1.25 duration accurately (single true run already does)
-      const newSegs = segmentize(traj, snap, amp);
-      const total = newSegs.reduce((a, b) => a + b.beats, 0);
-      // Snap 0.25: 1.25 quantizes to 1.25, physical 1.0 would quantize to 1.0
-      expect(total).toBeCloseTo(1.25, 4);
-      expect(isAligned(total, snap)).toBeTruthy();
-      expect(total).not.toBeCloseTo(1.0, 4);
-    });
-
-    it('multiple snaps with same raw 0.30 produce distinct snap-aligned totals (not uniform 1.0)', () => {
-      const raw = 0.30;
-      const amp = 1.0;
-      const results: Record<number, number> = {};
-      for (const snap of [0.125, 0.25, 0.5, 1] as const) {
-        const traj = shortPressTraj(0, raw, 'down');
-        const segs = segmentize(traj, snap, amp);
-        const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
-        results[snap] = total;
-        expect(isAligned(total, snap)).toBeTruthy();
-      }
-      // They must not all be 1.0 (uniform) — at least two differ
-      expect(results[0.125]).toBeCloseTo(0.25, 4);
-      expect(results[0.25]).toBeCloseTo(0.25, 4);
-      expect(results[0.5]).toBeCloseTo(0.5, 4);
-      expect(results[1]).toBeCloseTo(1.0, 4);
-      // Distinctness check: 0.125 vs 0.5 must differ
-      expect(results[0.125]).not.toBeCloseTo(results[0.5], 4);
-      // And 0.25 vs 1 must differ
-      expect(results[0.25]).not.toBeCloseTo(results[1], 4);
+      // [Step3] assert none — volumes must be UI state only
+      expect(volumeLs.length, 'EditorScreen must not persist musicVolume/metronomeVolume to localStorage').toBe(0);
     });
   });
 
-  // ------------------------------------------------------------
-  // 6. regression: isSnapAligned & quantizeBeat still correct
-  // ------------------------------------------------------------
-  describe('6. regression: snap整合性 — Beats が snap整数倍 & T101 仕様維持', () => {
-    it('every produced beats is snap整数倍 for random off-grid trajectories (all snaps)', () => {
-      const snaps = [0.125, 0.25, 0.5, 1] as const;
-      const amp = 1.0;
-      for (const snap of snaps) {
-        const trajs: TrajPoint[][] = [
-          movingTraj(0, 0.37, 'down'),
-          movingTraj(0, 1.23, 'up'),
-          shortPressTraj(2.0, 0.30, 'down'),
-          // stay run
-          [
-            { beat: 0, y: CENTER, down: false },
-            { beat: 0.8, y: CENTER, down: false },
-            { beat: 0.81, y: CENTER, down: true },
-          ],
-        ];
-        for (const traj of trajs) {
-          const segs = segmentize(traj, snap, amp);
-          for (const s of segs) {
-            expect(isSnapAligned(s.beats, snap), `snap ${snap} beats ${s.beats}`).toBeTruthy();
-            expect(isAligned(s.beats, snap)).toBeTruthy();
-          }
-        }
-      }
+  // ========================================================================
+  // (2) metronome-volume=0で無音・300で聞こえる (ゲイン値で検証) — 3-step
+  // ========================================================================
+  describe('2. metronome-volume ゲイン反映: 0=>0 (無音) / 100=>1.0 / 300=>3.0', () => {
+    it('gainValue helper clamps and scales correctly (pure numeric consistency)', () => {
+      // [Step1] Capture initial gain at 100% (default)
+      const beforeVolume = 100;
+      const beforeGain = gainValue(beforeVolume);
+      expect(beforeGain).toBeCloseTo(1.0, 5);
+
+      // [Step2] Perform action: set to 0 (min)
+      const afterZero = gainValue(0);
+      // [Step3] Assert changed outcome: 0 => 0 (silent)
+      expect(afterZero).toBeCloseTo(0, 5);
+      expect(afterZero).not.toBeCloseTo(beforeGain, 5);
+
+      // [Step1] capture intermediate 100 again
+      const mid = gainValue(100);
+      expect(mid).toBeCloseTo(1.0, 5);
+
+      // [Step2] perform max
+      const afterMax = gainValue(300);
+      // [Step3] assert 300 => 3.0 (audible at 300%)
+      expect(afterMax).toBeCloseTo(3.0, 5);
+      expect(afterMax).not.toBeCloseTo(mid, 5);
+
+      // Edge clamping: out-of-range must clamp
+      expect(gainValue(400)).toBeCloseTo(3.0, 5); // clamped to 300
+      expect(gainValue(500)).toBeCloseTo(3.0, 5);
+      expect(gainValue(-10)).toBeCloseTo(0, 5);
+      expect(gainValue(-999)).toBeCloseTo(0, 5);
+      expect(gainValue(150)).toBeCloseTo(1.5, 5);
+      expect(gainValue(5)).toBeCloseTo(0.05, 5); // step 5 => 0.05
     });
 
-    it('quantizeBeat math remains correct (off-grid to nearest grid)', () => {
-      expect(quantizeBeat(1.2, 0.5)).toBeCloseTo(1.0, 4);
-      expect(quantizeBeat(1.3, 0.5)).toBeCloseTo(1.5, 4);
-      expect(quantizeBeat(0.37, 0.25)).toBeCloseTo(0.25, 4);
-      expect(quantizeBeat(0.37, 0.125)).toBeCloseTo(0.375, 4);
-      expect(quantizeBeat(0.30, 0.125)).toBeCloseTo(0.25, 4);
-      expect(quantizeBeat(0.30, 0.5)).toBeCloseTo(0.5, 4);
-      expect(isSnapAligned(0.25, 0.125)).toBeTruthy();
-      expect(isSnapAligned(0.5, 0.25)).toBeTruthy();
-      expect(isSnapAligned(0.37, 0.25)).toBeFalsy();
+    it('mocked gain node transitions when volume changes (EditorScreen effect simulation)', () => {
+      // Simulate EditorScreen's useEffect that writes to metronomeGain
+      const mockGain: { gain: { value: number } } = { gain: { value: 1.0 } };
+
+      // [Step1] Capture initial state (100% => 1.0)
+      mockGain.gain.value = gainValue(100);
+      const before = mockGain.gain.value;
+      expect(before).toBeCloseTo(1.0, 5);
+
+      // [Step2] Perform action: user moves slider to 0
+      const newVolZero = 0;
+      mockGain.gain.value = gainValue(newVolZero);
+      // [Step3] Assert resulting gain is silent
+      expect(mockGain.gain.value).toBeCloseTo(0, 5);
+      expect(mockGain.gain.value).not.toBeCloseTo(before, 5);
+
+      // [Step1] capture 0 state again
+      const zeroState = mockGain.gain.value;
+      expect(zeroState).toBeCloseTo(0, 5);
+
+      // [Step2] perform max
+      mockGain.gain.value = gainValue(300);
+      // [Step3] assert loud
+      expect(mockGain.gain.value).toBeCloseTo(3.0, 5);
+      expect(mockGain.gain.value).not.toBeCloseTo(zeroState, 5);
+      expect(mockGain.gain.value).toBeGreaterThan(1.0);
     });
 
-    it('minimal beats clamping: raw 0 for snap prevents 0-length segment', () => {
-      const snap = 0.25;
-      const amp = 1.0;
-      // Very tiny duration 0.01 -> quantizes to 0 -> should clamp to snap (0.25)
-      const traj = shortPressTraj(0, 0.01, 'down');
-      const segs = segmentize(traj, snap, amp);
-      expect(segs.length).toBeGreaterThan(0);
-      for (const s of segs) {
-        expect(s.beats).toBeGreaterThanOrEqual(snap - 1e-9);
-        expect(isAligned(s.beats, snap)).toBeTruthy();
-      }
-      const total = segs.reduce((a, b) => a + b.beats, 0);
-      expect(total).toBeCloseTo(0.25, 4);
+    it('metronome Gain scheduling uses metronomeGain when provided (audible), not muted destination path', () => {
+      const { ctx, destination } = createMockAudioCtx();
+      const metronomeGain = ctx.createGain() as unknown as MockGain;
+      // Ensure initial gain 1.0
+      (metronomeGain as MockGain).gain.value = 1.0;
+
+      // [Step1] Capture before: schedule without out should go to destination
+      // We test schedule() routing directly
+      const beforeGain = metronomeGain.gain.value;
+      expect(beforeGain).toBeCloseTo(1.0, 5);
+
+      // [Step2] Perform schedule without out (calibration/game path)
+      const horizonTime = ctx.currentTime + 0.1;
+      schedule(ctx as unknown as AudioContext, horizonTime, 0);
+      const g1 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
+      expect(g1._connectedTo, 'schedule without out must connect to ctx.destination').toBe(destination);
+
+      // [Step3] Assert with out param connects to metronomeGain
+      schedule(ctx as unknown as AudioContext, horizonTime + 0.2, 1, metronomeGain as unknown as AudioNode);
+      const g2 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
+      expect(g2._connectedTo, 'schedule with out must connect to metronomeGain').toBe(metronomeGain);
+      expect(g2._connectedTo).not.toBe(destination);
+
+      // [Step2] Test silent case: gain 0 should still route correctly but be silent
+      (metronomeGain as MockGain).gain.value = 0;
+      schedule(ctx as unknown as AudioContext, horizonTime + 0.4, 2, metronomeGain as unknown as AudioNode);
+      const g3 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
+      expect(g3._connectedTo).toBe(metronomeGain);
+      expect((metronomeGain as MockGain).gain.value).toBeCloseTo(0, 5);
     });
   });
 
-  // ------------------------------------------------------------
-  // 7. WaveEngine / Cursor 数値整合 — T128/T127 回帰防止 (complex amplitudes & off-grid)
-  // ------------------------------------------------------------
-  describe('7. WaveEngine / Cursor 規約一致 — T128 傾斜が cursor 速度と一致 (Red if wave slow)', () => {
-    const amps = [0.5, 0.7, 1.0, 1.3, 2.7, 3.4];
-    const offGrid = [0.37, 1.23];
+  // ========================================================================
+  // (3) music-volume がエディタ楽曲ゲインに反映 (ゲイン値で検証) — 3-step
+  // ========================================================================
+  describe('3. music-volume ゲイン反映: 楽曲再生の src.connect(musicGain) 経路', () => {
+    it('gainValue for music mirrors metronome logic (0..300% -> 0..3.0)', () => {
+      // [Step1] Capture initial 100
+      const before = gainValue(100);
+      expect(before).toBeCloseTo(1.0, 5);
 
-    function expectedClampedY(startPos: number, amp: number, dir: 'up' | 'down' | 'stay', beat: number): number {
-      const startY = CENTER - startPos * TW_AMP;
-      const dY = dir === 'up' ? -2 * TW_AMP * amp : dir === 'down' ? 2 * TW_AMP * amp : 0;
-      if (dir === 'stay') return startY;
-      const raw = startY + dY * beat;
-      return Math.max(TOP, Math.min(BOTTOM, raw));
-    }
+      // [Step2] perform 0
+      const zero = gainValue(0);
+      // [Step3] assert silent
+      expect(zero).toBeCloseTo(0, 5);
+      expect(zero).not.toBe(before);
 
-    it.each(amps)('amp=%s wave slope equals 2*TW_AMP*amp before clip', (amp) => {
-      // [Step1] initial engine with single down segment long enough to not clip for small beat
-      const engine = new WaveEngine([{ direction: 'down', beats: 10 }], TIMELINE_120, amp, 0);
-      const delta = 0.1;
-      const dy = engine.waveYAt(delta) - engine.waveYAt(0);
-      const slope = dy / delta;
-      // [Step3] assert slope matches physical speed
-      expect(slope).toBeCloseTo(2 * TW_AMP * amp, 0);
-      // cursor same
+      // [Step2] perform 300
+      const max = gainValue(300);
+      // [Step3] assert 3x
+      expect(max).toBeCloseTo(3.0, 5);
+      expect(max).not.toBe(zero);
+
+      // arbitrary step 5 check
+      expect(gainValue(75)).toBeCloseTo(0.75, 5);
+      expect(gainValue(225)).toBeCloseTo(2.25, 5);
+    });
+
+    it('EditorScreen source: playFrom uses src.connect(musicGain) and musicGain.connect(destination)', () => {
+      const src = readSrc('src/screens/EditorScreen.tsx');
+
+      // [Step1] Capture before pattern: ensure old direct destination is NOT used for music
+      // Old code had src.connect(ctx.destination); new must have musicGain
+      expect(src).toMatch(/src\.connect\(musicGainRef\.current!/);
+
+      // [Step2] capture gain creation
+      const musicGainCreateIdx = src.indexOf('musicGainRef.current');
+      expect(musicGainCreateIdx).toBeGreaterThan(-1);
+
+      // Check that ensureGainNodes creates both gains and connects to destination
+      const ensureSlice = src.slice(src.indexOf('ensureGainNodes'), src.indexOf('ensureGainNodes') + 800);
+      expect(ensureSlice).toMatch(/musicGain/);
+      expect(ensureSlice).toMatch(/metronomeGain/);
+      expect(ensureSlice).toMatch(/\.connect\(ctx\.destination\)/);
+
+      // [Step3] Assert that playFrom no longer connects directly to destination for music
+      const playFromIdx = src.indexOf('const playFrom');
+      const playFromSlice = src.slice(playFromIdx, playFromIdx + 1500);
+      expect(playFromSlice).toMatch(/src\.connect\(musicGainRef\.current/);
+      expect(playFromSlice).not.toMatch(/src\.connect\(ctx\.destination\)/);
+    });
+
+    it('mocked musicGain transitions on volume change (3-step)', () => {
+      const mockMusicGain: { gain: { value: number } } = { gain: { value: 1.0 } };
+
+      // [Step1] Capture before at 100
+      mockMusicGain.gain.value = gainValue(100);
+      const before = mockMusicGain.gain.value;
+      expect(before).toBeCloseTo(1.0, 5);
+
+      // [Step2] Perform mid change to 150 (150%)
+      mockMusicGain.gain.value = gainValue(150);
+      // [Step3] Assert changed to 1.5
+      expect(mockMusicGain.gain.value).toBeCloseTo(1.5, 5);
+      expect(mockMusicGain.gain.value).not.toBeCloseTo(before, 5);
+
+      // [Step1] capture 150 state
+      const mid = mockMusicGain.gain.value;
+
+      // [Step2] perform to 0
+      mockMusicGain.gain.value = gainValue(0);
+      // [Step3] assert silent
+      expect(mockMusicGain.gain.value).toBeCloseTo(0, 5);
+      expect(mockMusicGain.gain.value).not.toBeCloseTo(mid, 5);
+
+      // [Step2] perform to 300
+      mockMusicGain.gain.value = gainValue(300);
+      // [Step3] assert max
+      expect(mockMusicGain.gain.value).toBeCloseTo(3.0, 5);
+    });
+  });
+
+  // ========================================================================
+  // (4) エディタ限定: GameScreen/CalibrationScreen は out省略で ctx.destination のまま
+  // ========================================================================
+  describe('4. エディタ限定 — Game/Calibration は schedule() を outなしで呼ぶ (従来通り)', () => {
+    it('metronome.ts schedule signature has optional out?: AudioNode with fallback to destination', () => {
+      const src = readSrc('src/audio/metronome.ts');
+
+      // [Step1] Capture before: function declaration
+      expect(src).toMatch(/export function schedule\(/);
+
+      // [Step2] Perform signature check
+      const sigMatch = src.match(/export function schedule\([\s\S]*?out\?\s*:\s*AudioNode/);
+      // [Step3] Assert optional param exists
+      expect(sigMatch, 'schedule must have optional out?: AudioNode param').not.toBeNull();
+
+      // Fallback logic must be gain.connect(out ?? audioCtx.destination) or equivalent
+      expect(src).toMatch(/gain\.connect\(out \?\? audioCtx\.destination\)/);
+    });
+
+    it('GameScreen does NOT pass out param to schedule (editor-limited)', () => {
+      const src = readSrc('src/screens/GameScreen.tsx');
+
+      // [Step1] Capture initial: find all schedule( calls
+      const scheduleCalls = [...src.matchAll(/schedule\s*\(/g)];
+      expect(scheduleCalls.length, 'GameScreen must call schedule at least once').toBeGreaterThan(0);
+
+      // [Step2] Extract each call snippet (next 120 chars) and check arity
+      const calls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
+
+      // [Step3] Assert none contain 4 args / out param — all must be 3-arg (audioCtx, time, beat)
+      for (const c of calls) {
+        // Count commas: 2 commas => 3 args ; 3 commas => 4 args (with out)
+        const commaCount = (c.match(/,/g) || []).length;
+        expect(commaCount, `GameScreen schedule call must NOT have out param: ${c}`).toBe(2);
+      }
+
+      // Ensure no metronomeGain / musicGain reference in GameScreen
+      expect(src).not.toMatch(/metronomeGain/);
+      expect(src).not.toMatch(/musicGain/);
+    });
+
+    it('CalibrationScreen does NOT pass out param to schedule', () => {
+      const src = readSrc('src/screens/CalibrationScreen.tsx');
+
+      const calls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls) {
+        const commaCount = (c.match(/,/g) || []).length;
+        expect(commaCount, `CalibrationScreen schedule call must NOT have out param: ${c}`).toBe(2);
+      }
+      expect(src).not.toMatch(/metronomeGain/);
+      expect(src).not.toMatch(/musicGain/);
+    });
+
+    it('EditorScreen DOES pass metronomeGain to schedule (positive control)', () => {
+      const src = readSrc('src/screens/EditorScreen.tsx');
+
+      // [Step1] Capture all schedule calls in Editor
+      const calls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
+      expect(calls.length).toBeGreaterThan(0);
+
+      // [Step2] Find at least one 4-arg call
+      const withOut = calls.filter(c => (c.match(/,/g) || []).length === 3);
+      // [Step3] Assert editor has at least one out-param call and it references metronomeGain
+      expect(withOut.length, 'EditorScreen must have at least one schedule(..., metronomeGain) call').toBeGreaterThan(0);
+      expect(withOut.some(c => /metronomeGain/.test(c))).toBeTruthy();
+
+      // Game/Calibration remain 3-arg, Editor has 4-arg — prove editor-limited
+      const gameSrc = readSrc('src/screens/GameScreen.tsx');
+      const gameCalls = [...gameSrc.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
+      const gameWithOut = gameCalls.filter(c => (c.match(/,/g) || []).length === 3);
+      expect(gameWithOut.length, 'GameScreen must have zero 4-arg schedule calls').toBe(0);
+    });
+
+    it('schedule routing still works without out (fallback to destination) — mocked', () => {
+      const { ctx, destination } = createMockAudioCtx();
+
+      // [Step1] Capture initial destination connection count
+      schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.05, 0);
+      const g1 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
+      const beforeDest = g1._connectedTo;
+      expect(beforeDest).toBe(destination);
+
+      // [Step2] Perform second call without out at different beat
+      schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.1, 1);
+      const g2 = (ctx as unknown as Record<string, unknown>)._lastGain as MockGain;
+      // [Step3] Assert still destination (not undefined)
+      expect(g2._connectedTo).toBe(destination);
+      expect(g2._connectedTo).not.toBeNull();
+      expect(g2._connectedTo).not.toBeUndefined();
+    });
+  });
+
+  // ========================================================================
+  // Additional: gain initialization correctness (undefined vs null) and
+  // overall editor audio graph integrity
+  // ========================================================================
+  describe('5. Editor gain node initialization — undefined and non-null safety', () => {
+    it('gain refs initialized as GainNode|undefined (never null) — strict postmortem fix', () => {
+      const src = readSrc('src/screens/EditorScreen.tsx');
+
+      // [Step1] Capture ref declarations — must be GainNode | undefined, not | null
+      const musicDecl = src.match(/musicGainRef\s*=\s*useRef<GainNode\s*\|\s*([^>]+)>/);
+      const metroDecl = src.match(/metronomeGainRef\s*=\s*useRef<GainNode\s*\|\s*([^>]+)>/);
+      expect(musicDecl, 'musicGainRef typed declaration must exist').not.toBeNull();
+      expect(metroDecl, 'metronomeGainRef typed declaration must exist').not.toBeNull();
+
+      const musicType = musicDecl ? musicDecl[1] : '';
+      const metroType = metroDecl ? metroDecl[1] : '';
+
+      // [Step2] Perform type inspection: must contain undefined, must NOT be `null` only
+      const musicUsesUndefined = /undefined/.test(musicType);
+      const metroUsesUndefined = /undefined/.test(metroType);
+      const musicUsesNull = /\bnull\b/.test(musicType);
+      const metroUsesNull = /\bnull\b/.test(metroType);
+
+      // [Step3] Assert strict undefined usage (postmortem: "Change let musicGain: GainNode | null = null to | undefined")
+      expect(musicUsesUndefined, `musicGainRef must be GainNode | undefined (got "${musicType}") — not null`).toBeTruthy();
+      expect(metroUsesUndefined, `metronomeGainRef must be GainNode | undefined (got "${metroType}")`).toBeTruthy();
+      // Also ensure they are not still `| null` without undefined (would allow passing null to AudioNode|undefined param)
+      expect(musicUsesNull && !musicUsesUndefined, 'musicGainRef must not be GainNode | null without undefined').toBeFalsy();
+      expect(metroUsesNull && !metroUsesUndefined, 'metronomeGainRef must not be GainNode | null without undefined').toBeFalsy();
+
+      // Check ensureGainNodes initializes correctly and exposes window hooks
+      expect(src).toMatch(/__editorMusicGain/);
+      expect(src).toMatch(/__editorMetronomeGain/);
+
+      // Ensure no `null` literal is passed to schedule (typed as AudioNode | undefined)
+      const scheduleCalls = [...src.matchAll(/schedule\s*\([^)]*\)/g)].map(m => m[0]);
+      for (const c of scheduleCalls) {
+        expect(c, `schedule call must not pass null literal (use undefined): ${c}`).not.toMatch(/,\s*null\s*\)/);
+      }
+
+      // Initial values must be undefined, not null
+      expect(src).toMatch(/useRef<GainNode\s*\|\s*undefined>\s*\(\s*undefined\s*\)/);
+    });
+
+    it('WaveEngine/Cursor numeric consistency remains (regression guard for amplitude)', () => {
+      // [Step1] Capture initial engine at amp=1.0 center
+      const timeline = new BpmTimeline(120, []);
+      const engine1 = new WaveEngine([{ direction: 'down', beats: 1 }], timeline, 1.0, 0);
+      const beforeY = engine1.waveYAt(0.5);
+      expect(beforeY).toBeCloseTo(TW_CENTER_Y + Math.min(TW_AMP, 2 * TW_AMP * 1.0 * 0.5), 1);
+
+      // [Step2] Perform with different amplitude 2.7 (steeper) off-grid
+      const engine27 = new WaveEngine([{ direction: 'down', beats: 1 }], timeline, 2.7, 0);
+      const afterY27 = engine27.waveYAt(0.37);
+      const expected27 = TW_CENTER_Y + Math.min(TW_AMP, 2 * TW_AMP * 2.7 * 0.37);
+      // [Step3] Assert slope matches cursor speed (2*TW_AMP*amp)
+      expect(afterY27).toBeCloseTo(expected27, 1);
+
       const beatMs = 500;
-      const cursor = new Cursor(amp, 0);
+      const cursor = new Cursor(2.7, 0);
       const y0 = cursor.y;
-      cursor.update((delta * beatMs) / 1000, false, true, beatMs, 1);
-      const slopeCursor = (cursor.y - y0) / delta;
-      expect(slopeCursor).toBeCloseTo(2 * TW_AMP * amp, 0);
-      expect(slope).toBeCloseTo(slopeCursor, 0);
-    });
-
-    for (const amp of amps) {
-      for (const dir of ['down', 'up'] as const) {
-        it(`amp=${amp} dir=${dir} off-grid consistency (stay clip aware)`, () => {
-          const segs: Segment[] = [{ direction: dir, beats: 5 }];
-          const engine = new WaveEngine(segs, TIMELINE_120, amp, 0);
-          for (const b of offGrid) {
-            const actual = engine.waveYAt(b);
-            const expected = expectedClampedY(0, amp, dir, b);
-            expect(actual, `amp=${amp} dir=${dir} beat=${b}`).toBeCloseTo(expected, 1);
-          }
-        });
-      }
-    }
-
-    it('clipped single segment tilt — amp=1.0 down beats=3 reaches bottom at 0.5 not 3', () => {
-      const engine = new WaveEngine([{ direction: 'down', beats: 3 }], TIMELINE_120, 1.0, 0);
-      expect(engine.waveYAt(0.5)).toBeCloseTo(BOTTOM, 1);
-      expect(engine.waveYAt(1.0)).toBeCloseTo(BOTTOM, 1);
-      // slope before clip must be 260, not diluted 43.3
-      const dy = engine.waveYAt(0.25) - engine.waveYAt(0);
-      expect(dy / 0.25).toBeCloseTo(2 * TW_AMP * 1.0, 0);
-      // after clip flat
-      expect(engine.waveYAt(1.0) - engine.waveYAt(0.5)).toBeCloseTo(0, 0);
-    });
-  });
-
-  // ------------------------------------------------------------
-  // 8. edge: segmentize empty / invalid handling
-  // ------------------------------------------------------------
-  describe('8. edge cases', () => {
-    it('empty traj returns []', () => {
-      expect(segmentize([], 0.25, 1.0)).toEqual([]);
-      expect(segmentize([{ beat: 0, y: CENTER, down: true }], 0.25, 1.0)).toEqual([]);
-    });
-    it('invalid snap returns []', () => {
-      expect(segmentize(shortPressTraj(0, 0.5), 0, 1.0)).toEqual([]);
-      expect(segmentize(shortPressTraj(0, 0.5), -1, 1.0)).toEqual([]);
-    });
-    it('getPoints length = segments+1 invariant', () => {
-      const segs: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 0.5 },
-      ];
-      const engine = new WaveEngine(segs, TIMELINE_120, 1.0, 0);
-      const pts = engine.getPoints();
-      expect(pts.length).toBe(segs.length + 1);
-      for (const p of pts) {
-        expect(Object.keys(p).sort()).toEqual(['beat', 'y']);
-      }
+      const dt = (0.37 * beatMs) / 1000;
+      cursor.update(dt, false, true, beatMs, 1);
+      expect(cursor.y - y0).toBeCloseTo(expected27 - TW_CENTER_Y, 1);
     });
   });
 });

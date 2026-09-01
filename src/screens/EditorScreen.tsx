@@ -90,6 +90,8 @@ export default function EditorScreen() {
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [ringDetailsOpen, setRingDetailsOpen] = useState(false)
   const [segmentDetailsOpen, setSegmentDetailsOpen] = useState(false)
+  const [musicVolume, setMusicVolume] = useState(100)
+  const [metronomeVolume, setMetronomeVolume] = useState(100)
   const [mode, setMode] = useState<'play' | 'record'>('play')
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
@@ -159,6 +161,8 @@ export default function EditorScreen() {
   }, [])
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const musicGainRef = useRef<GainNode | undefined>(undefined)
+  const metronomeGainRef = useRef<GainNode | undefined>(undefined)
   const startCtxTimeRef = useRef(0)
   const startMsRef = useRef(0)
   const positionRef = useRef(0)
@@ -188,9 +192,26 @@ export default function EditorScreen() {
     }
   }, [])
 
+  const ensureGainNodes = useCallback((ctx: AudioContext) => {
+    if (!musicGainRef.current) {
+      const g = ctx.createGain()
+      g.connect(ctx.destination)
+      musicGainRef.current = g
+      ;(window as unknown as Record<string, unknown>).__editorMusicGain = g
+    }
+    if (!metronomeGainRef.current) {
+      const g = ctx.createGain()
+      g.connect(ctx.destination)
+      metronomeGainRef.current = g
+      ;(window as unknown as Record<string, unknown>).__editorMetronomeGain = g
+    }
+  }, [])
+
   const startMetronome = useCallback((ctx: AudioContext, fromMs: number) => {
     stopMetronome()
     if (!metronomeEnabledRef.current) return
+    ensureGainNodes(ctx)
+    const metronomeGain = metronomeGainRef.current
     const lookaheadSec = LOOKAHEAD_MS / 1000
     let beatIdx = Math.ceil(timeline.msToBeat(fromMs))
     if (!Number.isFinite(beatIdx) || beatIdx < 0) beatIdx = 0
@@ -206,7 +227,7 @@ export default function EditorScreen() {
       const horizon = audioCtx.currentTime + lookaheadSec
       while (nextBeatTime < horizon) {
         try {
-          schedule(audioCtx, nextBeatTime, beatIdx)
+          schedule(audioCtx, nextBeatTime, beatIdx, metronomeGain)
         } catch {
           // keep grid advancing
         }
@@ -214,11 +235,23 @@ export default function EditorScreen() {
         beatIdx++
       }
     }, 25)
-  }, [stopMetronome, timeline])
+  }, [stopMetronome, timeline, ensureGainNodes])
 
   useEffect(() => {
     ;(window as unknown as Record<string, unknown>).__editorMetronomeEnabled = metronomeEnabled
   }, [metronomeEnabled])
+
+  useEffect(() => {
+    if (musicGainRef.current) {
+      musicGainRef.current.gain.value = Math.max(0, Math.min(300, musicVolume)) / 100
+    }
+  }, [musicVolume])
+
+  useEffect(() => {
+    if (metronomeGainRef.current) {
+      metronomeGainRef.current.gain.value = Math.max(0, Math.min(300, metronomeVolume)) / 100
+    }
+  }, [metronomeVolume])
 
   useEffect(() => {
     if (isPlaying && metronomeEnabled) {
@@ -387,6 +420,7 @@ export default function EditorScreen() {
     const mgr = AudioManager.getInstance()
     await mgr.ensure()
     const ctx = mgr.ctx
+    ensureGainNodes(ctx)
     let buf = buffer
     let audioFailed = false
     if (!buf) {
@@ -415,7 +449,7 @@ export default function EditorScreen() {
     if (buf) {
       const src = ctx.createBufferSource()
       src.buffer = buf
-      src.connect(ctx.destination)
+      src.connect(musicGainRef.current!)
       const offsetSec = audioOffset / 1000
       const audioTime = Math.max(0, fromMs / 1000)
       let startWhen: number
@@ -467,7 +501,7 @@ export default function EditorScreen() {
         ? '音楽ファイルの読み込みに失敗しました（メトロノームのみで続行）'
         : null,
     )
-  }, [buffer, url, audioOffset, segments, rings, timeline, stopMetronome])
+  }, [buffer, url, audioOffset, segments, rings, timeline, stopMetronome, ensureGainNodes])
 
   const startRecording = useCallback(() => {
     let rawStartBeat: number
@@ -1014,6 +1048,46 @@ export default function EditorScreen() {
                 />
                 メトロノーム音
               </label>
+            </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="metronome-volume">
+                メトロノーム音量
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  id="metronome-volume"
+                  className="editor-slider"
+                  type="range"
+                  min={0}
+                  max={300}
+                  step={5}
+                  value={metronomeVolume}
+                  data-testid="metronome-volume"
+                  onChange={(e) => setMetronomeVolume(Math.max(0, Math.min(300, Number(e.target.value))))}
+                  style={{ flex: 1 }}
+                />
+                <span className="editor-pos-time">{metronomeVolume}%</span>
+              </div>
+            </div>
+            <div className="editor-field">
+              <label className="editor-label" htmlFor="music-volume">
+                楽曲音量
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  id="music-volume"
+                  className="editor-slider"
+                  type="range"
+                  min={0}
+                  max={300}
+                  step={5}
+                  value={musicVolume}
+                  data-testid="music-volume"
+                  onChange={(e) => setMusicVolume(Math.max(0, Math.min(300, Number(e.target.value))))}
+                  style={{ flex: 1 }}
+                />
+                <span className="editor-pos-time">{musicVolume}%</span>
+              </div>
             </div>
             {error && <div className="editor-error">{error}</div>}
           </section>
