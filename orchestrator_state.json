@@ -706,7 +706,8 @@
       "sessions": {
         "qa": "ses_fa351cbeeffeXkLp6q827q391j",
         "coder": "ses_fa35015acffeLFBBcHggsScxKi",
-        "postmortem": "ses_fa3536049ffef6Cs6fvTW47zIW"
+        "postmortem": "ses_fa3536049ffef6Cs6fvTW47zIW",
+        "reviewer": "ses_fa34e968dffeuZ4seU6G5R3gPZ"
       },
       "gate_b_golden": true
     }
