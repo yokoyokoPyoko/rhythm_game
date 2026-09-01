@@ -4,7 +4,7 @@
     "coder": "google/gemini-3.5-flash-lite",
     "qa": "google/gemini-3.5-flash-lite",
     "reviewer": "google/gemini-3.5-flash-lite",
-    "postmortem": "opencode/muse-spark-1.2-contributor-free"
+    "postmortem": "google/gemini-3.5-flash-lite"
   },
   "tasks": {
     "T00": {
@@ -658,10 +658,11 @@
       "finished": 1788166991.4127579
     },
     "T127": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788236307.5907328,
-      "sessions": {}
+      "started": 1788236403.8559563,
+      "sessions": {},
+      "cycles": 1
     }
   },
   "consecutive_no_action": 0
