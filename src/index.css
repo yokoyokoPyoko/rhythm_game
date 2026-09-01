@@ -753,6 +753,32 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.calibration-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(10, 10, 10, 0.7);
+}
+
+.calibration-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 320px;
+  padding: 1.5rem;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.calibration-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .wave-preview-wrap {
   display: flex;
   flex-direction: column;

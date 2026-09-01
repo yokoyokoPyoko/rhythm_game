@@ -5,6 +5,7 @@ import { AudioCache, getBasename } from '../audio/AudioCache'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio, loadAudioFromFile } from '../audio/loader'
 import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
+import { getManualOffsetMs, setManualOffset } from '../audio/clock'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
@@ -14,6 +15,7 @@ import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
 import SegmentEditor from './editor/SegmentEditor'
 import WavePreview, { type WaveView } from './editor/WavePreview'
+import CalibrationModal from './editor/CalibrationModal'
 import GameScreen from './GameScreen'
 
 const SNAP_OPTIONS = [0.125, 0.25, 0.5, 1]
@@ -98,6 +100,9 @@ export default function EditorScreen() {
   const [segmentDetailsOpen, setSegmentDetailsOpen] = useState(false)
   const [musicVolume, setMusicVolume] = useState(100)
   const [metronomeVolume, setMetronomeVolume] = useState(100)
+  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
+  const [calibrationOpen, setCalibrationOpen] = useState(false)
+  const savedOffsetRef = useRef(getManualOffsetMs())
   const [mode, setMode] = useState<'play' | 'record'>('play')
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
@@ -617,7 +622,8 @@ export default function EditorScreen() {
         e.preventDefault()
         if (isPlayingRef.current && modeRef.current === 'record') {
           if (keysRef.current.space) return
-          const rawBeat = timeline.msToBeat(positionRef.current)
+          const pos = positionRef.current - getManualOffsetMs()
+          const rawBeat = timeline.msToBeat(pos)
           const snapped = quantizeBeat(rawBeat, snap)
           spacePressBeatRef.current = snapped
           keysRef.current.space = true
@@ -657,6 +663,20 @@ export default function EditorScreen() {
         return
       }
 
+      // T132: offset fine-tuning with < / > keys (±10ms)
+      if (e.key === ',' || e.key === '<') {
+        const next = Math.round(getManualOffsetMs() - 10)
+        setManualOffset(next)
+        setOffsetMs(next)
+        return
+      }
+      if (e.key === '.' || e.key === '>') {
+        const next = Math.round(getManualOffsetMs() + 10)
+        setManualOffset(next)
+        setOffsetMs(next)
+        return
+      }
+
       if (!editable && (e.code === 'Delete' || e.code === 'Backspace')) {
         if (selectedRing != null) {
           e.preventDefault()
@@ -687,7 +707,8 @@ export default function EditorScreen() {
       // exactly at the released (quantized) beat and does not bleed into the
       // next snap cell (overshoot).
       if ((isUpKey || isDownKey) && modeRef.current === 'record' && isPlayingRef.current && recCursorRef.current) {
-        const rawBeat = timeline.msToBeat(positionRef.current)
+        const pos = positionRef.current - getManualOffsetMs()
+        const rawBeat = timeline.msToBeat(pos)
         const releaseBeat = quantizeBeat(rawBeat, snap)
         const y = recCursorRef.current.y
         const traj = recTrajRef.current
@@ -711,7 +732,8 @@ export default function EditorScreen() {
           return
         }
         if (modeRef.current === 'record') {
-          const rawBeat = timeline.msToBeat(positionRef.current)
+          const pos = positionRef.current - getManualOffsetMs()
+          const rawBeat = timeline.msToBeat(pos)
           const snapped = quantizeBeat(rawBeat, snap)
           const startBeat = spacePressBeatRef.current ?? snapped
           const rawDuration = snapped - startBeat
@@ -1069,8 +1091,30 @@ export default function EditorScreen() {
                   checked={metronomeEnabled}
                   onChange={(e) => setMetronomeEnabled(e.target.checked)}
                 />
-                メトロノーム音
+                 メトロノーム音
               </label>
+            </div>
+            <div className="editor-field" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span className="editor-label" style={{ marginBottom: 0 }}>
+                判定オフセット
+              </span>
+              <span className="editor-pos-time" data-testid="editor-offset">
+                offset: {offsetMs >= 0 ? '+' : ''}
+                {offsetMs}ms
+              </span>
+            </div>
+            <div className="editor-field">
+              <button
+                type="button"
+                onClick={() => {
+                  savedOffsetRef.current = getManualOffsetMs()
+                  setCalibrationOpen(true)
+                }}
+                data-testid="editor-calibration-button"
+              >
+                キャリブレーション
+              </button>
+              <p className="editor-hint">メトロノームに合わせて Space ×8回で判定オフセットを自動計測。&lt;&gt;キーで±10ms微調整</p>
             </div>
             <div className="editor-field">
               <label className="editor-label" htmlFor="metronome-volume">
@@ -1367,6 +1411,15 @@ export default function EditorScreen() {
         <div className="playtest-overlay">
           <GameScreen playtest={playtest} onExit={closePlaytest} />
         </div>
+      )}
+      {calibrationOpen && (
+        <CalibrationModal
+          onClose={(save: boolean) => {
+            setCalibrationOpen(false)
+            if (!save) setManualOffset(savedOffsetRef.current)
+            setOffsetMs(getManualOffsetMs())
+          }}
+        />
       )}
     </div>
   )
