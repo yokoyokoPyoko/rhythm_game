@@ -664,7 +664,8 @@
       "sessions": {
         "qa": "ses_fa4539331ffeNWTq4tvTUweDpO",
         "postmortem": "ses_fa451bc7fffeNaL4fkLDMoyju2",
-        "coder": "ses_fa45167b7ffeSvgZRWfc3EN1ez"
+        "coder": "ses_fa45167b7ffeSvgZRWfc3EN1ez",
+        "reviewer": "ses_fa44eddb0ffecet0u6fXbx6WXT"
       },
       "started": 1788244414.8925939,
       "gate_b_golden": true
