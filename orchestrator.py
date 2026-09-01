@@ -53,9 +53,31 @@ POSTMORTEM_DIR = ROOT / ".opencode"
 POSTMORTEM_FILE = POSTMORTEM_DIR / "POSTMORTEM.md"
 SCREENSHOT_DIR = ROOT / "screenshots"
 DYNAMIC_SPEC_FILE = ROOT / "tests" / "dynamic.spec.ts"
+DYNAMIC_TEST_FILE = ROOT / "tests" / "dynamic.test.ts"
 
 DEV_URL = os.environ.get("DEV_URL", "http://127.0.0.1:5173/")
 DEFAULT_BUDGET_MIN = 600
+
+# テストランナー実行タイムアウト（秒）。ハング（タイムアウト）時にQAテストを再生成するための上限。
+PW_RED_TIMEOUT = 150
+PW_GREEN_TIMEOUT = 180
+
+
+def _test_runner(args: argparse.Namespace | None) -> str:
+    """現在のテストランナーを返す（デフォルト vitest）。"""
+    if args is None:
+        return "vitest"
+    return getattr(args, "test_runner", "vitest") or "vitest"
+
+
+def _dynamic_test_file(tr: str) -> Path:
+    """テストランナーに応じた動的テストファイルパスを返す。"""
+    return DYNAMIC_TEST_FILE if tr == "vitest" else DYNAMIC_SPEC_FILE
+
+
+def _qa_test_filename(tr: str) -> str:
+    """QAに生成させるテストファイル名（vitest=dynamic.test.ts / playwright=dynamic.spec.ts）。"""
+    return "dynamic.test.ts" if tr == "vitest" else "dynamic.spec.ts"
 
 # モデル定義カタログ (表示名, プロバイダ, モデルID)
 MODEL_CATALOG = {
@@ -860,8 +882,8 @@ def ensure_dev_server() -> bool:
 VIDEO_DIR = ROOT / "recordings"
 
 
-def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False) -> bool:
-    """TDD pipeline: QA-Gen writes tests/dynamic.spec.ts from the specification (no execution).
+def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = None, fresh_sessions: bool = False, test_runner: str = "vitest") -> bool:
+    """TDD pipeline: QA-Gen writes the dynamic test from the specification (no execution).
 
     Returns True if the test file was actually written. The test is expected to FAIL (Red)
     before implementation exists; the caller is responsible for the Red verification.
@@ -876,6 +898,9 @@ def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = N
     spec = extract_compact_spec(task.id)
     recent_rules = get_recent_postmortem_rules()
     context_hints = get_task_context_prompt_for_qa(task.id)
+
+    test_filename = _qa_test_filename(test_runner)
+    test_file: Path = _dynamic_test_file(test_runner)
 
     if state and task.id in state.get("tasks", {}):
         state["tasks"][task.id].setdefault("sessions", {})["qa"] = None
@@ -892,10 +917,29 @@ NEGATIVE/REMOVAL TASK PROTOCOL (Task Type: {task.task_type}):
 - Make sure positive controls verify genuine behavior so that tests do NOT trivially pass on un-implemented/stub code.
 """
 
-    prompt = fr"""Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} ({task.desc}), and save it DIRECTLY to `tests/dynamic.spec.ts` using your file-write tool.
+    if test_runner == "vitest":
+        runner_intro = (
+            f"Write a thorough Vitest (TypeScript, node environment) unit test module for task {task.id} ({task.desc}), "
+            f"and save it DIRECTLY to `tests/{test_filename}` using your file-write tool.\n\n"
+            "This runs WITHOUT a browser: directly `import` the small focused modules under test (e.g. "
+            "`WaveEngine`, `Cursor`, `segmentize`, `BpmTimeline`) from their source paths. "
+            "Use `vi.useFakeTimers()` to control time deterministically. No DOM is available — test pure "
+            "computed values / engine math, not UI. For complex T127-style specs, verify pure numeric consistency "
+            "between WaveEngine (waveYAt/getPoints) and Cursor (update) across complex amplitudes (e.g. 0.7 / 1.3 / 2.7 / 3.4) "
+            "and off-grid phases (e.g. 0.37 beat / 1.23 beat)."
+        )
+    else:
+        runner_intro = (
+            f"Write a thorough, interactive Playwright (TypeScript) automated browser test script for task {task.id} "
+            f"({task.desc}), and save it DIRECTLY to `tests/{test_filename}` using your file-write tool.\n\n"
+            "This runs headless Chromium against the Vite dev server. Use `page`, `expect` from '@playwright/test'. "
+            "Navigate via HashRouter (`window.location.hash = '#/editor'`)."
+        )
+
+    prompt = fr"""{runner_intro}
 
 Context (TEST-DRIVEN DEVELOPMENT):
-This is a TDD task. The implementation code does NOT exist yet. Your job is to write a STRICT acceptance test that will initially FAIL (Red) and must later PASS (Green) once the Coder implements the feature. The recorded video is inspected by a Product Director (Gate C Reviewer) who requires per-requirement evidence.
+This is a TDD task. The implementation code does NOT exist yet. Your job is to write a STRICT acceptance test that will initially FAIL (Red) and must later PASS (Green) once the Coder implements the feature. {"The recorded video is inspected by a Product Director (Gate C Reviewer) who requires per-requirement evidence." if test_runner == "playwright" else "The test results are inspected by a reviewer, so the assertions must be rigorous and unambiguous."}
 
 Specification:
 {spec}
@@ -919,7 +963,7 @@ STRICT QA REQUIREMENTS (verify BEHAVIOR / INTERNAL STATE, never surface-only DOM
 8. Console Error Monitoring: fail on any uncaught TypeError/ReferenceError.
 9. Off-Grid (Fractional Timing) Principle: When testing quantization, snapping, or timing judgments, NEVER test only whole-beat/integer multiples (e.g. 1000ms / 2.0 beats). You MUST include fractional off-grid inputs (e.g. holding key for 1.2 beats or 1.3 beats when snap=0.5) to verify that the value accurately snaps to the nearest grid line and prevents overshoot.
  10. **Range-Overwrite / Recording Tasks: Do NOT hardcode expected end beats or preserved slice indices. After `exitRecordMode`, READ `actualEndBeat = await page.evaluate(() => (window as any).__lastFinishRecording?.endBeat)` and compute expected preserved segments DYNAMICALLY from `initialSegments` cumulative beats: `expectedIdx = findEndIdx(initialSegments, actualEndBeat)`. Use this dynamic `expectedPreserved` for assertions. Hardcoding `endBeat = 8` or `slice(2)` will FAIL on timing drift.**
- 11. Single File Rule: write ONLY `tests/dynamic.spec.ts`. Do NOT modify other files. Do NOT run the test yourself.
+ 11. Single File Rule: write ONLY `tests/{test_filename}`. Do NOT modify other files. Do NOT run the test yourself.
  12. The test MUST be capable of FAILING now (Red) — never write assertions that trivially pass on an empty/initial state.
 
 Output only: DONE when finished. Never paste full test code into chat.
@@ -927,18 +971,18 @@ Output only: DONE when finished. Never paste full test code into chat.
     QA_CONTINUE_RETRIES = 5
     continuation_prompt = (
         prompt
-        + "\n\n[CONTINUATION] 前回の実行では tests/dynamic.spec.ts を実際に書いていません"
-        "（書き込み完了前に終わりました）。今度は file-write ツールで tests/dynamic.spec.ts を"
+        + f"\n\n[CONTINUATION] 前回の実行では tests/{test_filename} を実際に書いていません"
+        f"（書き込み完了前に終わりました）。今度は file-write ツールで tests/{test_filename} を"
         "「今すぐ直接」書いてください。説明だけでなく実際に書くこと。書き終わったら DONE のみ出力。"
     )
 
     cont_prompt = prompt
     for attempt in range(1, QA_CONTINUE_RETRIES + 1):
-        mtime_before = DYNAMIC_SPEC_FILE.stat().st_mtime if DYNAMIC_SPEC_FILE.exists() else 0.0
+        mtime_before = test_file.stat().st_mtime if test_file.exists() else 0.0
         if attempt == 1:
-            log.info("QA generating dynamic test script (TDD direct-write mode)...")
+            log.info("QA generating dynamic %s (test_runner=%s, TDD direct-write mode)...", test_filename, test_runner)
         else:
-            log.info("QA did not write tests/dynamic.spec.ts (stopped partway). Continuing (attempt %d/%d)...", attempt, QA_CONTINUE_RETRIES)
+            log.info("QA did not write tests/%s (stopped partway). Continuing (attempt %d/%d)...", test_filename, attempt, QA_CONTINUE_RETRIES)
             cont_prompt = continuation_prompt
         _, out = run_opencode_with_retry(
             qa_model, cont_prompt, timeout=None, label="QA-Gen", variant="max",
@@ -946,33 +990,86 @@ Output only: DONE when finished. Never paste full test code into chat.
             title=qa_title,
         )
 
-        wrote = DYNAMIC_SPEC_FILE.exists() and DYNAMIC_SPEC_FILE.stat().st_mtime > mtime_before
+        wrote = test_file.exists() and test_file.stat().st_mtime > mtime_before
         if wrote:
-            log.info("QA model wrote tests/dynamic.spec.ts directly.")
+            log.info("QA model wrote tests/%s directly.", test_filename)
             return True
     return False
 
 
-def run_dynamic_test_red(task: Task) -> tuple[bool, str]:
-    """TDD Red phase: run the test ONCE. Returns (True, output) if it PASSED (false-positive / no real assertions)."""
-    if not DYNAMIC_SPEC_FILE.exists():
-        return False, "tests/dynamic.spec.ts does not exist"
+def run_dynamic_test_red(task: Task, test_runner: str = "vitest") -> tuple[bool, str, bool]:
+    """TDD Red phase: run the test ONCE. Returns (passed, output, timed_out).
+
+    passed=True means it PASSED (false-positive / no real assertions).
+    timed_out=True means the run hung and hit the timeout — the QA test should be regenerated.
+    """
+    test_file = _dynamic_test_file(test_runner)
+    if not test_file.exists():
+        return False, f"{test_file.name} does not exist", False
+    if test_runner == "vitest":
+        code, out, timed_out = run_cmd_pgid_stream(
+            ["npx", "vitest", "run", f"tests/{test_file.name}"], timeout=PW_RED_TIMEOUT, prefix="red: "
+        )
+        return code == 0, out, timed_out
     if not ensure_dev_server():
-        return False, "Dev server failed to start"
-    code, out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="red: ")
-    return code == 0, out
+        return False, "Dev server failed to start", False
+    code, out, timed_out = run_cmd_pgid_stream(
+        ["npx", "playwright", "test", f"tests/{test_file.name}"], timeout=PW_RED_TIMEOUT, prefix="red: "
+    )
+    return code == 0, out, timed_out
 
 
 def run_gate_b_test(state: dict[str, Any] | None, task: Task, args: argparse.Namespace | None = None) -> GateResult:
-    """Green phase: run the (already written) Playwright test with flaky-retry. Copies golden on success."""
+    """Green phase: run the dynamic acceptance test with flaky-retry. Copies golden on success.
+
+    For playwright: runs headless Chromium with video recording (reviewed by Gate C).
+    For vitest: runs the node unit test directly; no video is produced, so Gate C uses
+    check_gate_c_code_review (git diff based) instead.
+    """
     if args and getattr(args, "code_review_only", False):
         return GateResult("Gate B (Dynamic Test)", True, "PASS (Skipped via --code-review-only mode)")
 
     if not task.ui or not has_dev_script():
         return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
 
-    if not DYNAMIC_SPEC_FILE.exists():
-        return GateResult("Gate B (Dynamic Test)", False, "tests/dynamic.spec.ts not found (QA did not write it)")
+    tr = _test_runner(args)
+    test_file = _dynamic_test_file(tr)
+    if not test_file.exists():
+        return GateResult("Gate B (Dynamic Test)", False, f"{test_file.name} not found (QA did not write it)")
+
+    if tr == "vitest":
+        log.info("Running Vitest execution (flaky-retry enabled, test_runner=vitest)...")
+        passed_any = False
+        test_out = ""
+        pass_count = 0
+        for v_attempt in range(1, 3):
+            code, test_out, _ = run_cmd_pgid_stream(
+                ["npx", "vitest", "run", f"tests/{test_file.name}"], timeout=PW_GREEN_TIMEOUT, prefix="vitest: "
+            )
+            if code == 0:
+                passed_any = True
+                m = re.search(r"Tests\s+(\d+)\s+passed", test_out)
+                if m:
+                    pass_count = int(m.group(1))
+                break
+            else:
+                log.warning("Vitest run attempt %d failed. Retrying once...", v_attempt)
+                time.sleep(2)
+        if not passed_any:
+            fatal_lines = [l for l in test_out.splitlines() if re.search(r"Error:|failed|AssertionError", l)]
+            detail = "\n".join(fatal_lines) if fatal_lines else test_out[-1000:]
+            return GateResult("Gate B (Dynamic Test)", False, detail)
+        golden_file = ROOT / "tests" / f".gateb_{task.id}.test.ts"
+        try:
+            import shutil
+            shutil.copy(test_file, golden_file)
+            if state and task.id in state.get("tasks", {}):
+                state["tasks"][task.id]["gate_b_golden"] = True
+                save_state(state)
+        except Exception:
+            pass
+        log.info("Vitest execution completed (%d test(s) passed).", pass_count)
+        return GateResult("Gate B (Dynamic Test)", True, f"PASS ({pass_count} test(s) passed)")
 
     if not ensure_dev_server():
         return GateResult("Gate B (Dynamic Test)", False, "Dev server failed to start")
@@ -981,7 +1078,9 @@ def run_gate_b_test(state: dict[str, Any] | None, task: Task, args: argparse.Nam
     playwright_passed = False
     test_out = ""
     for pw_attempt in range(1, 3):
-        code, test_out, _ = run_cmd_pgid_stream(["npx", "playwright", "test", "tests/dynamic.spec.ts"], timeout=None, prefix="playwright: ")
+        code, test_out, _ = run_cmd_pgid_stream(
+            ["npx", "playwright", "test", f"tests/{test_file.name}"], timeout=PW_GREEN_TIMEOUT, prefix="playwright: "
+        )
         if code == 0:
             playwright_passed = True
             break
@@ -997,7 +1096,7 @@ def run_gate_b_test(state: dict[str, Any] | None, task: Task, args: argparse.Nam
     golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
     try:
         import shutil
-        shutil.copy(DYNAMIC_SPEC_FILE, golden_file)
+        shutil.copy(test_file, golden_file)
         if state and task.id in state.get("tasks", {}):
             state["tasks"][task.id]["gate_b_golden"] = True
             save_state(state)
@@ -1452,16 +1551,19 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     no_progress_streak = 0
     best_stage = 0  # 0:未達 / 1:Gate A通過 / 2:Gate B通過 / 3:全ゲート通過
     is_code_review_only = getattr(args, "code_review_only", False)
+    tr = _test_runner(args)
+    test_file = _dynamic_test_file(tr)
+    test_filename = _qa_test_filename(tr)
     need_coder = True if is_code_review_only else False  # TDD: Coder runs AFTER QA-Gen writes the test
     need_test = bool(task.ui) and not is_code_review_only  # TDD: (re)generate acceptance test first; skip for non-UI tasks
     if is_code_review_only:
         log.info("[%s] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.", task.id)
     coder_commit = None
 
-    # Fast-path: if dynamic.spec.ts already exists (e.g. written manually or from previous run),
+    # Fast-path: if the dynamic test already exists (e.g. written manually or from previous run),
     # skip QA-Gen and go straight to Red check / Gate B.
-    if need_test and DYNAMIC_SPEC_FILE.exists() and not getattr(args, "force_qa_gen", False):
-        log.info("[%s] tests/dynamic.spec.ts already exists → skipping QA-Gen (use --force-qa-gen to regenerate)", task.id)
+    if need_test and test_file.exists() and not getattr(args, "force_qa_gen", False):
+        log.info("[%s] tests/%s already exists → skipping QA-Gen (use --force-qa-gen to regenerate)", task.id, test_filename)
         need_test = False
         need_coder = False  # will be set True if Red check fails (not yet implemented)
 
@@ -1493,35 +1595,53 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
 
         # --- TDD Phase 1: QA-Gen writes the acceptance test (Red stage) ---
         if need_test:
-            if DYNAMIC_SPEC_FILE.exists():
+            if test_file.exists():
                 try:
-                    DYNAMIC_SPEC_FILE.unlink()
+                    test_file.unlink()
                 except Exception:
                     pass
-            wrote = generate_qa_test(task, models.qa, state=state, fresh_sessions=fresh_sessions)
+            wrote = generate_qa_test(task, models.qa, state=state, fresh_sessions=fresh_sessions, test_runner=tr)
             if not wrote:
-                log.error("[%s] QA-Gen failed to write tests/dynamic.spec.ts.", task.id)
-                generate_postmortem(task, "QA-Gen did not write tests/dynamic.spec.ts.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                log.error("[%s] QA-Gen failed to write tests/%s.", task.id, test_filename)
+                generate_postmortem(task, f"QA-Gen did not write tests/{test_filename}.", models.postmortem, state=state, fresh_sessions=fresh_sessions)
                 need_test = True
                 need_coder = False
                 mark_stage(0)
                 maybe_reset_cycle()
                 continue
             # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
-            red_passed, red_out = run_dynamic_test_red(task)
+            red_passed, red_out, red_timed_out = run_dynamic_test_red(task, tr)
+            if red_timed_out:
+                log.error("[%s] Gate B Red check HUNG (timed out). QA test is bogus/unrunnable. Regenerating test from QA...", task.id)
+                generate_postmortem(
+                    task,
+                    f"QA test HUNG/timed out during Red check (test_runner={tr}). "
+                    "The test did not exit within the timeout — likely bad/browser-side vitest usage, infinite loop, "
+                    "or waiting on DOM that never resolves. Rewrite as a pure node unit test (vi.useFakeTimers()) that "
+                    "exits promptly even when the feature is unimplemented.",
+                    models.postmortem, state=state, fresh_sessions=fresh_sessions,
+                )
+                need_test = True
+                need_coder = False
+                mark_stage(0)
+                maybe_reset_cycle()
+                continue
             if red_passed:
                 log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
                 # Check if existing code builds cleanly (Gate A)
                 ga_result = check_gate_a()
                 if ga_result.ok:
-                    # Run strict Zero-Coder Gate C review on the test execution video
-                    gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
+                    # Run strict Zero-Coder Gate C review (video for playwright, git diff code review for vitest)
+                    if tr == "vitest":
+                        gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
+                    else:
+                        gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
                     if gc_audit.ok:
                         log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
-                        golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
+                        golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
                         try:
                             import shutil
-                            shutil.copy(DYNAMIC_SPEC_FILE, golden_file)
+                            shutil.copy(test_file, golden_file)
                             if state and task.id in state.get("tasks", {}):
                                 state["tasks"][task.id]["gate_b_golden"] = True
                         except Exception:
@@ -1559,12 +1679,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 continue
             log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
         else:
-            # Reusing a previous test: ensure the spec file exists (restore golden if rolled back).
-            if not DYNAMIC_SPEC_FILE.exists():
-                golden_file = ROOT / "tests" / f".gateb_{task.id}.spec.ts"
+            # Reusing a previous test: ensure the test file exists (restore golden if rolled back).
+            if not test_file.exists():
+                golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
                 if golden_file.exists():
                     import shutil
-                    shutil.copy(golden_file, DYNAMIC_SPEC_FILE)
+                    shutil.copy(golden_file, test_file)
 
         # --- TDD Phase 2: Coder implements to make the test Green (+ Gate A) ---
         if need_coder:
@@ -1658,7 +1778,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         git_checkpoint(f"checkpoint({task.id}, gate-b)")
 
         # 4. Gate C (Reviewer)
-        if is_code_review_only:
+        if is_code_review_only or _test_runner(args) == "vitest":
             gc = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
         else:
             gc = check_gate_c(task, models.reviewer)
@@ -1741,6 +1861,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Force re-execution of passed tasks")
     parser.add_argument("--step", action="store_true", help="1タスク完了ごとにEnterキー確認を挟む（ステップ実行モード）")
     parser.add_argument("--reset-state", action="store_true", help="Reset state file")
+    parser.add_argument("--reset-task", metavar="TID", help="Reset a specific task (e.g. T127) to its start checkpoint: reset its status to pending, remove its test/golden files, and roll back ONLY the task's own source changes (orchestrator.py / config / state are preserved so the tooling itself is never reset)")
     parser.add_argument("--budget-min", type=int, default=DEFAULT_BUDGET_MIN, help="Total budget in minutes")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive model selector")
     parser.add_argument("--fresh-sessions", action="store_true", help="Always create fresh OpenCode sessions for tasks (ignoring past sessions)")
@@ -1748,7 +1869,8 @@ def main() -> None:
     parser.add_argument("--qa", help="Override QA model ID or short key")
     parser.add_argument("--reviewer", help="Override Reviewer model ID or short key")
     parser.add_argument("--postmortem", help="Override Postmortem model ID or short key")
-    parser.add_argument("--force-qa-gen", action="store_true", help="tests/dynamic.spec.tsが既存でもQA-Genを強制再実行する（デフォルトはスキップ）")
+    parser.add_argument("--force-qa-gen", action="store_true", help="既存の動的テストファイルが存在してもQA-Genを強制再実行する（デフォルトはスキップ）")
+    parser.add_argument("--test-runner", choices=["vitest", "playwright"], default="vitest", help="Test runner to use for the dynamic TDD tests (default: vitest)")
     parser.add_argument("--code-review-only", "--no-video", "--no-gui", dest="code_review_only", action="store_true", help="動画録画(Gate B)をスキップし、git diff と仕様書のAIコード直接審査(Gate C)で進行する")
     parser.add_argument("--debug-mode", action="store_true", help="Enable practical mode (automatic logging for debugging)")
     args = parser.parse_args()
@@ -1773,6 +1895,64 @@ def main() -> None:
     if args.reset_state and STATE_FILE.exists():
         STATE_FILE.unlink()
         log.info("Reset state file.")
+
+    if args.reset_task:
+        tid = args.reset_task.strip().upper()
+        # 案1: タスク固有のソース変更だけを巻き戻す。orchestrator.py や設定・状態・ツーリング（メタ）は絶対に巻き戻さない。
+        META_COPY = {"orchestrator.py", "orchestrator_state.json", "orchestrator.log",
+                     "tasks.json", "AGENTS.md", "playwright.config.ts", "vitest.config.ts",
+                     ".gitignore", "package.json", "package-lock.json"}
+        log.info("Resetting task %s to its start checkpoint (orchestrator/config preserved)...", tid)
+
+        code, log_out, _ = run_cmd_pgid_stream(["git", "log", f"--grep=wip({tid}): start", "--format=%H"], timeout=10)
+        commits = [line.strip() for line in log_out.splitlines() if line.strip()]
+        if not commits:
+            log.warning("No git commit checkpoint matching 'wip(%s): start' found. Performing partial reset only (state + test files).", tid)
+        else:
+            start_commit = commits[-1]
+            log.info("Start checkpoint commit for %s: %s", tid, start_commit)
+            # 開始コミットに存在する全トラック済みファイルをNUL区切りで列挙（特殊文字/空白を含むパスも正しく扱う）
+            try:
+                ls_proc = subprocess.run(
+                    ["git", "ls-tree", "-z", "-r", "--name-only", start_commit],
+                    capture_output=True, text=False, cwd=str(ROOT),
+                )
+                raw_paths = ls_proc.stdout.decode("utf-8", errors="replace").split("\0")
+                paths_to_restore = [p for p in raw_paths if p.strip() and p not in META_COPY]
+            except Exception as exc:
+                log.error("Failed to list files at start commit: %s", exc)
+                paths_to_restore = []
+            if paths_to_restore:
+                # パスに空白や特殊文字を含む場合があるため、--pathspec-from-file で安全に復元する
+                tmpfile = ROOT / ".reset_task_paths.txt"
+                tmpfile.write_text("\n".join(paths_to_restore) + "\n", encoding="utf-8")
+                try:
+                    run_cmd_pgid_stream(
+                        ["git", "checkout", start_commit, "--pathspec-from-file", str(tmpfile)],
+                        timeout=30,
+                    )
+                    log.info("Rolled back %d task-owned file(s) to start checkpoint (orchestrator/config preserved).", len(paths_to_restore))
+                finally:
+                    tmpfile.unlink(missing_ok=True)
+            # タスク開始後に追加された未トラックのタスク関連ファイル（tests/ など）を掃除
+            run_cmd_pgid_stream(["git", "clean", "-fd", "--", "src", "tests", "docs", "public", "index.html"], timeout=30)
+
+        # ステータスを pending に初期化（メタ状態ファイルは維持したまま該当タスクだけリセット）
+        state = load_state()
+        state.setdefault("tasks", {})[tid] = {"status": "pending", "attempts": 0, "cycles": 0}
+        save_state(state)
+        log.info("Reset task %s status in orchestrator_state.json to pending.", tid)
+
+        for f in [ROOT / "tests" / "dynamic.spec.ts", ROOT / "tests" / "dynamic.test.ts"]:
+            if f.exists():
+                f.unlink()
+                log.info("Removed %s", f.name)
+        for gf in (ROOT / "tests").glob(f".gateb_{tid}.*"):
+            gf.unlink()
+            log.info("Removed golden file %s", gf.name)
+
+        print(f"\n{GREEN}Successfully reset task {tid} to its start checkpoint.{RESET}\n")
+        sys.exit(0)
 
     all_tasks = topo_sort(load_tasks())
     tasks_by_id = {t.id: t for t in all_tasks}
