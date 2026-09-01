@@ -708,7 +708,7 @@
         "coder": "ses_fa35015acffeLFBBcHggsScxKi",
         "postmortem": "ses_fa3536049ffef6Cs6fvTW47zIW"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
