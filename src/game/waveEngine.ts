@@ -9,6 +9,8 @@ export const WAVELENGTH_BEATS = 4;
 interface WavePoint {
   beat: number;
   y: number;
+  /** Per-beat Y displacement for this segment (px). Up = negative, down = positive, stay = 0. */
+  dY: number;
 }
 
 function sanitizeStartPosition(v: unknown): number {
@@ -51,10 +53,12 @@ export class WaveEngine {
     const waveTop = TW_CENTER_Y - TW_AMP;
     const waveBottom = TW_CENTER_Y + TW_AMP;
     const startY = TW_CENTER_Y - this.startPosition * TW_AMP;
-    const points: WavePoint[] = [{ beat: 0, y: startY }];
-    let beat = 0;
-    let currentY = startY;
-    for (const seg of segments) {
+    const perBeatPx = 2 * TW_AMP * this.amplitude;
+    const dYOf = (dir: 'up' | 'down' | 'stay') =>
+      dir === 'up' ? -perBeatPx : dir === 'down' ? perBeatPx : 0;
+
+    const validSegs: { beats: number; dir: 'up' | 'down' | 'stay' }[] = [];
+    for (const seg of segments ?? []) {
       if (!seg) {
         continue;
       }
@@ -62,26 +66,35 @@ export class WaveEngine {
       if (beats <= 0) {
         continue;
       }
-      beat += beats;
-      const dir = sanitizeDirection(seg.direction);
-      // T127: amplitude is speed coefficient (higher amplitude = faster/steeper).
-      // Displacement per beat = 2 * TW_AMP * amplitude * beats (clamped to [waveTop, waveBottom]).
-      // amplitude=1 -> 1 beat for full span (2*TW_AMP), amplitude=2 -> 0.5 beats for full span.
-      const delta = 2 * TW_AMP * this.amplitude * beats;
-      if (dir === 'up') {
+      validSegs.push({ beats, dir: sanitizeDirection(seg.direction) });
+    }
+
+    // T127/T128: amplitude is speed coefficient. Per-beat displacement = 2*TW_AMP*amplitude.
+    // Segment total displacement = perBeatPx * beats, clamped to [waveTop, waveBottom].
+    // points[k] is the start vertex of segment k, so its dY = dY of segment k.
+    const points: WavePoint[] = [];
+    points.push({
+      beat: 0,
+      y: startY,
+      dY: validSegs.length > 0 ? dYOf(validSegs[0].dir) : 0,
+    });
+    let beat = 0;
+    let currentY = startY;
+    for (let k = 0; k < validSegs.length; k++) {
+      const vs = validSegs[k];
+      beat += vs.beats;
+      const delta = perBeatPx * vs.beats;
+      if (vs.dir === 'up') {
         currentY = Math.max(waveTop, Math.min(waveBottom, currentY - delta));
-      } else if (dir === 'down') {
+      } else if (vs.dir === 'down') {
         currentY = Math.max(waveTop, Math.min(waveBottom, currentY + delta));
-      } else {
-        // stay: currentY remains unchanged
       }
-      points.push({
-        beat,
-        y: currentY,
-      });
+      // stay: no change
+      const nextDY = k + 1 < validSegs.length ? dYOf(validSegs[k + 1].dir) : 0;
+      points.push({ beat, y: currentY, dY: nextDY });
     }
     if (points.length === 1) {
-      points.push({ beat: 1, y: waveTop });
+      points.push({ beat: 1, y: waveTop, dY: 0 });
     }
     return points;
   }
@@ -91,16 +104,19 @@ export class WaveEngine {
   }
 
   waveYAt(beat: number): number {
+    const startY = TW_CENTER_Y - this.startPosition * TW_AMP;
     if (!Number.isFinite(beat)) {
-      return TW_CENTER_Y - this.startPosition * TW_AMP;
+      return startY;
     }
     if (beat <= 0) {
-      return TW_CENTER_Y - this.startPosition * TW_AMP;
+      return startY;
     }
     const last = this.points[this.points.length - 1];
     if (beat >= last.beat) {
       return last.y;
     }
+    const waveTop = TW_CENTER_Y - TW_AMP;
+    const waveBottom = TW_CENTER_Y + TW_AMP;
     for (let i = 0; i < this.points.length - 1; i++) {
       const p0 = this.points[i];
       const p1 = this.points[i + 1];
@@ -108,8 +124,11 @@ export class WaveEngine {
         if (p1.beat <= p0.beat) {
           return p1.y;
         }
-        const t = (beat - p0.beat) / (p1.beat - p0.beat);
-        return p0.y + (p1.y - p0.y) * t;
+        // T128: interpolate using per-beat displacement dY, clamped to bounds.
+        // This ensures the wave slope matches the cursor speed exactly,
+        // and after reaching a boundary the wave stays flat (horizontal stay).
+        const rawY = p0.y + p0.dY * (beat - p0.beat);
+        return Math.max(waveTop, Math.min(waveBottom, rawY));
       }
     }
     return last.y;

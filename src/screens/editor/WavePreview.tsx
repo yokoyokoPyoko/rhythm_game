@@ -200,13 +200,12 @@ export default function WavePreview({
     ctx.font = '10px Inter, system-ui, sans-serif'
     ctx.fillText('START', 6, RULER_H + 4)
 
-    // Segment color coding (up = accent, down = sub, stay = warning).
-    // Vertex-direct rendering: each segment's own interval [b0, b1] is drawn by
-    // connecting its endpoints (vertices) directly via lineTo — no fixed-step
-    // resampling, so corners stay sharp at any zoom. Each segment is drawn only
-    // within its own beat range, eliminating the previous whole-wave multi-draw.
+    // T128: Segment drawing via waveYAt-sampled polyline (climb + clamp).
+    // Instead of single lineTo between clamped endpoints, sample waveYAt at fine
+    // intervals to correctly show the steep climb and flat stay after boundary.
     const drawRangeEnd = viewStart + viewBeats
     const points = engine.getPoints()
+    const SAMPLE_STEP = 0.125 // beats between samples; fine enough for smooth polyline
     for (let i = 0; i < points.length - 1; i++) {
       const p0 = points[i]
       const p1 = points[i + 1]
@@ -226,24 +225,43 @@ export default function WavePreview({
       const segEndB = Math.min(p1.beat, drawRangeEnd)
       if (segEndB <= segStartB) continue
 
-      const x0 = beatToX(segStartB)
-      const y0 = mapY(engine.waveYAt(segStartB))
-      const x1 = beatToX(segEndB)
-      const y1 = mapY(engine.waveYAt(segEndB))
-      // Hover highlight: slightly thicker and brighter, selected takes precedence
       const effColor = isSelectedEdge ? SELECT_COLOR : isHoveredEdge ? 'rgba(237,237,237,0.95)' : color
       ctx.strokeStyle = effColor
       ctx.lineWidth = isSelectedEdge ? 4 : isHoveredEdge ? 3.5 : 2.5
       ctx.beginPath()
-      ctx.moveTo(x0, y0)
-      ctx.lineTo(x1, y1)
+      // Sample waveYAt at fine intervals to capture climb + flat stay
+      let first = true
+      for (let b = segStartB; b <= segEndB + 1e-9; b += SAMPLE_STEP) {
+        const bx = beatToX(b)
+        const by = mapY(engine.waveYAt(b))
+        if (first) {
+          ctx.moveTo(bx, by)
+          first = false
+        } else {
+          ctx.lineTo(bx, by)
+        }
+      }
+      // Ensure the end point is exact
+      const endX = beatToX(segEndB)
+      const endY = mapY(engine.waveYAt(segEndB))
+      if (!first) ctx.lineTo(endX, endY)
       ctx.stroke()
       if (isHighlighted) {
         ctx.strokeStyle = isSelectedEdge ? 'rgba(237,237,237,0.25)' : 'rgba(237,237,237,0.18)'
         ctx.lineWidth = isSelectedEdge ? 10 : 8
         ctx.beginPath()
-        ctx.moveTo(x0, y0)
-        ctx.lineTo(x1, y1)
+        first = true
+        for (let b = segStartB; b <= segEndB + 1e-9; b += SAMPLE_STEP) {
+          const bx = beatToX(b)
+          const by = mapY(engine.waveYAt(b))
+          if (first) {
+            ctx.moveTo(bx, by)
+            first = false
+          } else {
+            ctx.lineTo(bx, by)
+          }
+        }
+        if (!first) ctx.lineTo(endX, endY)
         ctx.stroke()
       }
     }
@@ -559,24 +577,34 @@ export default function WavePreview({
     const minAmp = Math.max(8, 0.2 * rect.height)
     const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
     const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
-    const beat = xToBeatLocal(clientX - rect.left, rect.width)
+    const clickX = clientX - rect.left
     const clickY = clientY - rect.top
+    // T128: use waveYAt-sampled polyline to match the visual rendering.
+    const SAMPLE_STEP = 0.125
     for (let i = 0; i < pts.length - 1; i++) {
       const p0 = pts[i]
       const p1 = pts[i + 1]
-      if (beat < p0.beat - 0.05 || beat > p1.beat + 0.05) continue
-      const x0 = ((p0.beat - g.viewStart) / g.viewBeats) * rect.width
-      const x1 = ((p1.beat - g.viewStart) / g.viewBeats) * rect.width
-      const y0 = mapY(p0.y)
-      const y1 = mapY(p1.y)
-      // distance from point to segment
-      const len2 = (x1 - x0) ** 2 + (y1 - y0) ** 2
-      if (len2 < 1e-6) continue
-      const t = Math.max(0, Math.min(1, ((clientX - rect.left - x0) * (x1 - x0) + (clickY - y0) * (y1 - y0)) / len2))
-      const projX = x0 + t * (x1 - x0)
-      const projY = y0 + t * (y1 - y0)
-      const d = Math.hypot(clientX - rect.left - projX, clickY - projY)
-      if (d < 16) return i
+      if (clickX < ((p0.beat - g.viewStart) / g.viewBeats) * rect.width - 20) continue
+      if (clickX > ((p1.beat - g.viewStart) / g.viewBeats) * rect.width + 20) continue
+      // Sample polyline within this segment and check distance to each sub-segment
+      const segStartB = p0.beat
+      const segEndB = p1.beat
+      let prevX = ((segStartB - g.viewStart) / g.viewBeats) * rect.width
+      let prevY = mapY(engine.waveYAt(segStartB))
+      for (let b = segStartB + SAMPLE_STEP; b <= segEndB + 1e-9; b += SAMPLE_STEP) {
+        const bx = ((Math.min(b, segEndB) - g.viewStart) / g.viewBeats) * rect.width
+        const by = mapY(engine.waveYAt(Math.min(b, segEndB)))
+        const len2 = (bx - prevX) ** 2 + (by - prevY) ** 2
+        if (len2 >= 1e-6) {
+          const t = Math.max(0, Math.min(1, ((clickX - prevX) * (bx - prevX) + (clickY - prevY) * (by - prevY)) / len2))
+          const projX = prevX + t * (bx - prevX)
+          const projY = prevY + t * (by - prevY)
+          const d = Math.hypot(clickX - projX, clickY - projY)
+          if (d < 16) return i
+        }
+        prevX = bx
+        prevY = by
+      }
     }
     return -1
   }

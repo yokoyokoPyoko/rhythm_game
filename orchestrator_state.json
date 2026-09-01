@@ -673,9 +673,14 @@
     },
     "T128": {
       "status": "running",
-      "attempts": 0,
-      "cycles": 0,
-      "started": 1788248718.902642
+      "attempts": 1,
+      "cycles": 1,
+      "started": 1788248718.902642,
+      "sessions": {
+        "qa": "ses_fa411e08dfferTidWnrqufXTbx",
+        "coder": "ses_fa410a8b6ffeU3RXLRTJVHfpYj"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
