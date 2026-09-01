@@ -659,10 +659,15 @@
     },
     "T127": {
       "status": "running",
-      "attempts": 0,
-      "cycles": 0,
-      "sessions": {},
-      "started": 1788244414.8925939
+      "attempts": 2,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_fa4539331ffeNWTq4tvTUweDpO",
+        "postmortem": "ses_fa451bc7fffeNaL4fkLDMoyju2",
+        "coder": "ses_fa45167b7ffeSvgZRWfc3EN1ez"
+      },
+      "started": 1788244414.8925939,
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
