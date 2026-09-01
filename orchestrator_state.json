@@ -694,7 +694,7 @@
         "qa": "ses_fa3d1c1bcffewmtAm2Pe7wkNvX",
         "coder": "ses_fa3d01176ffevWVHCNlQb2gWhw"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
