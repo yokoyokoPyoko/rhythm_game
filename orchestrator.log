@@ -5188,3 +5188,20 @@ Error: No tests found.
 2026-09-01 17:45:28,916 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-01 17:45:29,918 [INFO] Orchestrator range execution: 1 tasks (from=T129, to=T129, budget=600m)
 2026-09-01 17:45:29,918 [INFO] [T129] --only mode: skipping dependency checks.
+2026-09-01 17:45:29,957 [INFO] [T129] Removed shared tests/dynamic.test.ts at task start so a task-specific test is regenerated.
+2026-09-01 17:45:29,959 [INFO] Starting implementation [T129] (attempt 1, cycle 1/10)
+2026-09-01 17:45:29,959 [INFO] Starting Vite dev server (http://127.0.0.1:5173/)...
+2026-09-01 17:45:32,041 [INFO] Vite dev server ready.
+2026-09-01 17:45:32,049 [INFO] QA generating dynamic dynamic.test.ts (test_runner=vitest, TDD direct-write mode)...
+2026-09-01 17:45:32,051 [INFO] RateLimit sleep: 5s...
+2026-09-01 17:45:37,051 [INFO] Dispatching [1mQA-Gen[0m (model=[90mopencode/muse-spark-1.2-contributor-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T129] Qa 94db7a66)
+2026-09-01 17:53:55,548 [INFO] Resetting task T129 to its start checkpoint (orchestrator/config preserved)...
+2026-09-01 17:53:55,603 [INFO] Start checkpoint commit for T129: 9bd8ff0b514142e26b9ab68d328fca279c679f7a
+2026-09-01 17:53:55,614 [INFO] Rolled back 173 task-owned file(s) to start checkpoint (orchestrator/config preserved).
+2026-09-01 17:53:55,618 [INFO] Reset task T129 status in orchestrator_state.json to pending.
+2026-09-01 17:53:55,618 [INFO] Removed dynamic.test.ts
+2026-09-01 17:54:21,508 [WARNING] ⚠ 別の orchestrator.py が稼働中の可能性があります (PID: [535005, 535006])。
+2026-09-01 17:54:21,509 [INFO] 続行します。
+2026-09-01 17:55:22,025 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-01 17:55:23,027 [INFO] Orchestrator range execution: 1 tasks (from=T129, to=T129, budget=600m)
+2026-09-01 17:55:23,027 [INFO] [T129] --only mode: skipping dependency checks.
