@@ -147,8 +147,8 @@ test.describe('T105: 録音クオンタイズのキー離し（リリース）�
           { beat: 1.3, y: 430, down: false },
         ];
         return {
-          case1: segmentize(traj1, s, 130),
-          case2: segmentize(traj2, s, 130),
+          case1: segmentize(traj1, s, 1.0),
+          case2: segmentize(traj2, s, 1.0),
         };
       }, snap);
 
@@ -389,7 +389,7 @@ test.describe('T105: 録音クオンタイズのキー離し（リリース）�
           { beat: 1.5, y: 410, down: false },
           { beat: 2.0, y: 410, down: false },
         ];
-        return segmentize(traj, s, 130);
+        return segmentize(traj, s, 1.0);
       }, snap);
 
       for (const seg of result) {

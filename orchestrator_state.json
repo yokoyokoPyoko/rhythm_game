@@ -687,9 +687,14 @@
     },
     "T129": {
       "status": "running",
-      "attempts": 0,
-      "cycles": 0,
-      "started": 1788252923.0278246
+      "attempts": 1,
+      "cycles": 1,
+      "started": 1788252923.0278246,
+      "sessions": {
+        "qa": "ses_fa3d1c1bcffewmtAm2Pe7wkNvX",
+        "coder": "ses_fa3d01176ffevWVHCNlQb2gWhw"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
