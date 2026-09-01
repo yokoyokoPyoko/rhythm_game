@@ -99,8 +99,8 @@ export class WaveEngine {
     return points;
   }
 
-  getPoints(): WavePoint[] {
-    return this.points;
+  getPoints(): { beat: number; y: number }[] {
+    return this.points.map(p => ({ beat: p.beat, y: p.y }));
   }
 
   waveYAt(beat: number): number {
