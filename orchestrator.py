@@ -1285,8 +1285,87 @@ def _extract_json_object(out: str) -> dict | None:
     return None
 
 
+def _extract_review_json(out: str) -> dict | None:
+    """Extract the review-verdict JSON object, preferring a dict carrying BOTH 'score' and 'verdict' keys.
+
+    The reviewer transcript (`opencode run` stdout) interleaves tool-call JSON fragments (e.g. `read`
+    tool args like {"filePath": ...}) that lack review keys. The generic `_extract_json_object` picks the
+    structurally-last valid object, which can be one of those foreign fragments, yielding a bogus
+    `Score=0, Verdict=FAIL`. This helper scans ALL valid objects and prefers the one that actually
+    holds a review verdict (last occurrence wins, i.e. the model's final answer).
+    """
+    verdict_candidates: list[dict] = []
+
+    def is_verdict(d):
+        return isinstance(d, dict) and ("score" in d) and ("verdict" in d)
+
+    # 1. Markdown json code blocks (last to first preserves final-answer precedence)
+    for pattern in [r'```(?:json)?\s*(\{.*?\})\s*```', r'```(?:json)?\s*(\[.*?\])\s*```']:
+        for m in reversed(list(re.finditer(pattern, out, re.S))):
+            try:
+                res = json.loads(m.group(1))
+                if isinstance(res, list) and res:
+                    res = res[0]
+                if is_verdict(res):
+                    verdict_candidates.append(res)
+            except Exception:
+                pass
+
+    # 2. Scan every brace-delimited JSON object, tracking candidates in byte order
+    ordered: list[dict] = []
+    n = len(out)
+    i = 0
+    while i < n:
+        while i < n and out[i] != '{':
+            i += 1
+        if i >= n:
+            break
+        depth = 0
+        in_string = False
+        escape = False
+        end_idx = -1
+        j = i
+        while j < n:
+            char = out[j]
+            if escape:
+                escape = False
+            elif char == '\\':
+                escape = True
+            elif char == '"':
+                in_string = not in_string
+            elif not in_string:
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = j
+                        break
+            j += 1
+        if end_idx != -1:
+            try:
+                res = json.loads(out[i:end_idx + 1])
+                if isinstance(res, list) and res:
+                    res = res[0]
+                if is_verdict(res):
+                    ordered.append(res)
+            except Exception:
+                pass
+            i = end_idx + 1
+        else:
+            i += 1
+
+    # Prefer markdown-block verdicts, then brace-scanned verdicts; last wins.
+    candidates = verdict_candidates + ordered
+    if candidates:
+        return candidates[-1]
+
+    # Fall back to generic extraction (unchanged behavior) if no verdict-shaped object is found.
+    return _extract_json_object(out)
+
+
 def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
-    res = _extract_json_object(out)
+    res = _extract_review_json(out)
     if not res or not isinstance(res, dict):
         return False, f"Reviewer output did not contain valid evaluation JSON. Raw head: {out[:200]!r}"
     try:
