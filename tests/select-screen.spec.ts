@@ -54,9 +54,11 @@ test('T31 select screen: song cards, click to play, L to calibration', async ({ 
   await page.waitForTimeout(2000);
 
   await page.keyboard.press('l');
-  await expect(page).toHaveURL(/\/calibration$/, { timeout: 5000 });
+  await expect(page.locator('[data-testid="editor-calibration-modal"]')).toBeVisible({ timeout: 5000 });
   await expect(page.locator('body')).toBeAttached();
   await page.waitForTimeout(2000);
+  // Close the overlay (ESC) so subsequent assertions / screenshots are clean
+  await page.keyboard.press('Escape');
 
   expect(errors).toHaveLength(0);
   expect(title).toBeTruthy();

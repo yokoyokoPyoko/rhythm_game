@@ -1108,6 +1108,8 @@ export default function EditorScreen() {
                 type="button"
                 onClick={() => {
                   savedOffsetRef.current = getManualOffsetMs()
+                  stop()
+                  stopMetronome()
                   setCalibrationOpen(true)
                 }}
                 data-testid="editor-calibration-button"

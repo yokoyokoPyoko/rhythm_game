@@ -598,14 +598,15 @@ test('T98 Wave Model Unification + Editor Recording Mode + DAW-style Zoom/Pan', 
   // 16. Verify Calibration Screen accessibility
   // ============================================================
   await page.evaluate(() => {
-    window.location.hash = '#/calibration'
+    window.location.hash = '#/'
   })
-  await page.waitForSelector('.calibration-screen', { timeout: 5000 })
+  await page.keyboard.press('l')
+  await page.waitForSelector('[data-testid="editor-calibration-modal"]', { timeout: 5000 })
   await page.waitForTimeout(2000)
   await page.screenshot({ path: 'recordings/t98_27_calibration.png' })
   await page.waitForTimeout(2000)
 
-  // Go back home
+  // Close overlay (cancel)
   await page.keyboard.press('Escape')
   await page.waitForTimeout(1500)
 

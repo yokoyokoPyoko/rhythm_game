@@ -4,8 +4,10 @@ import { loadSongList } from '../chart/manifest'
 import { parseChartText } from '../chart/loader'
 import { loadAudioFromFile } from '../audio/loader'
 import { AudioManager } from '../audio/AudioManager'
+import { getManualOffsetMs, setManualOffset } from '../audio/clock'
 import { AudioCache, getBasename } from '../audio/AudioCache'
 import { ChartCache } from '../chart/cache'
+import CalibrationModal from './editor/CalibrationModal'
 import type { Chart, SongEntry } from '../types'
 
 const MAX_DIFFICULTY = 5
@@ -24,6 +26,8 @@ export default function SelectScreen() {
   const [audioBasename, setAudioBasename] = useState<string>('')
 
   const dropzoneRef = useRef<HTMLDivElement>(null)
+  const [calibrationOpen, setCalibrationOpen] = useState(false)
+  const savedOffsetRef = useRef(getManualOffsetMs())
 
   useEffect(() => {
     loadSongList()
@@ -40,7 +44,8 @@ export default function SelectScreen() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'l' || e.key === 'L') {
-        navigate('/calibration')
+        savedOffsetRef.current = getManualOffsetMs()
+        setCalibrationOpen(true)
       } else if (e.key === 'e' || e.key === 'E') {
         navigate('/editor')
       }
@@ -330,8 +335,28 @@ beat = 8.0
         <button type="button" className="select-nav-button" onClick={() => navigate('/editor')}>
           エディタ
         </button>
+        <button
+          type="button"
+          className="select-nav-button"
+          data-testid="select-calibration-button"
+          onClick={() => {
+            savedOffsetRef.current = getManualOffsetMs()
+            setCalibrationOpen(true)
+          }}
+        >
+          キャリブレーション
+        </button>
         <span className="select-hint">L: キャリブレーション / E: エディタ</span>
       </div>
+
+      {calibrationOpen && (
+        <CalibrationModal
+          onClose={(save: boolean) => {
+            setCalibrationOpen(false)
+            if (!save) setManualOffset(savedOffsetRef.current)
+          }}
+        />
+      )}
     </div>
   )
 }

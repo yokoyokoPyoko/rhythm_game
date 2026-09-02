@@ -741,9 +741,15 @@
     },
     "T133": {
       "status": "running",
-      "attempts": 0,
-      "cycles": 0,
-      "started": 1788312085.5588098
+      "attempts": 2,
+      "cycles": 1,
+      "started": 1788312085.5588098,
+      "sessions": {
+        "qa": "ses_fa0477439ffeMS8OTOzct6CS7G",
+        "postmortem": "ses_fa04890f7ffemSFZ0t3t8GIqyx",
+        "coder": "ses_fa04507d1ffeeJyW6rNBSpRWBi"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

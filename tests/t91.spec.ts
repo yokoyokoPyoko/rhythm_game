@@ -26,25 +26,25 @@ test('T91 comprehensive debug & verification test', async ({ page }) => {
   await page.screenshot({ path: 'screenshots/frame_1.png' });
   await page.waitForTimeout(1500);
 
-  // 2. Calibration Screen (L key / offset reset verification)
+  // 2. Calibration overlay (L key / offset reset verification)
   await page.keyboard.press('l');
-  await expect(page.locator('.calibration-screen')).toBeVisible({ timeout: 5000 });
-  await expect(page.locator('.calibration-progress-count')).toHaveText('0');
+  await expect(page.locator('[data-testid="editor-calibration-modal"]')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('[data-testid="calibration-canvas"]')).toBeVisible();
+  await expect(page.locator('[data-testid="calibration-offset"]')).toBeVisible();
   await page.screenshot({ path: 'screenshots/frame_2.png' });
   await page.waitForTimeout(1000);
 
-  // Tap Space 8 times for calibration
-  for (let i = 0; i < 8; i++) {
-    await page.keyboard.press('Space');
-    await page.waitForTimeout(300);
-  }
-  await expect(page.locator('.calibration-done')).toBeVisible({ timeout: 5000 });
+  // Space to trigger ring judgement (proseka-style loop), then tweak offset
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('.');
+  await page.waitForTimeout(150);
   await page.screenshot({ path: 'screenshots/frame_3.png' });
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(800);
 
-  // Back to select screen
-  const backBtn = page.locator('button.calibration-back', { hasText: '曲選択に戻る' });
-  await backBtn.click();
+  // Cancel via ESC -> close overlay and restore, back to select screen
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-testid="editor-calibration-modal"]')).toHaveCount(0, { timeout: 5000 });
   await expect(page.locator('.select-screen')).toBeVisible({ timeout: 5000 });
   await page.waitForTimeout(1000);
 

@@ -62,13 +62,14 @@ test('T30 React app shell routing test', async ({ page }) => {
   await expect(page.locator('.editor-screen')).toBeVisible();
   await page.waitForTimeout(2000);
 
-  // Route 5: /calibration -> CalibrationScreen (tap Space to hear metronome)
-  await page.goto('http://localhost:5173/#/calibration');
-  await page.waitForLoadState('domcontentloaded');
-  await expect(page.locator('.calibration-screen')).toBeVisible();
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(3000);
+  // Route 5: calibration overlay opened via L key (no dedicated /calibration route)
+  await page.goto('http://localhost:5173/');
+  await expect(page.locator('.select-screen')).toBeVisible();
+  await page.keyboard.press('l');
+  await expect(page.locator('[data-testid="editor-calibration-modal"]')).toBeVisible();
+  await page.waitForTimeout(2000);
   await page.keyboard.press('Escape');
+  await expect(page.locator('[data-testid="editor-calibration-modal"]')).toHaveCount(0);
 
   // Back to select screen
   await page.goto('http://localhost:5173/');

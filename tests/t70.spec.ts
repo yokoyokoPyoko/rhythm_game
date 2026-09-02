@@ -51,11 +51,11 @@ test('T70 select screen polish and interaction test', async ({ page }) => {
   // Frame 4: Back on select screen
   await page.screenshot({ path: 'screenshots/frame_4.png' });
 
-  // 5. Press 'l' to open calibration screen
+  // 5. Press 'l' to open calibration overlay
   await page.keyboard.press('l');
   await page.waitForTimeout(1000);
 
-  // Frame 5: Calibration screen
+  // Frame 5: Calibration overlay
   await page.screenshot({ path: 'screenshots/frame_5.png' });
 
   // Assert no unhandled console errors
