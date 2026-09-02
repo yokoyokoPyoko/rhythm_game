@@ -764,7 +764,7 @@
         "reviewer": "ses_f9e9cd409ffeH6nZiGSAgrhpmM",
         "postmortem": "ses_f9e99ca77ffei0A7EPTX7du0qp"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
