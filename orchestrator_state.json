@@ -791,7 +791,7 @@
         "coder": "ses_f9d7a2516ffebczllLm8mqqsLD",
         "postmortem": "ses_f9d84ae51ffecKHurWjadcE71B"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
