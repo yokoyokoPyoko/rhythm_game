@@ -96,7 +96,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     const source = ctx.createBufferSource()
     source.buffer = buffer
     source.connect(ctx.destination)
-    const offsetSec = audioOffsetMs / 1000
+    const offsetSec = (audioOffsetMs + getManualOffsetMs()) / 1000
     if (offsetSec >= 0) {
       source.start(ctx.currentTime + offsetSec)
     } else {

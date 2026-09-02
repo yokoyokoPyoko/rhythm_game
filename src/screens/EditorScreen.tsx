@@ -479,7 +479,7 @@ export default function EditorScreen() {
       const src = ctx.createBufferSource()
       src.buffer = buf
       src.connect(musicGainRef.current!)
-      const offsetSec = audioOffset / 1000
+      const offsetSec = (audioOffset + getManualOffsetMs()) / 1000
       const audioTime = Math.max(0, fromMs / 1000)
       let startWhen: number
       let startOffset: number
