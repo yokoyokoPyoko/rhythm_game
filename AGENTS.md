@@ -1233,6 +1233,32 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T135] 楽曲再生に判定オフセット（manualOffsetMs）を適用し、メトロノームと楽曲を同期
+
+**バグ**: `metronome.ts:65` の `schedule()` は `offsetSeconds()`（`manualOffsetMs / 1000`）でメトロノームクリックをオフセットしているが、楽曲再生には `manualOffsetMs` が未適用。このため楽曲とメトロノームが `manualOffsetMs` 分だけズレ、`</>` キーでオフセットを変更するたびにズレが変化する。
+
+**修正対象（2箇所のみ）**:
+1. `src/screens/GameScreen.tsx` — `playMusic` 関数（:93-106）:
+   - 現行: `const offsetSec = audioOffsetMs / 1000`
+   - 修正: `const offsetSec = (audioOffsetMs + getManualOffsetMs()) / 1000`
+   - `getManualOffsetMs` は既にインポート済み（:6）
+2. `src/screens/EditorScreen.tsx` — `playFrom` 関数（:482-493）:
+   - 現行: `const offsetSec = audioOffset / 1000`
+   - 修正: `const offsetSec = (audioOffset + getManualOffsetMs()) / 1000`
+   - `getManualOffsetMs` は既にインポート済み（:8）
+
+**変更不要ファイル**:
+- `metronome.ts` — 既に `offsetSeconds()` で適用済み
+- `CalibrationModal.tsx` — 音楽再生なし、`schedule()` 経由で既にオフセット適用済み
+- `clock.ts` / `songNow()` / `positionRef` — AudioContext ベースの時刻、変更不要
+
+**完了条件**:
+- `tsc --noEmit` エラーなし
+- 既存テストが全てパス
+- ゲーム画面とエディタ画面で `</>` キーによるオフセット調整後、次回再生時に楽曲とメトロノームが同期している
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
