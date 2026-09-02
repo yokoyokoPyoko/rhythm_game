@@ -185,6 +185,8 @@ export default function EditorScreen() {
   const isPlayingRef = useRef(false)
   const metronomeTimerRef = useRef<number | null>(null)
   const metronomeEnabledRef = useRef(true)
+  const audioOffsetRef = useRef(audioOffset)
+  useEffect(() => { audioOffsetRef.current = audioOffset }, [audioOffset])
 
   const setPlaying = (v: boolean) => {
     isPlayingRef.current = v
@@ -361,8 +363,10 @@ export default function EditorScreen() {
       const dt = Math.min(0.05, (now - lastTickRef.current) / 1000)
       lastTickRef.current = now
       const ctx = AudioManager.getInstance().ctx
-      const pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
-      if (pos >= endMsRef.current) {
+      const leadMs = audioOffsetRef.current + getManualOffsetMs()
+      const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000 - leadMs
+      const pos = Math.max(0, rawPos)
+      if (rawPos >= endMsRef.current) {
         if (sourceRef.current) {
           sourceRef.current.disconnect()
           sourceRef.current = null
@@ -562,7 +566,9 @@ export default function EditorScreen() {
       return
     }
     const ctx = AudioManager.getInstance().ctx
-    const pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
+    const leadMs = audioOffsetRef.current + getManualOffsetMs()
+    const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000 - leadMs
+    const pos = Math.max(0, rawPos)
     const clamped = buffer ? Math.min(pos, buffer.duration * 1000) : pos
     setPositionMs(clamped)
     positionRef.current = clamped
@@ -625,7 +631,7 @@ export default function EditorScreen() {
         e.preventDefault()
         if (isPlayingRef.current && modeRef.current === 'record') {
           if (keysRef.current.space) return
-          const pos = positionRef.current - getManualOffsetMs()
+          const pos = positionRef.current
           const rawBeat = timeline.msToBeat(pos)
           const snapped = quantizeBeat(rawBeat, snap)
           spacePressBeatRef.current = snapped
@@ -711,8 +717,8 @@ export default function EditorScreen() {
       // exactly at the released (quantized) beat and does not bleed into the
       // next snap cell (overshoot).
       if ((isUpKey || isDownKey) && modeRef.current === 'record' && isPlayingRef.current && recCursorRef.current) {
-        const pos = positionRef.current - getManualOffsetMs()
-        const rawBeat = timeline.msToBeat(pos)
+          const pos = positionRef.current
+          const rawBeat = timeline.msToBeat(pos)
         const releaseBeat = quantizeBeat(rawBeat, snap)
         const y = recCursorRef.current.y
         const traj = recTrajRef.current
@@ -736,7 +742,7 @@ export default function EditorScreen() {
           return
         }
         if (modeRef.current === 'record') {
-          const pos = positionRef.current - getManualOffsetMs()
+          const pos = positionRef.current
           const rawBeat = timeline.msToBeat(pos)
           const snapped = quantizeBeat(rawBeat, snap)
           const startBeat = spacePressBeatRef.current ?? snapped

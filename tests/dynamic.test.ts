@@ -1,5 +1,5 @@
 /**
- * T135 — 楽曲再生に判定オフセット（manualOffsetMs）を適用し、メトロノームと楽曲を同期
+ * T136 — エディタ録音位置のバグ修正：緑バー（positionRef）を楽曲実位置に一致させ、録音打刻をそのまま使う
  * Vitest node environment – pure computed values / engine math + file contracts
  * Strict 3-step state-transition assertions. Must FAIL before fix (Red) and PASS after (Green).
  */
@@ -19,8 +19,8 @@ import * as path from 'path';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_CENTER_Y, TW_AMP } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
-import { getManualOffsetMs, setManualOffset, offsetSeconds, manualOffsetMs } from '../src/audio/clock';
-import { schedule } from '../src/audio/metronome';
+import { quantizeBeat, segmentize } from '../src/chart/quantize';
+import { getManualOffsetMs, setManualOffset, offsetSeconds } from '../src/audio/clock';
 
 vi.useFakeTimers();
 
@@ -31,629 +31,545 @@ function readFile(rel: string): string {
   return fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf-8');
 }
 
-function createMockAudioContext(currentTime = 10.0) {
-  const destination = { __isDestination: true } as unknown as AudioNode;
-  let lastGain: any = null;
-  let lastOsc: any = null;
-  const ctx = {
-    currentTime,
-    destination,
-    _lastGain: null as any,
-    _lastOsc: null as any,
-    createOscillator() {
-      const o: any = {
-        type: 'sine',
-        frequency: { value: 0 },
-        connect: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn(),
-      };
-      lastOsc = o;
-      (ctx as any)._lastOsc = o;
-      return o as unknown as OscillatorNode;
-    },
-    createGain() {
-      const g: any = {
-        gain: {
-          value: 1,
-          setValueAtTime: vi.fn(),
-          exponentialRampToValueAtTime: vi.fn(),
-        },
-        connect: vi.fn((dest: unknown) => { g._connectedTo = dest; }),
-        _connectedTo: null,
-      };
-      lastGain = g;
-      (ctx as any)._lastGain = g;
-      return g as unknown as GainNode;
-    },
-    createBufferSource() {
-      const src: any = {
-        buffer: null,
-        connect: vi.fn(),
-        start: vi.fn((when: number, offset?: number, duration?: number) => {
-          src._startWhen = when;
-          src._startOffset = offset;
-          src._startDuration = duration;
-        }),
-        stop: vi.fn(),
-        disconnect: vi.fn(),
-        _startWhen: null as number | null,
-        _startOffset: null as number | null,
-      };
-      (ctx as any)._lastSource = src;
-      ctx._lastSource = src;
-      return src as unknown as AudioBufferSourceNode;
-    },
-    _lastSource: null as any,
-    get lastGainNode() { return lastGain; },
-  } as unknown as AudioContext & {
-    destination: AudioNode;
-    _lastGain: any; _lastOsc: any; _lastSource: any;
-    createBufferSource: () => AudioBufferSourceNode;
-  };
-  return { ctx, destination, getLastGain: () => lastGain, getLastOsc: () => lastOsc, getLastSource: () => ctx._lastSource };
+// Correct green bar position: leadMs = audioOffset + manualOffsetMs
+function computeGreenBarPosCorrect(startMs: number, ctxNow: number, startCtxTime: number, audioOffset: number, manualOffsetMs: number): number {
+  const leadMs = audioOffset + manualOffsetMs;
+  return startMs + (ctxNow - startCtxTime) * 1000 - leadMs;
+}
+function computeGreenBarPosBuggy(startMs: number, ctxNow: number, startCtxTime: number): number {
+  return startMs + (ctxNow - startCtxTime) * 1000;
 }
 
-// Replicate fixed logic for GameScreen playMusic and EditorScreen playFrom
-function computeGamePlayMusicParams(ctxTime: number, audioOffsetMs: number, manualOffsetMsVal: number) {
-  const offsetSec = (audioOffsetMs + manualOffsetMsVal) / 1000;
-  let startWhen: number;
-  let startOffset: number | undefined;
-  // GameScreen playMusic logic: if offsetSec >=0 => start(ctx.currentTime+offsetSec), else start(ctx.currentTime, -offsetSec)
-  if (offsetSec >= 0) {
-    startWhen = ctxTime + offsetSec;
-    startOffset = undefined; // start with no offset arg (or 0) – but we capture when
-  } else {
-    startWhen = ctxTime;
-    startOffset = -offsetSec;
-  }
-  return { offsetSec, startWhen, startOffset };
+// Correct recording beat: positionRef directly (no manual subtraction)
+function computeRecordBeatCorrect(timeline: BpmTimeline, positionRef: number, snap: number): number {
+  return quantizeBeat(timeline.msToBeat(positionRef), snap);
+}
+function computeRecordBeatBuggy(timeline: BpmTimeline, positionRef: number, manualOffsetMs: number, snap: number): number {
+  return quantizeBeat(timeline.msToBeat(positionRef - manualOffsetMs), snap);
 }
 
-function computeEditorPlayFromParams(ctxTime: number, fromMs: number, audioOffset: number, manualOffsetMsVal: number) {
-  const offsetSec = (audioOffset + manualOffsetMsVal) / 1000;
-  const audioTime = Math.max(0, fromMs / 1000);
-  let startWhen: number;
-  let startOffset: number;
-  if (offsetSec >= 0) {
-    startWhen = ctxTime + offsetSec;
-    startOffset = audioTime;
-  } else {
-    startWhen = ctxTime;
-    startOffset = Math.max(0, audioTime - offsetSec);
-  }
-  return { offsetSec, startWhen, startOffset, audioTime };
+// Resolve slices for tick and stop inspection
+function getTickSlice(src: string): string {
+  const idx = src.indexOf('const tick = ()');
+  if (idx === -1) return src.slice(src.indexOf('startMsRef.current'), src.indexOf('startMsRef.current') + 5000);
+  return src.slice(idx, idx + 6000);
 }
-
-function computeBuggyGameOffsetSec(audioOffsetMs: number) {
-  return audioOffsetMs / 1000;
-}
-function computeBuggyEditorOffsetSec(audioOffset: number) {
-  return audioOffset / 1000;
+function getStopSlice(src: string): string {
+  const idx = src.indexOf('const stop =');
+  if (idx === -1) return '';
+  return src.slice(idx, idx + 3000);
 }
 
 // ---------------------------------------------------------------------------
-// T135-1: GameScreen playMusic must include manualOffsetMs
+// T136-1: Green bar tracking pos = startMs + delta - (audioOffset+manual)
 // ---------------------------------------------------------------------------
-describe('T135-1: GameScreen playMusic offsetSec includes manualOffsetMs (3-step file contract)', () => {
+describe('T136-1: 緑バー追跡 pos = startMsRef + (ctx.currentTime - startCtxTime)*1000 - (audioOffset + manualOffsetMs)', () => {
   beforeEach(() => setManualOffset(0));
   afterEach(() => setManualOffset(0));
 
-  it('Step1 capture buggy vs fixed offsetSec at 0 → Step2 set +80 → Step3 assert file contains (audioOffsetMs + getManualOffsetMs())', () => {
-    // Step1: capture initial state
+  it('Step1 capture buggy vs fixed at 0 → Step2 set +80 → Step3 assert fixed pos = correct and differs from buggy by 80ms', () => {
     expect(getManualOffsetMs()).toBe(0);
-    const audioOffsetMs = 120;
-    const buggyBefore = computeBuggyGameOffsetSec(audioOffsetMs);
-    const fixedBefore = computeGamePlayMusicParams(10.0, audioOffsetMs, 0).offsetSec;
-    expect(fixedBefore).toBeCloseTo(0.12, 6);
-    expect(buggyBefore).toBeCloseTo(0.12, 6);
-    // at 0, buggy and fixed coincide – need to prove shift after offset
-
-    // Step2: perform action set offset +80 (simulates </> key)
+    const startMs = 0;
+    const startCtxTime = 10.0;
+    const ctxNow = 10.5; // 500ms elapsed
+    const audioOffset = 0;
+    const buggyBefore = computeGreenBarPosBuggy(startMs, ctxNow, startCtxTime);
+    const fixedBefore = computeGreenBarPosCorrect(startMs, ctxNow, startCtxTime, audioOffset, 0);
+    expect(buggyBefore).toBeCloseTo(500, 6);
+    expect(fixedBefore).toBeCloseTo(500, 6);
+    // Step2: set +80
     setManualOffset(80);
     expect(getManualOffsetMs()).toBe(80);
-
-    // Step3: assert resulting transition – file contract
-    const src = readFile('src/screens/GameScreen.tsx');
-    // Must contain the fixed formula
-    expect(src, 'GameScreen.tsx playMusic must use (audioOffsetMs + getManualOffsetMs()) / 1000').toMatch(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
-    // Must NOT still be buggy alone
-    // Check that line `const offsetSec = audioOffsetMs / 1000` does NOT exist without manualOffset
-    const buggyPattern = /const\s+offsetSec\s*=\s*audioOffsetMs\s*\/\s*1000\s*(?![;]*\s*\/\/)/;
-    // If fixed, buggy alone should be absent – we search for exact buggy without plus
-    const hasFixed = /\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)/.test(src);
-    expect(hasFixed).toBe(true);
-    // Ensure the fixed line is inside playMusic (near source.start)
-    const playMusicIdx = src.indexOf('const playMusic');
-    expect(playMusicIdx).toBeGreaterThan(-1);
-    const playMusicSlice = src.slice(playMusicIdx, playMusicIdx + 600);
-    expect(playMusicSlice).toMatch(/getManualOffsetMs\(\)/);
-    expect(playMusicSlice).toMatch(/offsetSec/);
-    // Numeric verification: with +80, offsetSec must be (120+80)/1000=0.2 not 0.12
-    const fixedAfter = computeGamePlayMusicParams(10.0, audioOffsetMs, 80).offsetSec;
-    const buggyAfter = computeBuggyGameOffsetSec(audioOffsetMs);
-    expect(fixedAfter).toBeCloseTo(0.2, 6);
-    expect(buggyAfter).toBeCloseTo(0.12, 6);
-    expect(fixedAfter).not.toBeCloseTo(buggyAfter, 6);
-    expect(fixedAfter - buggyAfter).toBeCloseTo(0.08, 6);
+    // Step3: after offset, fixed shifts -80, buggy unchanged
+    const buggyAfter = computeGreenBarPosBuggy(startMs, ctxNow, startCtxTime);
+    const fixedAfter = computeGreenBarPosCorrect(startMs, ctxNow, startCtxTime, audioOffset, 80);
+    expect(buggyAfter).toBeCloseTo(500, 6);
+    expect(fixedAfter).toBeCloseTo(420, 6); // 500 - 80
+    expect(fixedAfter - buggyAfter).toBeCloseTo(-80, 6);
+    expect(fixedAfter).not.toBeCloseTo(buggyAfter, 1);
   });
 
-  it('Step1 capture audioOffsetMs 0 → Step2 set manual -50 → Step3 assert startWhen incorporates negative offset', () => {
-    expect(getManualOffsetMs()).toBe(0);
-    setManualOffset(-50);
-    expect(getManualOffsetMs()).toBe(-50);
-    const audioOffsetMs = 0;
-    const { offsetSec, startWhen, startOffset } = computeGamePlayMusicParams(5.0, audioOffsetMs, -50);
-    expect(offsetSec).toBeCloseTo(-0.05, 6);
-    // For negative offsetSec, GameScreen does start(ctx.currentTime, -offsetSec)
-    expect(startWhen).toBeCloseTo(5.0, 6);
-    expect(startOffset).toBeCloseTo(0.05, 6);
-    // With buggy logic, offset would remain 0 and startOffset would be undefined/0
-    const buggyOff = computeBuggyGameOffsetSec(audioOffsetMs);
-    expect(buggyOff).toBeCloseTo(0, 6);
-    expect(offsetSec).not.toBeCloseTo(buggyOff, 6);
-    // Verify file handles negative branch includes manualOffset
-    const src = readFile('src/screens/GameScreen.tsx');
-    const playMusicSlice = src.slice(src.indexOf('const playMusic'), src.indexOf('const playMusic') + 800);
-    expect(playMusicSlice).toContain('source.start');
-    expect(playMusicSlice).toMatch(/getManualOffsetMs/);
-  });
-
-  it('GameScreen imports getManualOffsetMs and uses it exactly once in offsetSec', () => {
-    const src = readFile('src/screens/GameScreen.tsx');
-    expect(src).toMatch(/import.*getManualOffsetMs.*from.*clock/);
-    const occurrences = (src.match(/getManualOffsetMs\(\)/g) || []).length;
-    // At least 1 in playMusic, plus maybe adjustOffset logic (existing) – ensure >=1
-    expect(occurrences).toBeGreaterThanOrEqual(1);
-    // The offsetSec line must appear exactly once with the fixed pattern
-    const fixedCount = (src.match(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
-    expect(fixedCount, 'GameScreen should have exactly one fixed offsetSec line').toBe(1);
-  });
-
-  it('GameScreen playMusic mock: setting manualOffset changes source.start when/startOffset (3-step with MockAudioContext)', () => {
+  it('Step1 capture pos with negative offset -80 → Step2 vary ctx delta → Step3 assert pos precedes by +80 (leadMs negative => pos larger)', () => {
     setManualOffset(0);
-    const { ctx } = createMockAudioContext(10.0);
-    const audioOffsetMs = 200;
-    // Step1: before – manual 0
-    const beforeParams = computeGamePlayMusicParams(ctx.currentTime, audioOffsetMs, getManualOffsetMs());
-    expect(beforeParams.offsetSec).toBeCloseTo(0.2, 6);
-    const srcBefore: any = ctx.createBufferSource();
-    if (beforeParams.offsetSec >= 0) srcBefore.start(ctx.currentTime + beforeParams.offsetSec);
-    else srcBefore.start(ctx.currentTime, -beforeParams.offsetSec);
-    expect(srcBefore._startWhen).toBeCloseTo(10.2, 6);
+    const startMs = 0;
+    const startCtxTime = 5.0;
+    // Step1 initial
+    expect(getManualOffsetMs()).toBe(0);
+    // Step2 set -80
+    setManualOffset(-80);
+    expect(getManualOffsetMs()).toBe(-80);
+    const ctxNow = 5.2; // 200ms elapsed
+    const audioOffset = 0;
+    const fixed = computeGreenBarPosCorrect(startMs, ctxNow, startCtxTime, audioOffset, -80);
+    const buggy = computeGreenBarPosBuggy(startMs, ctxNow, startCtxTime);
+    // lead -80 => pos = 200 - (-80) = 280 (ahead, because buffer started earlier)
+    expect(fixed).toBeCloseTo(280, 6);
+    expect(buggy).toBeCloseTo(200, 6);
+    expect(fixed - buggy).toBeCloseTo(80, 6);
+    expect(fixed).not.toBeCloseTo(buggy, 1);
+  });
 
-    // Step2: set +80 and recompute
+  it('Step1 capture with audioOffset +200 manual +80 → Step2 compute tick pos → Step3 assert file contract tick contains leadMs subtraction', () => {
     setManualOffset(80);
-    const afterParams = computeGamePlayMusicParams(ctx.currentTime, audioOffsetMs, getManualOffsetMs());
-    expect(afterParams.offsetSec).toBeCloseTo(0.28, 6);
+    const audioOffset = 200;
+    const startMs = 0;
+    const startCtx = 10.0;
+    const ctxNow = 10.5; // 500ms elapsed
+    const posFixed = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, audioOffset, 80);
+    // 500 - (200+80)=220
+    expect(posFixed).toBeCloseTo(220, 6);
+    const posBuggy = computeGreenBarPosBuggy(startMs, ctxNow, startCtx);
+    expect(posBuggy).toBeCloseTo(500, 6);
+    expect(posFixed).not.toBeCloseTo(posBuggy, 1);
+    // Also show that before music start (elapsed < leadMs) pos negative
+    const ctxEarly = 10.1; // 100ms elapsed, lead 280 => pos -180
+    const earlyPos = computeGreenBarPosCorrect(startMs, ctxEarly, startCtx, audioOffset, 80);
+    expect(earlyPos).toBeCloseTo(-180, 6);
+    expect(earlyPos).toBeLessThan(0);
 
-    // Step3: assert changed
-    const srcAfter: any = ctx.createBufferSource();
-    if (afterParams.offsetSec >= 0) srcAfter.start(ctx.currentTime + afterParams.offsetSec);
-    else srcAfter.start(ctx.currentTime, -afterParams.offsetSec);
-    expect(srcAfter._startWhen).toBeCloseTo(10.28, 6);
-    expect(srcAfter._startWhen).not.toBeCloseTo(srcBefore._startWhen!, 6);
-    expect(srcAfter._startWhen! - srcBefore._startWhen!).toBeCloseTo(0.08, 6);
+    // Step3 file contract: EditorScreen tick must contain subtraction with audioOffset+manual
+    const src = readFile('src/screens/EditorScreen.tsx');
+    const tick = getTickSlice(src);
+    // Must contain leadMs or direct subtraction
+    const hasLeadMsVar = tick.includes('leadMs');
+    const hasDirect = /audioOffset\s*\+\s*getManualOffsetMs\(\)/.test(tick);
+    const hasSubtraction = tick.includes('- leadMs') || tick.includes('- (audioOffset') || hasDirect;
+    expect(hasLeadMsVar || hasDirect, 'tick slice must compute leadMs = audioOffset + getManualOffsetMs()').toBe(true);
+    expect(hasSubtraction, 'tick must subtract leadMs from pos').toBe(true);
+    // Ensure tick uses getManualOffsetMs
+    expect(tick).toContain('getManualOffsetMs');
+    expect(tick).toContain('audioOffset');
+    // And must contain the exact pos formula with subtraction
+    const hasCorrectPos = tick.includes('- leadMs') || /startMsRef\.current\s*\+\s*\(ctx\.currentTime\s*-\s*startCtxTimeRef\.current\)\s*\*\s*1000\s*-\s*/.test(tick);
+    expect(hasCorrectPos, 'tick pos must be startMs + delta - leadMs').toBe(true);
+  });
+
+  it('Step1 capture stop() buggy → Step2 set offset → Step3 assert stop() also uses leadMs subtraction (file contract)', () => {
+    expect(getManualOffsetMs()).toBe(0);
+    setManualOffset(50);
+    const src = readFile('src/screens/EditorScreen.tsx');
+    const stopSlice = getStopSlice(src);
+    // stop should also subtract leadMs
+    const hasLead = stopSlice.includes('leadMs') || /audioOffset\s*\+\s*getManualOffsetMs\(\)/.test(stopSlice);
+    const hasSub = stopSlice.includes('- leadMs') || /-\s*\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/.test(stopSlice) || /-\s*leadMs/.test(stopSlice);
+    expect(hasLead, 'stop() must reference audioOffset + manualOffset').toBe(true);
+    expect(hasSub, 'stop() pos must subtract leadMs').toBe(true);
+    expect(stopSlice).toContain('getManualOffsetMs');
+    // Numeric verification for stop pos: same as tick
+    const startMs = 1000;
+    const startCtx = 5.0;
+    const ctxNow = 5.3; // 300ms
+    const fixed = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, 120, 50); // lead 170 => 1000+300-170=1130
+    expect(fixed).toBeCloseTo(1130, 6);
+    const buggy = computeGreenBarPosBuggy(startMs, ctxNow, startCtx);
+    expect(buggy).toBeCloseTo(1300, 6);
+    expect(fixed).not.toBeCloseTo(buggy, 1);
+  });
+
+  it('Step1 capture file before with manual 0 → Step2 set manual 80 and audioOffset 120 → Step3 assert green bar aligns with buffer position via src.start when/offset (positive branch)', () => {
+    // Simulate playFrom with leadMs positive
+    setManualOffset(0);
+    expect(getManualOffsetMs()).toBe(0);
+    const audioOffset = 120;
+    const fromMs = 0;
+    const ctxTime = 8.0;
+    // Before: lead 120 => startWhen 8.12 offset 0
+    const leadBefore = audioOffset + getManualOffsetMs();
+    expect(leadBefore).toBe(120);
+    // Step2 apply +80 => lead 200
+    setManualOffset(80);
+    expect(getManualOffsetMs()).toBe(80);
+    const leadAfter = audioOffset + getManualOffsetMs();
+    expect(leadAfter).toBe(200);
+    // Check playFrom contract file
+    const src = readFile('src/screens/EditorScreen.tsx');
+    expect(src).toMatch(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
+    // Numeric: green bar pos = fromMs + delta - lead
+    const startMs = fromMs;
+    const startCtx = ctxTime;
+    const deltaMs = 800; // ctxNow = 8.8
+    const ctxNow = 8.8;
+    const pos = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, audioOffset, 80);
+    // 0 + 800 -200 =600 => buffer position 600ms => beat 1.2 at 120BPM (500ms/beat)
+    expect(pos).toBeCloseTo(600, 6);
+    // Buggy would be 800
+    expect(computeGreenBarPosBuggy(startMs, ctxNow, startCtx)).toBeCloseTo(800, 6);
+    // Verify this pos maps to correct buffer position that src.start would produce after lead
+    // For positive lead, buffer starts at startWhen = ctxTime + lead/1000 =8.2, so at ctxNow 8.8 buffer elapsed 600ms -> matches pos
+    const startWhen = ctxTime + leadAfter / 1000;
+    expect(startWhen).toBeCloseTo(8.2, 6);
+    expect(ctxNow - startWhen).toBeCloseTo(0.6, 6);
+  });
+
+  it('Step1 capture negative lead branch (audioOffset 0 manual -80) → Step2 compute pos → Step3 assert matches src.start offset logic', () => {
+    setManualOffset(-80);
+    expect(getManualOffsetMs()).toBe(-80);
+    const audioOffset = 0;
+    const lead = audioOffset + getManualOffsetMs(); // -80
+    expect(lead).toBe(-80);
+    // playFrom negative: startWhen = ctxTime, startOffset = fromMs/1000 - lead/1000 = fromMs/1000 +0.08
+    const fromMs = 1000;
+    const audioTime = fromMs / 1000; //1.0
+    const offsetSec = lead / 1000; // -0.08
+    let startOffset: number;
+    let startWhen: number;
+    const ctxTime = 10.0;
+    if (offsetSec >= 0) {
+      startWhen = ctxTime + offsetSec;
+      startOffset = audioTime;
+    } else {
+      startWhen = ctxTime;
+      startOffset = Math.max(0, audioTime - offsetSec);
+    }
+    expect(startOffset).toBeCloseTo(1.08, 6);
+    expect(startWhen).toBeCloseTo(10.0, 6);
+    // Green bar pos: startMs + delta - lead = 1000 + 200 - (-80) =1280 => buffer position matches?
+    // At ctxNow 10.2 delta 200 => pos 1280 => 1.28s buffer time. Buffer elapsed = (ctxNow - startWhen)*1000 + startOffset*1000 - fromMs? Actually buffer elapsed from start: (ctxNow - startWhen)*1000 + startOffset*1000 =200+1080=1280 => matches pos.
+    const startMs = fromMs;
+    const startCtx = ctxTime;
+    const ctxNow = 10.2;
+    const pos = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, audioOffset, -80);
+    expect(pos).toBeCloseTo(1280, 6);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T135-2: EditorScreen playFrom must include manualOffsetMs
+// T136-2: Recording taps use positionRef directly (no - manual)
 // ---------------------------------------------------------------------------
-describe('T135-2: EditorScreen playFrom offsetSec includes manualOffsetMs (3-step file contract)', () => {
+describe('T136-2: 録音打刻は positionRef.current をそのまま使う（-getManualOffsetMs 補正撤廃）', () => {
   beforeEach(() => setManualOffset(0));
   afterEach(() => setManualOffset(0));
 
-  it('Step1 capture buggy vs fixed at 0 → Step2 set +80 → Step3 assert file contains (audioOffset + getManualOffsetMs())', () => {
+  it('Step1 capture ring Space押下 beat at manual 0 → Step2 set manual +80 and compute both → Step3 assert correct unchanged vs buggy shifts', () => {
+    const timeline = new BpmTimeline(120, [], 1.0); // 500ms/beat
+    const snap = 0.25;
+    const positionRef = 1237; // off-grid ms: 2.474 beats
+    // Step1 at 0
     expect(getManualOffsetMs()).toBe(0);
-    const audioOffset = 100;
-    const buggyBefore = computeBuggyEditorOffsetSec(audioOffset);
-    const fixedBefore = computeEditorPlayFromParams(10.0, 0, audioOffset, 0).offsetSec;
-    expect(buggyBefore).toBeCloseTo(0.1, 6);
-    expect(fixedBefore).toBeCloseTo(0.1, 6);
-
+    const beatAt0Correct = computeRecordBeatCorrect(timeline, positionRef, snap);
+    const beatAt0Buggy = computeRecordBeatBuggy(timeline, positionRef, 0, snap);
+    expect(beatAt0Correct).toBeCloseTo(beatAt0Buggy, 6);
+    // Step2 set +80
     setManualOffset(80);
     expect(getManualOffsetMs()).toBe(80);
-
+    const beatCorrect = computeRecordBeatCorrect(timeline, positionRef, snap);
+    const beatBuggy = computeRecordBeatBuggy(timeline, positionRef, 80, snap);
+    // Correct stays same (positionRef is already green bar real position, independent of manual)
+    expect(beatCorrect).toBeCloseTo(beatAt0Correct, 6);
+    expect(beatCorrect).not.toBeCloseTo(beatBuggy, 4);
+    // Verify buggy shift: 1237-80=1157 => 2.314 beats => quant to 2.25 vs correct 2.5 => definitely shifted
+    expect(beatBuggy).not.toEqual(beatCorrect);
+    // File contract
     const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src, 'EditorScreen.tsx playFrom must use (audioOffset + getManualOffsetMs()) / 1000').toMatch(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
-    const hasFixed = /\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/.test(src);
-    expect(hasFixed).toBe(true);
-    const playFromIdx = src.indexOf('const playFrom');
-    expect(playFromIdx).toBeGreaterThan(-1);
-    const slice = src.slice(playFromIdx, playFromIdx + 2000);
-    expect(slice).toMatch(/getManualOffsetMs\(\)/);
-    // Numeric shift: (100+80)/1000=0.18 vs 0.1
-    const fixedAfter = computeEditorPlayFromParams(10.0, 0, audioOffset, 80).offsetSec;
-    expect(fixedAfter).toBeCloseTo(0.18, 6);
-    expect(fixedAfter).not.toBeCloseTo(buggyBefore, 6);
-    expect(fixedAfter - buggyBefore).toBeCloseTo(0.08, 6);
+    // Should have NO occurrence of positionRef.current - getManualOffsetMs()
+    const buggyOccurrences = (src.match(/positionRef\.current\s*-\s*getManualOffsetMs\(\)/g) || []).length;
+    expect(buggyOccurrences, 'EditorScreen must have 0 occurrences of "positionRef.current - getManualOffsetMs()" after fix (3 places removed)').toBe(0);
   });
 
-  it('Step1 capture fromMs 1000 audioOffset 50 manual 0 → Step2 set manual -120 → Step3 assert startWhen/startOffset shift correctly (negative branch)', () => {
-    expect(getManualOffsetMs()).toBe(0);
-    const fromMs = 1000; // audioTime=1.0
-    const audioOffset = 50; // 0.05 fixed before
-    const before = computeEditorPlayFromParams(7.0, fromMs, audioOffset, 0);
-    expect(before.offsetSec).toBeCloseTo(0.05, 6);
-    expect(before.startWhen).toBeCloseTo(7.05, 6);
-    expect(before.startOffset).toBeCloseTo(1.0, 6);
-
-    setManualOffset(-120);
-    expect(getManualOffsetMs()).toBe(-120);
-    const after = computeEditorPlayFromParams(7.0, fromMs, audioOffset, -120);
-    // (50 + -120)/1000 = -0.07 => negative branch
-    expect(after.offsetSec).toBeCloseTo(-0.07, 6);
-    expect(after.startWhen).toBeCloseTo(7.0, 6);
-    // startOffset = max(0, 1.0 - (-0.07)) = 1.07
-    expect(after.startOffset).toBeCloseTo(1.07, 6);
-    expect(after.startOffset).not.toBeCloseTo(before.startOffset, 6);
-    expect(after.offsetSec).not.toBeCloseTo(before.offsetSec, 6);
-  });
-
-  it('EditorScreen imports getManualOffsetMs and uses it in playFrom', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).toMatch(/import.*getManualOffsetMs.*from.*clock/);
-    // Ensure at least one occurrence inside playFrom
-    const idx = src.indexOf('const playFrom');
-    expect(idx).toBeGreaterThan(-1);
-    const slice = src.slice(idx, idx + 1000);
-    expect(slice).toMatch(/getManualOffsetMs/);
-    // Fixed pattern count
-    const fixedCount = (src.match(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
-    expect(fixedCount, 'EditorScreen should have exactly one fixed offsetSec line').toBe(1);
-  });
-
-  it('EditorScreen playFrom mock: manualOffset change shifts source.start args (3-step with MockAudioContext)', () => {
-    setManualOffset(0);
-    const { ctx } = createMockAudioContext(12.5);
-    const fromMs = 2000; // 2.0 sec
-    const audioOffset = 0;
-    // Step1
-    const before = computeEditorPlayFromParams(ctx.currentTime, fromMs, audioOffset, 0);
-    const srcBefore: any = ctx.createBufferSource();
-    srcBefore.start(before.startWhen, before.startOffset);
-    expect(srcBefore._startWhen).toBeCloseTo(12.5, 6);
-    expect(srcBefore._startOffset).toBeCloseTo(2.0, 6);
-
-    // Step2
-    setManualOffset(80);
-    const after = computeEditorPlayFromParams(ctx.currentTime, fromMs, audioOffset, 80);
-    const srcAfter: any = ctx.createBufferSource();
-    srcAfter.start(after.startWhen, after.startOffset);
-    // Step3
-    expect(after.offsetSec).toBeCloseTo(0.08, 6);
-    expect(srcAfter._startWhen).toBeCloseTo(12.58, 6);
-    expect(srcAfter._startWhen).not.toBeCloseTo(srcBefore._startWhen!, 6);
-    expect(srcAfter._startWhen! - srcBefore._startWhen!).toBeCloseTo(0.08, 6);
-    // startOffset stays same (2.0) for positive branch
-    expect(srcAfter._startOffset).toBeCloseTo(2.0, 6);
-  });
-
-  it('EditorScreen playFrom with varying fromMs and offset combinations (off-grid style: fractional offsets)', () => {
-    const cases = [
-      { fromMs: 1237, audioOffset: 75, manual: 37 },
-      { fromMs: 185, audioOffset: 0, manual: 80 },
-      { fromMs: 615, audioOffset: 120, manual: -30 },
-      { fromMs: 2500, audioOffset: 200, manual: 15 },
+  it('Step1 capture arrow release beat snap 0.5 bRel 1.2 vs 1.3 off-grid → Step2 switch manual → Step3 assert releaseBeat unchanged (correct) vs buggy would shift 0.16 beats', () => {
+    const timeline = new BpmTimeline(120, [], 1.0);
+    const snap = 0.5;
+    const cases: Array<{ bRel: number; expectedCorrect: number }> = [
+      { bRel: 1.2, expectedCorrect: 1.0 },
+      { bRel: 1.3, expectedCorrect: 1.5 },
     ];
     for (const c of cases) {
-      const fixed = computeEditorPlayFromParams(10.0, c.fromMs, c.audioOffset, c.manual);
-      const buggyOff = computeBuggyEditorOffsetSec(c.audioOffset);
-      const expectedFixed = (c.audioOffset + c.manual) / 1000;
-      expect(fixed.offsetSec, `case fromMs=${c.fromMs} audio=${c.audioOffset} manual=${c.manual}`).toBeCloseTo(expectedFixed, 6);
-      expect(fixed.offsetSec).not.toBeCloseTo(buggyOff, 4);
-      // Verify startWhen/startOffset correspond
-      if (expectedFixed >= 0) {
-        expect(fixed.startWhen).toBeCloseTo(10.0 + expectedFixed, 6);
-        expect(fixed.startOffset).toBeCloseTo(Math.max(0, c.fromMs / 1000), 6);
-      } else {
-        expect(fixed.startWhen).toBeCloseTo(10.0, 6);
-        expect(fixed.startOffset).toBeCloseTo(Math.max(0, c.fromMs / 1000 - expectedFixed), 6);
+      const tapPos = timeline.beatToMs(c.bRel); // posRef is already real position, no manual subtraction
+      // At manual 0 correct = quant(msToBeat(tapPos))
+      setManualOffset(0);
+      const correct0 = computeRecordBeatCorrect(timeline, tapPos, snap);
+      expect(correct0).toBeCloseTo(c.expectedCorrect, 4);
+      // At manual +80 buggy would compute tapPos -80
+      setManualOffset(80);
+      const correctAfter = computeRecordBeatCorrect(timeline, tapPos, snap);
+      const buggyAfter = computeRecordBeatBuggy(timeline, tapPos, 80, snap);
+      expect(correctAfter).toBeCloseTo(c.expectedCorrect, 4);
+      expect(correctAfter).toBeCloseTo(correct0, 6); // manual invariant
+      expect(buggyAfter).not.toBeCloseTo(correctAfter, 1); // buggy shifts
+      expect(buggyAfter).toBeCloseTo(quantizeBeat(timeline.msToBeat(tapPos - 80), snap), 4);
+    }
+    // file: arrow release line must be const pos = positionRef.current
+    const src = readFile('src/screens/EditorScreen.tsx');
+    const arrowSectionIdx = src.indexOf("releaseBeat");
+    expect(arrowSectionIdx).toBeGreaterThan(-1);
+    const arrowSlice = src.slice(Math.max(0, arrowSectionIdx - 1200), arrowSectionIdx + 800);
+    expect(arrowSlice).toContain('positionRef.current');
+    expect(arrowSlice).not.toContain('getManualOffsetMs');
+  });
+
+  it('Step1 capture hold tail (ring Space離し) duration with manual 0 → Step2 set manual 80 → Step3 assert hold duration unchanged (correct) vs buggy differs', () => {
+    const timeline = new BpmTimeline(120, [], 1.0);
+    const snap = 0.25;
+    const pressPos = timeline.beatToMs(1.0); // 500ms
+    const releasePos = timeline.beatToMs(1.75); // 875ms duration 0.75 beats
+    setManualOffset(0);
+    const pressCorrect0 = computeRecordBeatCorrect(timeline, pressPos, snap);
+    const releaseCorrect0 = computeRecordBeatCorrect(timeline, releasePos, snap);
+    const durCorrect0 = Number(quantizeBeat(releaseCorrect0 - pressCorrect0, snap).toFixed(2));
+    expect(durCorrect0).toBeCloseTo(0.75, 4);
+    setManualOffset(80);
+    const pressCorrect = computeRecordBeatCorrect(timeline, pressPos, snap);
+    const releaseCorrect = computeRecordBeatCorrect(timeline, releasePos, snap);
+    const durCorrect = Number(quantizeBeat(releaseCorrect - pressCorrect, snap).toFixed(2));
+    const pressBuggy = computeRecordBeatBuggy(timeline, pressPos, 80, snap);
+    const releaseBuggy = computeRecordBeatBuggy(timeline, releasePos, 80, snap);
+    const durBuggy = Number(quantizeBeat(releaseBuggy - pressBuggy, snap).toFixed(2));
+    // Correct stays same
+    expect(durCorrect).toBeCloseTo(durCorrect0, 4);
+    // Buggy also same difference if both shift equally? Actually for hold, both shift by same offset, so duration may stay same but start beat shifts -> rings misaligned.
+    // So check start beat shift
+    expect(pressCorrect).not.toBeCloseTo(pressBuggy, 3);
+    expect(releaseCorrect).not.toBeCloseTo(releaseBuggy, 3);
+    // File contract for hold tail
+    const src = readFile('src/screens/EditorScreen.tsx');
+    // The hold release section must NOT contain minus manual
+    const holdIdx = src.indexOf('snapped - startBeat');
+    expect(holdIdx).toBeGreaterThan(-1);
+    const holdSlice = src.slice(Math.max(0, holdIdx - 1500), holdIdx + 500);
+    expect(holdSlice).toContain('positionRef.current');
+    // Ensure that specific hold pos line does NOT subtract
+    const holdPosMatches = src.match(/const pos = positionRef\.current - getManualOffsetMs\(\)/g) || [];
+    expect(holdPosMatches.length).toBe(0);
+  });
+
+  it('Step1 capture with varying snap 0.125/0.25/0.5/1 end-to-end (off-grid) → Step2 toggle manual 0↔80 → Step3 assert beats manual-invariant and snap-aligned', () => {
+    const timeline = new BpmTimeline(120, [], 1.0);
+    const positions = [185, 615, 762, 1237]; // off-grid ms already representing real buffer position
+    const snaps = [0.125, 0.25, 0.5, 1];
+    for (const pos of positions) {
+      for (const snap of snaps) {
+        setManualOffset(0);
+        const b0 = computeRecordBeatCorrect(timeline, pos, snap);
+        setManualOffset(80);
+        const b80 = computeRecordBeatCorrect(timeline, pos, snap);
+        expect(b80, `pos ${pos} snap ${snap} manual invariant`).toBeCloseTo(b0, 6);
+        expect(b80 % snap === 0 || Math.abs((b80 % snap) - snap) < 1e-6 || Math.abs(b80 % snap) < 1e-6).toBeTruthy();
+        // buggy would differ at least for some positions where bucket boundary sensitive (pos 762 with snap 0.25)
+        if (pos === 762 && snap === 0.25) {
+          const buggy = computeRecordBeatBuggy(timeline, pos, 80, snap);
+          expect(buggy).not.toBeCloseTo(b0, 6);
+        }
       }
     }
   });
+
+  it('Step1 capture file positionRef occurrences → Step2 verify ring Space押下 section → Step3 assert const pos = positionRef.current (no subtraction)', () => {
+    const src = readFile('src/screens/EditorScreen.tsx');
+    // ring Space press section
+    const ringPressIdx = src.indexOf('spacePressBeatRef.current =');
+    expect(ringPressIdx).toBeGreaterThan(-1);
+    const ringSlice = src.slice(Math.max(0, ringPressIdx - 600), ringPressIdx + 600);
+    expect(ringSlice).toContain('positionRef.current');
+    expect(ringSlice).not.toContain('getManualOffsetMs');
+    // Should be exactly const pos = positionRef.current
+    expect(ringSlice).toMatch(/const pos\s*=\s*positionRef\.current/);
+    expect(ringSlice).not.toMatch(/positionRef\.current\s*-\s*getManualOffsetMs/);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// T135-3: manualOffset changes propagate to next playback – sync with metronome
+// T136-3: audioOffset !=0 case — recording reflects buffer real position
 // ---------------------------------------------------------------------------
-describe('T135-3: manualOffset変更が次回再生で楽曲とメトロノームを同期 (3-step numeric with Mock)', () => {
+describe('T136-3: audioOffset が0でない場合、録音がバッファ実位置に記録される（旧実装では audioOffset分ズレ）', () => {
   beforeEach(() => setManualOffset(0));
   afterEach(() => setManualOffset(0));
 
-  it('Step1 capture metronome when without offset → Step2 set +80 → Step3 assert music start shifts by same 0.08 as metronome', () => {
-    // metronome.ts schedule: when = max(ctx.currentTime, nextBeatTime + offsetSeconds())
-    // offsetSeconds = manualOffsetMs/1000
-    expect(offsetSeconds()).toBeCloseTo(0, 6);
-    const nextBeatTime = 10.2;
-    const whenBefore = Math.max(10.0, nextBeatTime + offsetSeconds());
-    expect(whenBefore).toBeCloseTo(10.2, 6);
-
-    setManualOffset(80);
-    expect(offsetSeconds()).toBeCloseTo(0.08, 6);
-    const whenAfter = Math.max(10.0, nextBeatTime + offsetSeconds());
-    expect(whenAfter).toBeCloseTo(10.28, 6);
-    expect(whenAfter - whenBefore).toBeCloseTo(0.08, 6);
-
-    // Music must shift by same 0.08
-    const musicBefore = computeGamePlayMusicParams(10.0, 0, 0);
-    const musicAfter = computeGamePlayMusicParams(10.0, 0, 80);
-    expect(musicAfter.offsetSec - musicBefore.offsetSec).toBeCloseTo(0.08, 6);
-    expect(musicAfter.offsetSec).toBeCloseTo(offsetSeconds(), 6);
-    // Verify sync: both shift equally
-    const metroShift = whenAfter - whenBefore;
-    const musicShift = (musicAfter.startWhen ?? 10.0 + musicAfter.offsetSec) - (musicBefore.startWhen ?? 10.0 + musicBefore.offsetSec);
-    expect(musicShift).toBeCloseTo(metroShift, 6);
+  it('Step1 capture pos with audioOffset 0 → Step2 set audioOffset +200 manual +80 → Step3 assert ring beat = timeline.msToBeat(posCorrect) reflects real buffer', () => {
+    // Simulate editor at ctxNow where green bar should be buffer position.
+    const timeline = new BpmTimeline(120, [], 1.0); // 500ms/beat
+    const snap = 0.25;
+    const startMs = 0;
+    const startCtx = 10.0;
+    const ctxNow = 11.0; // 1000ms elapsed
+    // Step1: audioOffset 0 manual 0 => pos 1000 => beat 2.0 => snaps 2.0
+    const pos0 = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, 0, 0);
+    expect(pos0).toBeCloseTo(1000, 6);
+    const beat0 = computeRecordBeatCorrect(timeline, pos0, snap);
+    expect(beat0).toBeCloseTo(2.0, 4);
+    // Step2: audioOffset 200 manual 80 => pos 1000 -280=720 => beat 1.44 => snaps 1.5
+    const pos200 = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, 200, 80);
+    expect(pos200).toBeCloseTo(720, 6);
+    const beat200 = computeRecordBeatCorrect(timeline, pos200, snap);
+    expect(beat200).toBeCloseTo(1.5, 4);
+    expect(beat200).not.toBeCloseTo(beat0, 4);
+    // Buggy pos (ignores lead) would still be 1000 => 2.0, off by audioOffset+manual=280ms =0.56 beats
+    const buggyPos = computeGreenBarPosBuggy(startMs, ctxNow, startCtx);
+    expect(buggyPos).toBeCloseTo(1000, 6);
+    const buggyBeat = computeRecordBeatCorrect(timeline, buggyPos, snap);
+    expect(buggyBeat).toBeCloseTo(2.0, 4);
+    expect(beat200).not.toBeCloseTo(buggyBeat, 4);
+    // File contract: tick's leadMs includes audioOffset
+    const src = readFile('src/screens/EditorScreen.tsx');
+    const tick = getTickSlice(src);
+    expect(tick).toContain('audioOffset');
   });
 
-  it('Step1 capture editor music and metronome at 0 → Step2 set -60 → Step3 assert both shift -0.06 and remain synced (negative)', () => {
+  it('Step1 capture audioOffset 200 manual 0 → Step2 toggle manual to 80 → Step3 assert recording beat invariant to manual but sensitive to audioOffset via green bar', () => {
+    const timeline = new BpmTimeline(120, [], 1.0);
+    const snap = 0.5;
+    const startMs = 500; // start from 500ms in timeline
+    const startCtx = 12.0;
+    const ctxNow = 12.67; // 670ms elapsed
+    // audioOffset 200 manual 0 => pos = 500+670-200=970 => beat 1.94 => snap 2.0
+    const posA = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, 200, 0);
+    expect(posA).toBeCloseTo(970, 6);
+    const beatA = computeRecordBeatCorrect(timeline, posA, snap);
+    // audioOffset 200 manual 80 => pos =500+670-280=890 => beat 1.78 => snap 2.0 also? Need off-grid sensitive case: 615ms region
+    const posB = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, 200, 80);
+    expect(posB).toBeCloseTo(890, 6);
+    // Both should differ from buggy 1170 (500+670)
+    const buggy = computeGreenBarPosBuggy(startMs, ctxNow, startCtx);
+    expect(buggy).toBeCloseTo(1170, 6);
+    expect(posA).not.toBeCloseTo(buggy, 3);
+    expect(posB).not.toBeCloseTo(buggy, 3);
+    // For audioOffset test, we want to prove audioOffset portion causes shift: pos with audioOffset 0 vs 200 differs by 200ms
+    const posZeroAudio = computeGreenBarPosCorrect(startMs, ctxNow, startCtx, 0, 0);
+    expect(posZeroAudio - posA).toBeCloseTo(200, 6); // 1170-970=200
+    // And manual portion: posA - posB = 80
+    expect(posA - posB).toBeCloseTo(80, 6);
+  });
+
+  it('Step1 capture continuous trajectory beat is msToBeat(pos) with fixed green bar → Step2 simulate 1.2 beats off-grid → Step3 assert snapped to 1.0 vs 1.5 handling with audioOffset', () => {
+    // T136 says continuous trajectory (:378-380) is automatically correct after tick fix because it uses pos beat.
+    // Verify that with audioOffset shift, trajectory beats also shift accordingly (since they derive from corrected pos).
+    const timeline = new BpmTimeline(120, [], 1.0);
+    const snap = 0.5;
+    // raw 1.2 beats =600ms, with audioOffset 200 manual 80 => real pos =600-280=320? That's not correct framing.
+    // Instead choose a posRef that already is corrected green bar position: e.g., pos = timeline.beatToMs(1.2) + some offset then quantize
+    // With fixed pos, beat =1.2 snaps 1.0; buggy would be 1.2+0.56=1.76 snap 2.0 -> difference.
+    const realPos = timeline.beatToMs(1.2); // 600ms
+    const buggyPosStill = realPos + 200 + 80; // if buggy green bar 280 ahead, buggy pos would be larger
+    const correctBeat = computeRecordBeatCorrect(timeline, realPos, snap);
+    const buggyBeat = computeRecordBeatCorrect(timeline, buggyPosStill, snap);
+    expect(correctBeat).toBeCloseTo(1.0, 4);
+    expect(buggyBeat).toBeCloseTo(2.0, 4);
+    expect(correctBeat).not.toBeCloseTo(buggyBeat, 4);
+    // off-grid 1.3 => 1.5
+    const realPos13 = timeline.beatToMs(1.3); //650ms
+    expect(computeRecordBeatCorrect(timeline, realPos13, snap)).toBeCloseTo(1.5, 4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T136-4: Regression — T132, T102/T103, T129, T133, GameScreen unchanged
+// ---------------------------------------------------------------------------
+describe('T136-4: 回帰なし（T132, T102/T103, T129, T133, GameScreen不変）', () => {
+  beforeEach(() => setManualOffset(0));
+  afterEach(() => setManualOffset(0));
+
+  it('Step1 capture T132 offset fine-tuning ,/< -10 and ./> +10 still present → Step2 simulate adjust → Step3 file contract holds', () => {
     expect(getManualOffsetMs()).toBe(0);
-    const metroBefore = offsetSeconds();
-    expect(metroBefore).toBeCloseTo(0, 6);
-    setManualOffset(-60);
-    expect(getManualOffsetMs()).toBe(-60);
-    expect(offsetSeconds()).toBeCloseTo(-0.06, 6);
-    const nextBeatTime = 5.0;
-    const ctxTime = 5.0;
-    const when = Math.max(ctxTime, nextBeatTime + offsetSeconds());
-    // when = 5.0 + (-0.06) =4.94 but clamped to ctxTime 5.0
-    expect(when).toBeCloseTo(5.0, 6); // clamped
-    // Unclamped case: ctxTime=4.0, next=5.0 => when=4.94
-    const when2 = Math.max(4.0, 5.0 + offsetSeconds());
-    expect(when2).toBeCloseTo(4.94, 6);
-    const beforeWhen2 = Math.max(4.0, 5.0 + 0);
-    expect(beforeWhen2).toBeCloseTo(5.0, 6);
-    expect(when2 - beforeWhen2).toBeCloseTo(-0.06, 6);
-
-    // Editor music negative branch
-    const editorBefore = computeEditorPlayFromParams(5.0, 0, 0, 0);
-    const editorAfter = computeEditorPlayFromParams(5.0, 0, 0, -60);
-    expect(editorAfter.offsetSec).toBeCloseTo(-0.06, 6);
-    expect(editorAfter.offsetSec - editorBefore.offsetSec).toBeCloseTo(-0.06, 6);
+    const adjust = (delta: number) => {
+      const next = Math.round(getManualOffsetMs() + delta);
+      setManualOffset(next);
+      return next;
+    };
+    // Simulate ',' press
+    const afterComma = adjust(-10);
+    expect(afterComma).toBe(-10);
+    expect(getManualOffsetMs()).toBe(-10);
+    const afterDot = adjust(10);
+    expect(afterDot).toBe(0);
+    // File still contains handlers
+    const src = readFile('src/screens/EditorScreen.tsx');
+    expect(src).toContain("e.key === ','");
+    expect(src).toContain("e.key === '<'");
+    expect(src).toContain("e.key === '.'");
+    expect(src).toContain("e.key === '>'");
+    expect(src).toMatch(/getManualOffsetMs\(\)\s*-\s*10/);
+    expect(src).toMatch(/getManualOffsetMs\(\)\s*\+\s*10/);
+    expect(src).toContain('data-testid="editor-offset"');
   });
 
-  it('Mock AudioContext: simultaneous music and metronome both use offsetSeconds (integration)', () => {
-    setManualOffset(0);
-    const { ctx } = createMockAudioContext(10.0);
-    // Step1: metronome at 0
-    const metroBefore = (() => {
-      const nextBeatTime = 10.1;
-      return Math.max(ctx.currentTime, nextBeatTime + offsetSeconds());
-    })();
-    const musicBefore = computeGamePlayMusicParams(ctx.currentTime, 100, getManualOffsetMs());
-    expect(metroBefore).toBeCloseTo(10.1, 6);
-    expect(musicBefore.offsetSec).toBeCloseTo(0.1, 6);
+  it('Step1 capture T102/T103 play-mode guard → Step2 check file → Step3 assert modeRef guard still exists for recording taps', () => {
+    const src = readFile('src/screens/EditorScreen.tsx');
+    // Ring/segment stamping must still be guarded by mode === record
+    expect(src).toContain("modeRef.current === 'record'");
+    expect(src).toMatch(/if\s*\(\s*modeRef\.current === 'record'/);
+    const guardCount = (src.match(/modeRef\.current === 'record'/g) || []).length;
+    expect(guardCount).toBeGreaterThanOrEqual(3);
+    // And no regression: positionRef - manual must NOT appear even in guarded section (already removed)
+    expect(src).not.toMatch(/positionRef\.current\s*-\s*getManualOffsetMs\(\)/);
+    // CalibrationModal still exists and holds its file contract
+    const modalExists = fs.existsSync(path.resolve(__dirname, '../src/screens/editor/CalibrationModal.tsx'));
+    expect(modalExists).toBe(true);
+    const modalSrc = readFile('src/screens/editor/CalibrationModal.tsx');
+    expect(modalSrc).toContain('setManualOffset(0)');
+    expect(modalSrc).toContain('data-testid="editor-calibration-modal"');
+  });
 
-    // Step2: set 80
-    setManualOffset(80);
-    // Step3: both shifted
-    const metroAfter = Math.max(ctx.currentTime, 10.1 + offsetSeconds());
-    const musicAfter = computeGamePlayMusicParams(ctx.currentTime, 100, getManualOffsetMs());
-    expect(metroAfter).toBeCloseTo(10.18, 6);
-    expect(musicAfter.offsetSec).toBeCloseTo(0.18, 6);
-    expect(metroAfter - metroBefore).toBeCloseTo(0.08, 6);
-    expect(musicAfter.offsetSec - musicBefore.offsetSec).toBeCloseTo(0.08, 6);
-    // Sync delta must match
-    expect((metroAfter - metroBefore) - (musicAfter.offsetSec - musicBefore.offsetSec)).toBeCloseTo(0, 6);
+  it('Step1 capture T129 snap整合性 segmentize beats snap整数倍 → Step2 produce off-grid 0.30 snap 0.25 → Step3 still snap-aligned', () => {
+    const snap = 0.25;
+    const traj = [
+      { beat: 0, y: TW_CENTER_Y, down: true },
+      { beat: 0.30, y: TW_CENTER_Y + 40, down: false },
+    ];
+    const segs = segmentize(traj, snap, 1.0);
+    expect(segs.length).toBeGreaterThan(0);
+    for (const s of segs) {
+      const rem = ((s.beats % snap) + snap) % snap;
+      const aligned = rem < 1e-6 || Math.abs(rem - snap) < 1e-6;
+      expect(aligned, `beats ${s.beats} snap ${snap}`).toBeTruthy();
+    }
+    // Must NOT be forced to 1/amplitude=1.0 when snap smaller
+    const total = segs.filter(s => s.direction !== 'stay').reduce((a, b) => a + b.beats, 0);
+    expect(total).toBeCloseTo(0.25, 4);
+    expect(total).not.toBeCloseTo(1.0, 4);
+  });
 
-    // Also test via actual schedule() mock
-    const { ctx: ctx2 } = createMockAudioContext(10.0);
-    setManualOffset(80);
-    schedule(ctx2 as unknown as AudioContext, 10.1, 0);
-    const g = (ctx2 as any)._lastGain;
-    // gain connect must have happened, and when = max(10.0, 10.1+0.08)=10.18
-    // We can verify offsetSeconds applied: the osc start time is when
-    // Since schedule uses when = max(currentTime, nextBeatTime+offsetSeconds())
-    // and we mocked currentTime 10.0, offset 0.08, next 10.1 => 10.18
-    // Verify file contains offsetSeconds
+  it('Step1 capture T133 calibration overlay full-screen (route removed) → Step2 check App.tsx → Step3 assert /calibration route absent', () => {
+    const appSrc = readFile('src/App.tsx');
+    expect(appSrc).not.toMatch(/path="\/calibration"/);
+    expect(appSrc).not.toContain('CalibrationScreen');
+    // CalibrationModal still referenced from EditorScreen and SelectScreen
+    const editorSrc = readFile('src/screens/EditorScreen.tsx');
+    expect(editorSrc).toContain('CalibrationModal');
+    const selectSrc = readFile('src/screens/SelectScreen.tsx');
+    // SelectScreen should not navigate to /calibration anymore (should use overlay)
+    expect(selectSrc).not.toMatch(/navigate\(['"]\/calibration['"]\)/);
+  });
+
+  it('Step1 capture GameScreen unchanged → Step2 check GameScreen playMusic still uses (audioOffsetMs + getManualOffsetMs()) → Step3 assert not modified to green bar logic', () => {
+    const gameSrc = readFile('src/screens/GameScreen.tsx');
+    // GameScreen playMusic must still be (audioOffsetMs + getManualOffsetMs())/1000 (T135) – not green bar
+    expect(gameSrc).toMatch(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
+    // GameScreen should NOT have green bar pos logic with audioOffset + manual (that's editor only)
+    // It should NOT contain startMsRef (editor var) and no positionRef subtraction
+    expect(gameSrc).not.toContain('startMsRef');
+    expect(gameSrc).not.toContain('positionRef.current - getManualOffsetMs()');
+    // Ensure GameScreen still imports getManualOffsetMs for playMusic (unchanged)
+    expect(gameSrc).toMatch(/import.*getManualOffsetMs.*from.*clock/);
+    // Ensure clock/metronome unchanged: clock still has offsetSeconds returning manual/1000
+    const clockSrc = readFile('src/audio/clock.ts');
+    expect(clockSrc).toContain('return manualOffsetMs / 1000');
     const metroSrc = readFile('src/audio/metronome.ts');
     expect(metroSrc).toContain('offsetSeconds()');
-    expect(metroSrc).toContain('nextBeatTime + offsetSeconds()');
+    expect(metroSrc).toMatch(/nextBeatTime \+ offsetSeconds\(\)/);
+  });
+
+  it('Step1 capture editor offset display still reflects getManualOffsetMs → Step2 set +40 → Step3 assert display logic still uses offsetMs state', () => {
+    setManualOffset(40);
+    expect(getManualOffsetMs()).toBe(40);
+    const src = readFile('src/screens/EditorScreen.tsx');
+    expect(src).toContain('useState(getManualOffsetMs()');
+    expect(src).toContain('setOffsetMs');
+    expect(src).toContain('data-testid="editor-offset"');
+    // Verify that offset display format still exists
+    expect(src).toContain('offset:');
+    // Reset
+    setManualOffset(0);
+    expect(getManualOffsetMs()).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T135-4: metronome.ts regression – schedule already applies offsetSeconds
+// T136-5: WaveEngine / Cursor consistency (T127/T128) regression — complex amplitudes off-grid
 // ---------------------------------------------------------------------------
-describe('T135-4: metronome.ts は既に offsetSeconds() で適用済み (回帰なし, 3-step)', () => {
-  it('Step1 capture schedule before state → Step2 set offset → Step3 assert when = nextBeatTime + offsetSeconds() and clamped', () => {
-    setManualOffset(0);
-    const beforeOff = offsetSeconds();
-    expect(beforeOff).toBeCloseTo(0, 6);
-    const src = readFile('src/audio/metronome.ts');
-    expect(src).toContain('offsetSeconds');
-    expect(src).toMatch(/nextBeatTime\s*\+\s*offsetSeconds\(\)/);
-    // ensure when includes max clamp
-    expect(src).toMatch(/Math\.max\(audioCtx\.currentTime,\s*nextBeatTime \+ offsetSeconds\(\)\)/);
+describe('T136-5: 回帰 WaveEngine/Cursor 数値整合（複雑振幅 off-grid, T127/T128維持）', () => {
+  const amps = [0.7, 1.3, 2.7, 3.4];
+  const offGridBeats = [0.37, 1.23];
 
-    setManualOffset(50);
-    expect(offsetSeconds()).toBeCloseTo(0.05, 6);
-    const nextBeatTime = 8.0;
-    const ctxTime = 8.0;
-    const when = Math.max(ctxTime, nextBeatTime + offsetSeconds());
-    expect(when).toBeCloseTo(8.05, 6);
-    // With 0, would be 8.0
-    setManualOffset(0);
-    const when0 = Math.max(ctxTime, nextBeatTime + offsetSeconds());
-    expect(when0).toBeCloseTo(8.0, 6);
-    expect(when).not.toBeCloseTo(when0, 6);
-
-    // Cleanup
-    setManualOffset(0);
-  });
-
-  it('schedule signature remains (audioCtx, nextBeatTime, beat, out?) and uses offsetSeconds', () => {
-    const src = readFile('src/audio/metronome.ts');
-    expect(src).toMatch(/export function schedule\(/);
-    expect(src).toMatch(/nextBeatTime:\s*number/);
-    expect(src).toMatch(/beat:\s*number/);
-    expect(src).toContain('offsetSeconds()');
-    expect(src).toContain("import { offsetSeconds } from './clock'");
-  });
-
-  it('schedule mock: verify when calculation incorporates manualOffset (3-step with varying beats)', () => {
-    const beats = [0, 1, 4, 0.37, 1.23, 2.7];
-    for (const beat of beats) {
-      setManualOffset(0);
-      const ctxTime = 10.0;
-      const nextBeat = ctxTime + beat * 0.5; // dummy
-      const when0 = Math.max(ctxTime, nextBeat + offsetSeconds());
-      setManualOffset(80);
-      const when80 = Math.max(ctxTime, nextBeat + offsetSeconds());
-      expect(when80 - when0).toBeCloseTo(0.08, 6);
-      // Verify schedule file still uses offsetSeconds regardless of beat
-      const src = readFile('src/audio/metronome.ts');
-      expect(src).toContain('offsetSeconds()');
-    }
-    setManualOffset(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T135-5: 変更不要ファイルが変更されていないこと + clock不変
-// ---------------------------------------------------------------------------
-describe('T135-5: 変更不要ファイル回帰 (clock, CalibrationModal, songNow)', () => {
-  it('clock.ts offsetSeconds and getManualOffsetMs unchanged (file contract)', () => {
-    const src = readFile('src/audio/clock.ts');
-    expect(src).toContain('export function offsetSeconds()');
-    expect(src).toContain('return manualOffsetMs / 1000');
-    expect(src).toContain('export function getManualOffsetMs()');
-    expect(src).toContain('export function setManualOffset');
-    // songNow must remain (audioCtx.currentTime - audioStartTime)*1000
-    expect(src).toContain('songNow');
-    expect(src).toContain('audioStartTime');
-  });
-
-  it('CalibrationModal.tsx does not play music – no audioOffset logic', () => {
-    // CalibrationModal uses schedule via metronome but no src.start with audioOffset
-    const rel = fs.existsSync(path.resolve(__dirname, '../src/screens/editor/CalibrationModal.tsx'))
-      ? 'src/screens/editor/CalibrationModal.tsx'
-      : 'src/screens/editor/CalibrationOverlay.tsx';
-    // Fallback: check at least one overlay exists
-    const exists = fs.existsSync(path.resolve(__dirname, '..', rel));
-    expect(exists).toBe(true);
-    const src = readFile(rel);
-    // Should have schedule but not playMusic audioOffset logic
-    expect(src).toContain('schedule');
-    // Should NOT contain audioOffsetMs + getManualOffsetMs pattern (that's only Game/Editor)
-    // It's okay if it contains getManualOffsetMs for calibration adjust, but not audioOffsetMs
-    if (src.includes('audioOffsetMs')) {
-      expect(src).not.toMatch(/\(audioOffsetMs\s*\+\s*getManualOffsetMs/);
-    }
-  });
-
-  it('GameScreen and EditorScreen both still import getManualOffsetMs from clock (already imported :6/:8)', () => {
-    const gameSrc = readFile('src/screens/GameScreen.tsx');
-    const editorSrc = readFile('src/screens/EditorScreen.tsx');
-    expect(gameSrc).toMatch(/from ['\"]\.\.\/audio\/clock['\"]/);
-    expect(editorSrc).toMatch(/from ['\"]\.\.\/audio\/clock['\"]/);
-    expect(gameSrc).toContain('getManualOffsetMs');
-    expect(editorSrc).toContain('getManualOffsetMs');
-  });
-
-  it('No duplicate offset addition: offsetSec computed exactly once per play function', () => {
-    const gameSrc = readFile('src/screens/GameScreen.tsx');
-    const editorSrc = readFile('src/screens/EditorScreen.tsx');
-    const gameFixed = (gameSrc.match(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
-    const editorFixed = (editorSrc.match(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
-    expect(gameFixed).toBe(1);
-    expect(editorFixed).toBe(1);
-    // Ensure not double-added: should not have + getManualOffsetMs twice in same line
-    expect(gameSrc).not.toMatch(/getManualOffsetMs\(\).*getManualOffsetMs\(\)/);
-    expect(editorSrc).not.toMatch(/getManualOffsetMs\(\).*getManualOffsetMs\(\)/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T135-6: Numeric sync across complex offsets (fractional, large, negative)
-// ---------------------------------------------------------------------------
-describe('T135-6: 複雑なオフセット値での数値同期 (fractional, large, negative, off-grid style)', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('fractional manual offsets (0.5ms granularity simulation via integer ms but assert closeTo) produce exact combined offsetSec', () => {
-    const cases = [
-      { audioOffset: 0, manual: 33 },
-      { audioOffset: 17, manual: 80 },
-      { audioOffset: 250, manual: -120 },
-      { audioOffset: 100, manual: 7 },
-      { audioOffset: 0, manual: 123 },
-    ];
-    for (const c of cases) {
-      setManualOffset(c.manual);
-      const combined = (c.audioOffset + getManualOffsetMs()) / 1000;
-      const expected = (c.audioOffset + c.manual) / 1000;
-      expect(combined).toBeCloseTo(expected, 8);
-      // Verify Game and Editor compute same
-      const gameCombined = computeGamePlayMusicParams(10.0, c.audioOffset, getManualOffsetMs()).offsetSec;
-      const editorCombined = computeEditorPlayFromParams(10.0, 0, c.audioOffset, getManualOffsetMs()).offsetSec;
-      expect(gameCombined).toBeCloseTo(expected, 8);
-      expect(editorCombined).toBeCloseTo(expected, 8);
-      expect(gameCombined).toBeCloseTo(editorCombined, 8);
-    }
-  });
-
-  it('large offsets (±500ms) still sync correctly', () => {
-    setManualOffset(500);
-    expect(offsetSeconds()).toBeCloseTo(0.5, 6);
-    const gameLarge = computeGamePlayMusicParams(5.0, 0, getManualOffsetMs());
-    expect(gameLarge.offsetSec).toBeCloseTo(0.5, 6);
-    const metroLargeWhen = Math.max(5.0, 6.0 + offsetSeconds());
-    expect(metroLargeWhen).toBeCloseTo(6.5, 6);
-    // music shift 0.5 should match metro shift 0.5
-    setManualOffset(0);
-    const gameZero = computeGamePlayMusicParams(5.0, 0, 0);
-    const metroZeroWhen = Math.max(5.0, 6.0 + 0);
-    expect(metroLargeWhen - metroZeroWhen).toBeCloseTo(gameLarge.offsetSec - gameZero.offsetSec, 6);
-
-    setManualOffset(-300);
-    expect(offsetSeconds()).toBeCloseTo(-0.3, 6);
-    const editorNeg = computeEditorPlayFromParams(5.0, 1000, 200, getManualOffsetMs());
-    expect(editorNeg.offsetSec).toBeCloseTo((200 - 300) / 1000, 6);
-  });
-
-  it('zero audioOffset with manualOffset sweep produces linear offsetSec', () => {
-    const manuals = [-100, -50, 0, 50, 80, 150];
-    for (const m of manuals) {
-      setManualOffset(m);
-      const off = (0 + getManualOffsetMs()) / 1000;
-      expect(off).toBeCloseTo(m / 1000, 8);
-      const metroWhen = Math.max(10.0, 12.0 + offsetSeconds());
-      // metroWhen -12.0 should equal m/1000 when not clamped (ctxTime < nextBeat)
-      if (10.0 < 12.0 + offsetSeconds()) {
-        expect(metroWhen - 12.0).toBeCloseTo(m / 1000, 8);
-      }
-    }
-  });
-
-  it('sync holds across BPM changes timeline (msToBeat conversion unrelated)', () => {
-    // T135 does not change BpmTimeline, but verify offset still applies as time-domain shift
-    const tl = new BpmTimeline(120, [{ beat: 4, bpm: 180 }], 1.0);
-    // At beat 3.37 (off-grid) manual 80ms = 0.16 beats at 120BPM, but at 180BPM beatMs=333
-    // offset is time-domain, not beat-domain: so music start shift remains 80ms regardless of BPM
-    setManualOffset(80);
-    const offSec = offsetSeconds();
-    expect(offSec).toBeCloseTo(0.08, 6);
-    // Verify that msToBeat still works but offset is not beat-scaled
-    const ms = tl.beatToMs(3.37);
-    const beat = tl.msToBeat(ms);
-    expect(beat).toBeCloseTo(3.37, 4);
-    // Music offset still 0.08 sec irrespective of BPM
-    const gameOff = computeGamePlayMusicParams(0, 0, getManualOffsetMs()).offsetSec;
-    expect(gameOff).toBeCloseTo(0.08, 6);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T135-extra: Regression – WaveEngine/Cursor numeric consistency (complex amplitudes, off-grid)
-// ---------------------------------------------------------------------------
-describe('T135-extra: 回帰 WaveEngine/Cursor 数値整合 (complex amplitudes, off-grid, 3-step)', () => {
-  beforeEach(() => setManualOffset(0));
-
-  it('Step1 capture amp 0.7 at beat 0.37 → Step2 set amp 1.3 etc → Step3 assert waveYAt slope = 2*TW_AMP*amplitudeAt', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGridBeats = [0.37, 1.23, 0.5, 1.37, 2.62];
+  it('Step1 capture amp 0.7 beat 0.37 → Step2 set amp 1.3 etc → Step3 assert waveYAt slope = 2*TW_AMP*amplitudeAt and clamped', () => {
     for (const amp of amps) {
       const tl = new BpmTimeline(120, [], amp);
       const engine = new WaveEngine([{ direction: 'down', beats: 6 }], tl, amp, 0.0);
@@ -667,45 +583,102 @@ describe('T135-extra: 回帰 WaveEngine/Cursor 数値整合 (complex amplitudes,
         const actual = engine.waveYAt(b);
         expect(actual, `amp ${amp} beat ${b}`).toBeCloseTo(expected, 4);
       }
-      // After reaching bottom stays flat
       expect(engine.waveYAt(10)).toBeCloseTo(BOTTOM, 4);
     }
   });
 
-  it('Cursor and WaveEngine share same per-beat displacement (3-step capture-update-assert)', () => {
+  it('Step1 capture cursor at amp 1.3 dt 0.25s → Step2 advance → Step3 assert cursor delta == wave delta == perBeat*deltaBeats', () => {
     const amp = 1.3;
     const beatMs = 500;
     const tl = new BpmTimeline(120, [], amp);
-    const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 1.0); // start top
+    const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 1.0);
     const perBeat = 2 * TW_AMP * amp;
     const cursor = new Cursor(amp, 1.0);
     const y0 = cursor.y;
-    const dt = (0.5 * beatMs) / 1000;
+    const beatsDelta = 0.5;
+    const dt = (beatsDelta * beatMs) / 1000;
     cursor.update(dt, false, true, beatMs);
     const cursorDelta = Math.abs(cursor.y - y0);
-    expect(cursorDelta).toBeCloseTo(perBeat * 0.5, 4);
-    const waveDelta = Math.abs(engine.waveYAt(0.5) - engine.waveYAt(0));
-    expect(waveDelta).toBeCloseTo(perBeat * 0.5, 4);
+    expect(cursorDelta).toBeCloseTo(perBeat * beatsDelta, 4);
+    const waveDelta = Math.abs(engine.waveYAt(beatsDelta) - engine.waveYAt(0));
+    // Top start clamped: top 170 bottom 430, amp 1.3 perBeat 338, 0.5*338=169 <260 so not clipped yet from top
+    expect(waveDelta).toBeCloseTo(perBeat * beatsDelta, 4);
     expect(waveDelta).toBeCloseTo(cursorDelta, 4);
   });
 
-  it('getPoints length invariant and amplitudeAt step off-grid', () => {
-    const tl = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.0 }], 1.0);
-    expect(tl.amplitudeAt(3.37)).toBe(1.0);
-    expect(tl.amplitudeAt(4.0)).toBe(2.0);
-    expect(tl.amplitudeAt(4.23)).toBe(2.0);
-    const segs: any[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 0.5 }, { direction: 'stay', beats: 1 }];
-    const eng = new WaveEngine(segs, tl, 1.0, 0);
-    const pts = eng.getPoints();
-    expect(pts.length).toBe(segs.length + 1);
-    for (const p of pts) {
-      expect(typeof p.beat).toBe('number');
-      expect(typeof p.y).toBe('number');
+  it('Step1 capture getPoints length invariant → Step2 vary segments → Step3 assert segments+1 holds after T136', () => {
+    const tl = new BpmTimeline(120, [], 1.0);
+    const cases = [
+      [{ direction: 'down', beats: 1 } as const],
+      [{ direction: 'up', beats: 0.5 } as const, { direction: 'down', beats: 0.5 } as const, { direction: 'stay', beats: 1 } as const],
+      [] as any[],
+    ];
+    for (const segs of cases) {
+      const eng = new WaveEngine(segs as any, tl, 1.0, 0);
+      const pts = eng.getPoints();
+      if (segs.length === 0) expect(pts.length).toBe(2);
+      else expect(pts.length).toBe(segs.length + 1);
+      for (const p of pts) {
+        expect(typeof p.beat).toBe('number');
+        expect(typeof p.y).toBe('number');
+      }
     }
   });
 
-  it('TSC --noEmit regression guard: all imported symbols are typed correctly', () => {
-    // This test will fail to compile if types are wrong – it exercises the imports
+  it('Step1 capture off-grid trajectory quantize 1.2→1.0 and 1.3→1.5 snap 0.5 → Step2 segmentize → Step3 assert still snap-aligned after green bar fix', () => {
+    const snap = 0.5;
+    expect(quantizeBeat(1.2, snap)).toBeCloseTo(1.0, 4);
+    expect(quantizeBeat(1.3, snap)).toBeCloseTo(1.5, 4);
+    const traj = [
+      { beat: 0, y: TW_CENTER_Y, down: true },
+      { beat: 0.5, y: TW_CENTER_Y + 60, down: true },
+      { beat: 1.0, y: TW_CENTER_Y + 120, down: true },
+      { beat: 1.2, y: TW_CENTER_Y + 130, down: false },
+    ];
+    const segs = segmentize(traj, snap, 1.0);
+    const moving = segs.filter(s => s.direction !== 'stay');
+    const totalMoving = moving.reduce((a, b) => a + b.beats, 0);
+    // With snap 0.5, 1.2 quant to 1.0
+    expect(totalMoving).toBeCloseTo(1.0, 4);
+    for (const s of segs) {
+      const rem = ((s.beats % snap) + snap) % snap;
+      expect(rem < 1e-6 || Math.abs(rem - snap) < 1e-6).toBeTruthy();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T136-6: tsc --noEmit guard and green bar end detection also uses leadMs
+// ---------------------------------------------------------------------------
+describe('T136-6: tsc & end detection pos >= endMsRef uses same corrected pos', () => {
+  it('Step1 capture end detection before → Step2 verify tick uses same corrected pos for pose >= endMsRef → Step3 file contract tick end check uses leadMs', () => {
+    const src = readFile('src/screens/EditorScreen.tsx');
+    const tick = getTickSlice(src);
+    // tick must have if (pos >= endMsRef.current)
+    expect(tick).toContain('endMsRef.current');
+    expect(tick).toMatch(/if\s*\(\s*pos\s*>=\s*endMsRef\.current/);
+    // And pos there must be the corrected one (same variable)
+    expect(tick).toContain('getManualOffsetMs');
+    // stop() also clamps with same corrected pos
+    const stopSlice = getStopSlice(src);
+    expect(stopSlice).toContain('buffer.duration');
+    expect(stopSlice).toContain('getManualOffsetMs');
+  });
+
+  it('EditorScreen imports getManualOffsetMs once and does not duplicate offset addition', () => {
+    const src = readFile('src/screens/EditorScreen.tsx');
+    expect(src).toMatch(/import.*getManualOffsetMs.*from.*clock/);
+    // Ensure playFrom still has one fixed offsetSec line
+    const playFromFixed = (src.match(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/g) || []).length;
+    expect(playFromFixed).toBe(1);
+    // Tick and stop should not reintroduce offsetSec double addition – they use leadMs subtraction, not offsetSec
+    // But they must contain audioOffset + manual pattern at least via leadMs
+    const leadOccurrences = (src.match(/audioOffset\s*\+\s*getManualOffsetMs\(\)/g) || []).length;
+    // Expect at least 2 (tick + stop + playFrom = 3, but playFrom already 1, tick+stop 2 => total 3). If using leadMs variable once, may be 2 distinct lines.
+    expect(leadOccurrences).toBeGreaterThanOrEqual(2);
+  });
+
+  it('All imported symbols remain typed correctly (tsc guard)', () => {
     const tl = new BpmTimeline(120, [], 1.0);
     const eng = new WaveEngine([{ direction: 'up', beats: 1 }], tl, 1.0, 0);
     const cur = new Cursor(1.0, 0);
@@ -714,8 +687,7 @@ describe('T135-extra: 回帰 WaveEngine/Cursor 数値整合 (complex amplitudes,
     expect(cur.y).toBeDefined();
     expect(getManualOffsetMs()).toBeDefined();
     expect(offsetSeconds()).toBeDefined();
-    // schedule must be callable
-    const { ctx } = createMockAudioContext();
-    expect(() => schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.1, 0)).not.toThrow();
+    expect(TW_AMP).toBe(130);
+    expect(TW_CENTER_Y).toBe(300);
   });
 });
