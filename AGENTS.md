@@ -1252,10 +1252,12 @@ CSS Transition のみ（ライブラリ不使用）:
 - `CalibrationModal.tsx` — 音楽再生なし、`schedule()` 経由で既にオフセット適用済み
 - `clock.ts` / `songNow()` / `positionRef` — AudioContext ベースの時刻、変更不要
 
-**完了条件**:
-- `tsc --noEmit` エラーなし
-- 既存テストが全てパス
-- ゲーム画面とエディタ画面で `</>` キーによるオフセット調整後、次回再生時に楽曲とメトロノームが同期している
+**完了条件（自動テスト）**:
+1. GameScreen の `playMusic` が `(audioOffsetMs + getManualOffsetMs()) / 1000` を `offsetSec` として使用し、`source.start()` の開始タイミングに反映すること
+2. EditorScreen の `playFrom` が `(audioOffset + getManualOffsetMs()) / 1000` を `offsetSec` として使用し、`src.start()` の開始タイミングに反映すること
+3. `manualOffsetMs` を変更（例: +80ms）してから再生すると、楽曲開始タイミングがオフセット分だけずれ、メトロノームと同期する（AudioContext をモックして `start()` の引数を検証）
+4. metronome.ts の `schedule()` が既に `offsetSeconds()` でオフセット適用済みであること（回帰なし）
+5. `tsc --noEmit` エラーなし
 
 ---
 

@@ -162,7 +162,7 @@ class Task:
     id: str
     desc: str
     depends_on: list[str] = field(default_factory=list)
-    ui: bool = False
+    test: bool = False
     task_type: str = "feature"
 
 
@@ -471,7 +471,7 @@ def load_tasks() -> list[Task]:
             id=tid,
             desc=item.get("desc", ""),
             depends_on=item.get("depends_on", []),
-            ui=bool(item.get("ui", False)),
+            test=bool(item.get("test", False)),
             task_type=str(item.get("type", "feature")),
         ))
     return tasks
@@ -888,7 +888,7 @@ def generate_qa_test(task: Task, qa_model: str, state: dict[str, Any] | None = N
     Returns True if the test file was actually written. The test is expected to FAIL (Red)
     before implementation exists; the caller is responsible for the Red verification.
     """
-    if not task.ui or not has_dev_script():
+    if not task.test or not has_dev_script():
         return False
     if not ensure_dev_server():
         return False
@@ -1055,8 +1055,8 @@ def run_gate_b_test(state: dict[str, Any] | None, task: Task, args: argparse.Nam
     if args and getattr(args, "code_review_only", False):
         return GateResult("Gate B (Dynamic Test)", True, "PASS (Skipped via --code-review-only mode)")
 
-    if not task.ui or not has_dev_script():
-        return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic browser test")
+    if not task.test or not has_dev_script():
+        return GateResult("Gate B (Dynamic Test)", True, f"Task {task.id} (test={task.test}) -> Skip dynamic test")
 
     tr = _test_runner(args)
     test_file = _dynamic_test_file(tr)
@@ -1317,8 +1317,8 @@ def _parse_review_verdict(out: str, task_id: str) -> tuple[bool, str]:
 
 def check_gate_c(task: Task, reviewer_model: str, is_red_audit: bool = False) -> GateResult:
     gate_name = "Gate C (Already Implemented Audit)" if is_red_audit else "Gate C (Dynamic Review)"
-    if not task.ui or not has_dev_script():
-        return GateResult(gate_name, True, f"Task {task.id} (ui={task.ui}) -> Skip dynamic review")
+    if not task.test or not has_dev_script():
+        return GateResult(gate_name, True, f"Task {task.id} (test={task.test}) -> Skip dynamic review")
 
     videos = sorted(list(VIDEO_DIR.glob("**/*.webm")), key=lambda p: p.stat().st_mtime)
     if not videos:
@@ -1571,7 +1571,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     test_file = _dynamic_test_file(tr)
     test_filename = _qa_test_filename(tr)
     need_coder = True if is_code_review_only else False  # TDD: Coder runs AFTER QA-Gen writes the test
-    need_test = bool(task.ui) and not is_code_review_only  # TDD: (re)generate acceptance test first; skip for non-UI tasks
+    need_test = bool(task.test) and not is_code_review_only  # TDD: (re)generate acceptance test first; skip for non-test tasks
     if is_code_review_only:
         log.info("[%s] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.", task.id)
     coder_commit = None
@@ -1617,7 +1617,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
             cycles += 1
             no_progress_streak = 0
             need_coder = True
-            need_test = bool(task.ui) and not is_code_review_only
+            need_test = bool(task.test) and not is_code_review_only
             log.warning("[%s] %d consecutive attempts without progress. Rolling back to task-start commit and restarting cycle (%d/%d).", task.id, NO_PROGRESS_LIMIT, cycles, MAX_CYCLES)
             git_rollback(head_hash)
 

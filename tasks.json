@@ -3,7 +3,7 @@
   "id": "T00",
   "desc": "Vite + React + TypeScript プロジェクトスキャフォールド。smol-toml, react-router-dom をインストール。",
   "depends_on": [],
-  "ui": false
+  "test": false
  },
  {
   "id": "T82",
@@ -11,7 +11,7 @@
   "depends_on": [
    "T00"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T01",
@@ -19,7 +19,7 @@
   "depends_on": [
    "T00"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T02",
@@ -27,7 +27,7 @@
   "depends_on": [
    "T00"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T10",
@@ -35,7 +35,7 @@
   "depends_on": [
    "T01"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T11",
@@ -43,7 +43,7 @@
   "depends_on": [
    "T10"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T12",
@@ -51,7 +51,7 @@
   "depends_on": [
    "T11"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T13",
@@ -59,7 +59,7 @@
   "depends_on": [
    "T10"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T14",
@@ -68,7 +68,7 @@
    "T11",
    "T12"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T40",
@@ -76,7 +76,7 @@
   "depends_on": [
    "T01"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T41",
@@ -84,7 +84,7 @@
   "depends_on": [
    "T40"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T20",
@@ -93,7 +93,7 @@
    "T01",
    "T14"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T21",
@@ -101,7 +101,7 @@
   "depends_on": [
    "T20"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T22",
@@ -110,7 +110,7 @@
    "T20",
    "T12"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T23",
@@ -118,7 +118,7 @@
   "depends_on": [
    "T22"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T24",
@@ -126,7 +126,7 @@
   "depends_on": [
    "T23"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T25",
@@ -137,7 +137,7 @@
    "T22",
    "T24"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T30",
@@ -146,7 +146,7 @@
    "T01",
    "T02"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T31",
@@ -155,7 +155,7 @@
    "T30",
    "T41"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T32",
@@ -164,7 +164,7 @@
    "T25",
    "T30"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T33",
@@ -173,7 +173,7 @@
    "T30",
    "T24"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T42",
@@ -187,7 +187,7 @@
    "T20",
    "T22"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T50",
@@ -196,7 +196,7 @@
    "T30",
    "T40"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T51",
@@ -205,7 +205,7 @@
    "T50",
    "T13"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T52",
@@ -213,7 +213,7 @@
   "depends_on": [
    "T51"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T53",
@@ -221,7 +221,7 @@
   "depends_on": [
    "T50"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T54",
@@ -229,7 +229,7 @@
   "depends_on": [
    "T50"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T55",
@@ -239,7 +239,7 @@
    "T53",
    "T54"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T56",
@@ -248,7 +248,7 @@
    "T55",
    "T42"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T60",
@@ -256,7 +256,7 @@
   "depends_on": [
    "T12"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T61",
@@ -265,7 +265,7 @@
    "T11",
    "T60"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T62",
@@ -273,7 +273,7 @@
   "depends_on": [
    "T11"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T70",
@@ -281,7 +281,7 @@
   "depends_on": [
    "T31"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T71",
@@ -289,7 +289,7 @@
   "depends_on": [
    "T42"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T72",
@@ -297,7 +297,7 @@
   "depends_on": [
    "T33"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T73",
@@ -306,7 +306,7 @@
    "T52",
    "T53"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T74",
@@ -316,7 +316,7 @@
    "T32",
    "T33"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T81",
@@ -325,7 +325,7 @@
    "T42",
    "T13"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T80",
@@ -341,7 +341,7 @@
    "T62",
    "T81"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T90",
@@ -349,7 +349,7 @@
   "depends_on": [
    "T23"
   ],
-  "ui": false
+  "test": false
  },
  {
   "id": "T91",
@@ -357,7 +357,7 @@
   "depends_on": [
    "T90"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T92",
@@ -365,7 +365,7 @@
   "depends_on": [
    "T91"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T93",
@@ -373,7 +373,7 @@
   "depends_on": [
    "T92"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T94",
@@ -381,7 +381,7 @@
   "depends_on": [
    "T93"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T95",
@@ -389,7 +389,7 @@
   "depends_on": [
    "T94"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T96",
@@ -397,7 +397,7 @@
   "depends_on": [
    "T95"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T97",
@@ -405,7 +405,7 @@
   "depends_on": [
    "T96"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T98",
@@ -416,7 +416,7 @@
    "T94",
    "T95"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T99",
@@ -424,7 +424,7 @@
   "depends_on": [
    "T98"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T100",
@@ -432,7 +432,7 @@
   "depends_on": [
    "T99"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T101",
@@ -440,7 +440,7 @@
   "depends_on": [
    "T100"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T102",
@@ -448,7 +448,7 @@
   "depends_on": [
    "T101"
   ],
-  "ui": true,
+  "test": true,
   "type": "negative"
  },
  {
@@ -457,7 +457,7 @@
   "depends_on": [
    "T102"
   ],
-  "ui": true,
+  "test": true,
   "type": "negative"
  },
  {
@@ -466,7 +466,7 @@
   "depends_on": [
    "T103"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T105",
@@ -474,7 +474,7 @@
   "depends_on": [
    "T104"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T106",
@@ -482,7 +482,7 @@
   "depends_on": [
    "T105"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T107",
@@ -490,7 +490,7 @@
   "depends_on": [
    "T106"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T108",
@@ -498,7 +498,7 @@
   "depends_on": [
    "T107"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T109",
@@ -506,7 +506,7 @@
   "depends_on": [
    "T108"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T110",
@@ -514,7 +514,7 @@
   "depends_on": [
    "T109"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T111",
@@ -522,7 +522,7 @@
   "depends_on": [
    "T110"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T112",
@@ -530,7 +530,7 @@
   "depends_on": [
    "T111"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T113",
@@ -538,7 +538,7 @@
   "depends_on": [
    "T112"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T114",
@@ -546,7 +546,7 @@
   "depends_on": [
    "T113"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T115",
@@ -554,7 +554,7 @@
   "depends_on": [
    "T114"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T116",
@@ -562,7 +562,7 @@
   "depends_on": [
    "T115"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T117",
@@ -570,7 +570,7 @@
   "depends_on": [
    "T116"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T118",
@@ -578,7 +578,7 @@
   "depends_on": [
    "T117"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T119",
@@ -586,7 +586,7 @@
   "depends_on": [
    "T118"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T120",
@@ -594,7 +594,7 @@
   "depends_on": [
    "T119"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T121",
@@ -602,7 +602,7 @@
   "depends_on": [
    "T120"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T122",
@@ -610,7 +610,7 @@
   "depends_on": [
    "T121"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T124",
@@ -618,7 +618,7 @@
   "depends_on": [
    "T123"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T125",
@@ -626,7 +626,7 @@
   "depends_on": [
    "T124"
   ],
-  "ui": true
+  "test": true
  },
  {
   "id": "T126",
@@ -635,7 +635,7 @@
    "T125"
   ],
   "type": "fix",
-  "ui": true
+  "test": true
  },
  {
   "id": "T127",
@@ -644,7 +644,7 @@
    "T126"
   ],
   "type": "fix",
-  "ui": true
+  "test": true
  },
  {
   "id": "T128",
@@ -653,7 +653,7 @@
    "T127"
   ],
   "type": "fix",
-  "ui": true
+  "test": true
  },
  {
   "id": "T129",
@@ -662,7 +662,7 @@
    "T128"
   ],
   "type": "fix",
-  "ui": true
+  "test": true
  },
  {
   "id": "T130",
@@ -671,7 +671,7 @@
    "T129"
   ],
   "type": "feature",
-  "ui": true
+  "test": true
  },
  {
   "id": "T131",
@@ -680,7 +680,7 @@
    "T130"
   ],
   "type": "feature",
-  "ui": true
+  "test": true
  },
  {
   "id": "T132",
@@ -689,7 +689,7 @@
    "T131"
   ],
   "type": "feature",
-  "ui": true
+  "test": true
  },
  {
   "id": "T133",
@@ -698,22 +698,22 @@
    "T132"
   ],
   "type": "refactor",
-  "ui": true
+  "test": true
  },
  {
   "id": "T134",
   "desc": "エディタ内キャリブレーションオーバーレイ時のキー入力独占バグ修正。キャリブレーション中も EditorScreen の window keydown/keyup リスナー(EditorScreen.tsx:609-763)が有効で、1押しにつき編集画面とオーバーレイが両方発火する: Space（エディタの playFrom() で BGM 開始/停止、isPlaying=true でエディタのメトロノームが再起動しオーバーレイのメトロノームと二重に鳴る。その上でオーバーレイの handleHit() も実行）と ,/.（±10+±10で±20ms動く）。onKeyDown(:610)は playtestActiveRef(:611)のみ抑制、onKeyUp(:702)はガード無し。修正は EditorScreen.tsx のみ: calibrationOpenRef=useRef(false) を追加し useEffect(()=>{calibrationOpenRef.current=calibrationOpen},[calibrationOpen]) で同期。onKeyDown(:611) の playtest ガード直後と onKeyUp(:702) 冒頭に if(calibrationOpenRef.current) return を追加。オーバーレイを開くボタンonClick(:1109-1113, stop()/stopMetronome()直後)で calibrationOpenRef.current=true（playtestActiveRef:1211の同期setと同流儀）、閉じるonClose(:1419)先頭で false。オーバーレイ中は全操作をオーバーレイが独占し、クローズでエディタ操作が復帰。CalibrationModal/SelectScreen/GameScreenは変更しない。完了条件: オーバーレイ中 Space で editor-play が「読込・再生」のまま（エディタ再生・メトロノーム二重なし）かつ calibration-last が判定表示に変わる、< を1回押すと editor-offset が -10 ちょうど変化（±20でない）、ESC でオーバーレイだけが閉じ、クローズ後 Space で editor-play が「停止」になる（ガード解放）。回帰なし: t61.spec.ts（Lキー→オーバーレイ操作）、t103.spec.ts（play中 Space スタンプ禁止）、T133 QA gate（tests/dynamic.test.ts）。",
   "depends_on": [
    "T133"
-   ],
-   "type": "fix",
-   "ui": true
-  },
-  {
-   "id": "T135",
-   "desc": "楽曲再生に判定オフセット（manualOffsetMs）を適用し、メトロノームと楽曲を同期。バグ: metronome.ts:65 の schedule() は offsetSeconds()（manualOffsetMs / 1000）でメトロノームクリックをオフセットしているが、楽曲再生（GameScreen の playMusic :93-106 と EditorScreen の playFrom :482-493）には manualOffsetMs が未適用。このため楽曲とメトロノームが manualOffsetMs 分だけズレ、</> キーでオフセットを変更するたびにズレが変化する。修正: (1) GameScreen.tsx playMusic の offsetSec 計算に getManualOffsetMs() を加算（const offsetSec = (audioOffsetMs + getManualOffsetMs()) / 1000）。getManualOffsetMs は既にインポート済み(:6)。(2) EditorScreen.tsx playFrom の offsetSec 計算に getManualOffsetMs() を加算（const offsetSec = (audioOffset + getManualOffsetMs()) / 1000）。getManualOffsetMs は既にインポート済み(:8)。変更不要: metronome.ts（既に offsetSeconds() 適用済み）、CalibrationModal.tsx（音楽再生なし schedule() 経由で適用済み）、clock.ts/songNow()/positionRef（AudioContext ベースの時刻変更不要）。完了条件: tsc --noEmit エラーなし、既存テスト全パス、ゲーム画面とエディタ画面で </> キーによるオフセット調整後次回再生時に楽曲とメトロノームが同期している。",
-   "depends_on": [],
-   "type": "fix",
-   "ui": false
-  }
- ]
+  ],
+  "type": "fix",
+  "test": true
+ },
+ {
+  "id": "T135",
+  "desc": "楽曲再生に判定オフセット（manualOffsetMs）を適用し、メトロノームと楽曲を同期。バグ: metronome.ts:65 の schedule() は offsetSeconds()（manualOffsetMs / 1000）でメトロノームクリックをオフセットしているが、楽曲再生（GameScreen の playMusic :93-106 と EditorScreen の playFrom :482-493）には manualOffsetMs が未適用。このため楽曲とメトロノームが manualOffsetMs 分だけズレ、</> キーでオフセットを変更するたびにズレが変化する。修正: (1) GameScreen.tsx playMusic の offsetSec 計算に getManualOffsetMs() を加算（const offsetSec = (audioOffsetMs + getManualOffsetMs()) / 1000）。getManualOffsetMs は既にインポート済み(:6)。(2) EditorScreen.tsx playFrom の offsetSec 計算に getManualOffsetMs() を加算（const offsetSec = (audioOffset + getManualOffsetMs()) / 1000）。getManualOffsetMs は既にインポート済み(:8)。変更不要: metronome.ts（既に offsetSeconds() 適用済み）、CalibrationModal.tsx（音楽再生なし schedule() 経由で適用済み）、clock.ts/songNow()/positionRef（AudioContext ベースの時刻変更不要）。完了条件: tsc --noEmit エラーなし、既存テスト全パス、ゲーム画面とエディタ画面で </> キーによるオフセット調整後次回再生時に楽曲とメトロノームが同期している。",
+  "depends_on": [],
+  "type": "fix",
+  "test": true
+ }
+]
