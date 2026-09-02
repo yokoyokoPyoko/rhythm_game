@@ -777,7 +777,7 @@
         "qa": "ses_f9dcb833cffeVHA9OBW235SYZW",
         "coder": "ses_f9dc9c331ffehLUdVWy31tacgZ"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
