@@ -185,6 +185,7 @@ export default function EditorScreen() {
   const isPlayingRef = useRef(false)
   const metronomeTimerRef = useRef<number | null>(null)
   const metronomeEnabledRef = useRef(true)
+  const metronomeLeadRef = useRef(0)
   const audioOffsetRef = useRef(audioOffset)
   useEffect(() => { audioOffsetRef.current = audioOffset }, [audioOffset])
 
@@ -235,7 +236,7 @@ export default function EditorScreen() {
     }
   }, [])
 
-  const startMetronome = useCallback((ctx: AudioContext, fromMs: number) => {
+  const startMetronome = useCallback((ctx: AudioContext, fromMs: number, startCtxTime: number, leadMs: number) => {
     stopMetronome()
     if (!metronomeEnabledRef.current) return
     ensureGainNodes(ctx)
@@ -243,9 +244,15 @@ export default function EditorScreen() {
     const lookaheadSec = LOOKAHEAD_MS / 1000
     let beatIdx = Math.ceil(timeline.msToBeat(fromMs))
     if (!Number.isFinite(beatIdx) || beatIdx < 0) beatIdx = 0
-    let nextBeatTime = ctx.currentTime + (timeline.beatToMs(beatIdx) - fromMs) / 1000
-    // if next beat is in the past (due to quantization), advance
-    while (nextBeatTime < ctx.currentTime) {
+    // T137: Deterministic grid anchored to startCtxTime (the snapshot taken when
+    // playback began), not the live ctx.currentTime (which has frame jitter).
+    // schedule() internally adds offsetSeconds() (manualOffset/1000), so the
+    // only lead that must be baked into the grid here is the audio offset to
+    // line the metronome up with the audible music: music② == metronome⑤.
+    let nextBeatTime = startCtxTime + leadMs / 1000 + (timeline.beatToMs(beatIdx) - fromMs) / 1000
+    // Advance until the first click is still in the future after schedule() adds
+    // manualOffset, so the first click is never clamped to "now" (deterministic).
+    while (nextBeatTime + getManualOffsetMs() / 1000 < ctx.currentTime) {
       nextBeatTime += timeline.beatMsAt(beatIdx) / 1000
       beatIdx++
     }
@@ -283,9 +290,11 @@ export default function EditorScreen() {
 
   useEffect(() => {
     if (isPlaying && metronomeEnabled) {
+      // T137: restart deterministically (e.g. after toggling metronomeEnabled)
+      // using the values captured at playFrom time (never the stale positionRef).
       try {
         const ctx = AudioManager.getInstance().ctx
-        startMetronome(ctx, positionRef.current)
+        startMetronome(ctx, startMsRef.current, startCtxTimeRef.current, metronomeLeadRef.current)
       } catch { /* ctx not ready */ }
     } else if (!isPlaying || !metronomeEnabled) {
       stopMetronome()
@@ -526,15 +535,25 @@ export default function EditorScreen() {
     )
     const fallbackMs = Math.max(timeline.beatToMs(contentBeats + 4), 30000)
     endMsRef.current = buf ? buf.duration * 1000 : fallbackMs
-    startCtxTimeRef.current = ctx.currentTime
+    const t0 = ctx.currentTime
+    startCtxTimeRef.current = t0
     startMsRef.current = fromMs
+    // T137: start the metronome deterministically from this playback's own
+    // snapshot (t0, fromMs), never a stale positionRef. leadMs = audioOffset so
+    // music② and metronome⑤ line up including the chart audio offset.
+    metronomeLeadRef.current = audioOffset
+    if (metronomeEnabledRef.current) {
+      try {
+        startMetronome(ctx, fromMs, t0, audioOffset)
+      } catch { /* ignore */ }
+    }
     setPlaying(true)
     setError(
       audioFailed
         ? '音楽ファイルの読み込みに失敗しました（メトロノームのみで続行）'
         : null,
     )
-  }, [buffer, url, audioOffset, segments, rings, timeline, stopMetronome, ensureGainNodes])
+  }, [buffer, url, audioOffset, segments, rings, timeline, stopMetronome, ensureGainNodes, startMetronome])
 
   const startRecording = useCallback(() => {
     let rawStartBeat: number
