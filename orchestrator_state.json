@@ -768,17 +768,18 @@
       "finished": 1788340839.5440097
     },
     "T135": {
-      "attempts": 4,
-      "status": "running",
+      "attempts": 5,
+      "status": "passed",
       "started": 1788355847.747013,
       "cycles": 1,
       "sessions": {
         "postmortem": null,
-        "qa": "ses_f9dcb833cffeVHA9OBW235SYZW",
+        "qa": "ses_f9daf40e1ffemZz5MvbfKrODy2",
         "coder": "ses_f9dc9c331ffehLUdVWy31tacgZ",
         "reviewer": "ses_f9dc84a8cffejnu1kxux1Gpfyn"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788356005.0041075
     }
   },
   "consecutive_no_action": 0
