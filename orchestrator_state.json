@@ -789,7 +789,8 @@
       "sessions": {
         "qa": "ses_f9d8acb14ffegVgm4c3p7ybxRB",
         "coder": "ses_f9d7a2516ffebczllLm8mqqsLD",
-        "postmortem": "ses_f9d84ae51ffecKHurWjadcE71B"
+        "postmortem": "ses_f9d84ae51ffecKHurWjadcE71B",
+        "reviewer": "ses_f9d7745beffeEMIvIaoxm1JTVG"
       },
       "gate_b_golden": true
     }
