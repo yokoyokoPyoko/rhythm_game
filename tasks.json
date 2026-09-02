@@ -699,5 +699,14 @@
   ],
   "type": "refactor",
   "ui": true
+ },
+ {
+  "id": "T134",
+  "desc": "エディタ内キャリブレーションオーバーレイ時のキー入力独占バグ修正。キャリブレーション中も EditorScreen の window keydown/keyup リスナー(EditorScreen.tsx:609-763)が有効で、1押しにつき編集画面とオーバーレイが両方発火する: Space（エディタの playFrom() で BGM 開始/停止、isPlaying=true でエディタのメトロノームが再起動しオーバーレイのメトロノームと二重に鳴る。その上でオーバーレイの handleHit() も実行）と ,/.（±10+±10で±20ms動く）。onKeyDown(:610)は playtestActiveRef(:611)のみ抑制、onKeyUp(:702)はガード無し。修正は EditorScreen.tsx のみ: calibrationOpenRef=useRef(false) を追加し useEffect(()=>{calibrationOpenRef.current=calibrationOpen},[calibrationOpen]) で同期。onKeyDown(:611) の playtest ガード直後と onKeyUp(:702) 冒頭に if(calibrationOpenRef.current) return を追加。オーバーレイを開くボタンonClick(:1109-1113, stop()/stopMetronome()直後)で calibrationOpenRef.current=true（playtestActiveRef:1211の同期setと同流儀）、閉じるonClose(:1419)先頭で false。オーバーレイ中は全操作をオーバーレイが独占し、クローズでエディタ操作が復帰。CalibrationModal/SelectScreen/GameScreenは変更しない。完了条件: オーバーレイ中 Space で editor-play が「読込・再生」のまま（エディタ再生・メトロノーム二重なし）かつ calibration-last が判定表示に変わる、< を1回押すと editor-offset が -10 ちょうど変化（±20でない）、ESC でオーバーレイだけが閉じ、クローズ後 Space で editor-play が「停止」になる（ガード解放）。回帰なし: t61.spec.ts（Lキー→オーバーレイ操作）、t103.spec.ts（play中 Space スタンプ禁止）、T133 QA gate（tests/dynamic.test.ts）。",
+  "depends_on": [
+   "T133"
+  ],
+  "type": "fix",
+  "ui": true
  }
 ]

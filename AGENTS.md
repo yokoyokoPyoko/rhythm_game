@@ -1203,6 +1203,36 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T134] エディタ内キャリブレーションオーバーレイ時のキー入力独占（BGM/メトロノーム重複・`</>`二重適用の修正）
+
+**バグ（ユーザー報告・原因特定済み）**: エディタ内キャリブレーション（`CalibrationModal` フルスクリーンオーバーレイ）表示中も、元の `EditorScreen` の `window` keydown/keyup リスナーが登録されたまま有効で、**1回のキー押下で編集画面とオーバーレイの両方が発火**する。
+
+- **Space**: エディタ側が `playFrom()` で BGM 開始/停止し、さらに `isPlaying=true` で `:280-292` のメトロノームeffectが**エディタのメトロノームを再起動**（オーバーレイのメトロノームと二重に鳴る）。その上でオーバーレイも `handleHit()` を実行。判定音と重なり「反応しない」ように見える。
+- **`,` / `.`（`</>`）**: エディタ(±10)とオーバーレイ(±10)が両方適用され **1回押しで ±20ms** 動く。
+- **↑/↓・ESC・Enter**: エディタ側も同時処理（実害は小さいが無駄）。
+
+**原因**: `EditorScreen.tsx` の `onKeyDown`（:610）は `playtestActiveRef`（:611）しか抑制しておらず `calibrationOpen` は抑制対象外。`onKeyUp`（:702）は何のガードも無い。
+
+**方針（ユーザー確定）**: キャリブレーション中は全画面オーバーレイなので、**全キー操作をオーバーレイが独占**させる。オーバーレイ表示中は `EditorScreen` のキーハンドラを無効化する（Playtest と同じ `playtestActiveRef` ガードパターン）。
+
+**実装（`src/screens/EditorScreen.tsx` のみ・最小変更）**:
+1. `calibrationOpenRef = useRef(false)` を追加し、`useEffect(() => { calibrationOpenRef.current = calibrationOpen }, [calibrationOpen])` で同期（既存 `:160-161` の `editModeRef`/`metronomeEnabledRef` 同期と同形式）。
+2. `onKeyDown`（:610 先頭）の `if (playtestActiveRef.current) return` の直後に `if (calibrationOpenRef.current) return` を追加。
+3. `onKeyUp`（:702 冒頭）にも `if (calibrationOpenRef.current) return` を追加（Space の hold 打刻や矢印リリースもオーバーレイ中は無効）。
+4. オーバーレイを開くボタン onClick（:1109-1113、`stop()`/`stopMetronome()` の直後）で `calibrationOpenRef.current = true` を設定してから `setCalibrationOpen(true)`（`playtest` が :1211 で同期 set するのと同流儀。クリック直後の入力漏れ防止）。
+5. オーバーレイを閉じる onClose（:1417-1423 の先頭）で `calibrationOpenRef.current = false` を設定。
+
+`CalibrationModal.tsx` / `SelectScreen.tsx` / `GameScreen.tsx` は変更しない（オーバーレイ本体は T133 のまま）。
+
+**完了条件（自動テスト）**:
+1. エディタで `editor-calibration-button` クリック→オーバーレイ表示中に Space → `editor-play` の表示が「読込・再生」のまま（**エディタの再生・メトロノームが開始されない**）であり、`calibration-last` が判定テキストへ変化する（オーバーレイだけが反応）。
+2. オーバーレイ中に `<` を1回 → `editor-offset` 表示が **-10ms ちょうど**変化（±20 でない）。`.` も +10 ちょうど。
+3. オーバーレイ中に ESC/Enter/↑/↓ はオーバーレイ側のみに作用（ESC でオーバーレイが閉じる）。
+4. オーバーレイを閉じた後、Space でエディタが再生開始（`editor-play` が「停止」表示）＝ガード解放を確認。
+5. 回帰なし: `t61.spec.ts`（Lキー→オーバーレイ操作）、`t103.spec.ts`（play中 Space スタンプ禁止）、T133 QA gate（`tests/dynamic.test.ts`、特に T133-2「オーバーレイは positionRef/isPlaying に依存しない」）が通ること。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
