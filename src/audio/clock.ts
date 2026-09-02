@@ -50,3 +50,10 @@ export function getManualOffsetMs(): number {
 export function offsetSeconds(): number {
   return manualOffsetMs / 1000;
 }
+
+// T138: Music playback start lead. Positive => music is delayed by this many ms
+// relative to the raw clock (songNow). The green bar (recording) uses raw, while
+// audible music & metronome align with this lead. Centralized so Game/Editor share it.
+export function getLeadMs(audioOffsetMs = 0): number {
+  return audioOffsetMs + manualOffsetMs;
+}

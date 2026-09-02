@@ -5,7 +5,7 @@ import { AudioCache, getBasename } from '../audio/AudioCache'
 import { BpmTimeline } from '../audio/bpmTimeline'
 import { loadAudio, loadAudioFromFile } from '../audio/loader'
 import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
-import { getManualOffsetMs, setManualOffset } from '../audio/clock'
+import { getLeadMs, getManualOffsetMs, setManualOffset } from '../audio/clock'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
 import { Cursor } from '../game/cursor'
@@ -372,8 +372,10 @@ export default function EditorScreen() {
       const dt = Math.min(0.05, (now - lastTickRef.current) / 1000)
       lastTickRef.current = now
       const ctx = AudioManager.getInstance().ctx
-      const leadMs = audioOffsetRef.current + getManualOffsetMs()
-      const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000 - leadMs
+      // T138 (案A): green bar = raw (judgement basis). Matches Play's songNow so
+      // 記録位置 = 判定ライン. Audible music is +leadMs delayed; greensBar leads by
+      // design. Do not subtract leadMs here (removal keeps recording/raw in phase).
+      const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
       const pos = Math.max(0, rawPos)
       if (pos >= endMsRef.current) {
         if (sourceRef.current) {
@@ -492,7 +494,8 @@ export default function EditorScreen() {
       const src = ctx.createBufferSource()
       src.buffer = buf
       src.connect(musicGainRef.current!)
-      const offsetSec = (audioOffset + getManualOffsetMs()) / 1000
+      // T138: total music lead (audioOffset + manualOffset), centralized in clock.
+      const offsetSec = getLeadMs(audioOffset) / 1000
       const audioTime = Math.max(0, fromMs / 1000)
       let startWhen: number
       let startOffset: number
@@ -539,8 +542,11 @@ export default function EditorScreen() {
     startCtxTimeRef.current = t0
     startMsRef.current = fromMs
     // T137: start the metronome deterministically from this playback's own
-    // snapshot (t0, fromMs), never a stale positionRef. leadMs = audioOffset so
-    // music② and metronome⑤ line up including the chart audio offset.
+    // snapshot (t0, fromMs), never a stale positionRef. T138 (案A): the green
+    // bar uses raw (判定 line) while the metronome stays anchored to the audible
+    // music (② = raw - leadMs). schedule() adds manualOffset, so only the chart
+    // audioOffset is baked here to line music② and metronome⑤ up. The green bar
+    // vs metronome leadMs divergence is intentional and deterministic (per-play fixed).
     metronomeLeadRef.current = audioOffset
     if (metronomeEnabledRef.current) {
       try {
@@ -585,8 +591,8 @@ export default function EditorScreen() {
       return
     }
     const ctx = AudioManager.getInstance().ctx
-    const leadMs = audioOffsetRef.current + getManualOffsetMs()
-    const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000 - leadMs
+    // T138 (案A): green bar = raw (same as Play judgement songNow).
+    const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000
     const pos = Math.max(0, rawPos)
     const clamped = buffer ? Math.min(pos, buffer.duration * 1000) : pos
     setPositionMs(clamped)
