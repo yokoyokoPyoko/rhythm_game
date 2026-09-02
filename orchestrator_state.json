@@ -797,7 +797,7 @@
     },
     "T137": {
       "attempts": 3,
-      "status": "running",
+      "status": "passed",
       "started": 1788386682.580528,
       "cycles": 1,
       "sessions": {
@@ -806,7 +806,13 @@
         "postmortem": "ses_f9bcda847ffech63lJyn3hvvJd",
         "reviewer": "ses_f9bc8f874ffe2MiWxxp5adXGcL"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true,
+      "finished": 1788387867.8042407
+    },
+    "T138": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788387867.806068
     }
   },
   "consecutive_no_action": 0
