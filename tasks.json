@@ -715,5 +715,12 @@
   "depends_on": [],
   "type": "fix",
   "test": true
+ },
+ {
+  "id": "T136",
+  "desc": "エディタ録音位置のバグ修正：緑バー（positionRef）を楽曲実位置に一致させ、録音打刻をそのまま使う。バグ: エディタで録音したリング・セグメントが「再生位置（耳で聞こえた楽曲の位置）」に記録されずズレる。根本原因: manualOffsetMs（判定オフセット、audioOffset（チャート設定 audio_offset）とは別物）がエディタ録音で2つの逆向き効果として適用され相殺する。(a)効果1(楽曲再生): playFrom(EditorScreen.tsx:482、T135で追加)は楽曲を (audioOffset+manualOffsetMs)/1000 秒遅らせて鳴らす。(b)効果2(録音打刻): 録音打刻(:628/:714/:739、T132で追加)は positionRef.current-getManualOffsetMs() で打刻位置を手前にずらす。(c)さらに緑バー(positionRef追跡式:364)は startMsRef+(ctx.currentTime-startCtxTimeRef)*1000 でオフセットを無視してリアルタイム進行するため、緑バーは楽曲実位置より (audioOffset+manualOffsetMs) ms 進みっぱなしになる(打刻で -manualOffsetMs を引いても audioOffset 分が残る)。確定方針(ユーザー承認): 「録音は聞こえた楽曲の位置にそのまま記録されるべき」「緑バーの位置=聞こえている音の位置が常に一致すべき」。manualOffsetMs は録音に介入させない(ゲームの判定・メトロノーム・楽曲再生のみ)。つまり緑バー(positionRef)を楽曲実位置に正確に一致させ、録音打刻はその位置をそのまま使う。共通規約: 楽曲の実際の開始遅延 leadMs = audioOffset + manualOffsetMs（正: 遅れて鳴る/負: 即鳴りでバッファが先から始まる）。修正対象(EditorScreen.tsxのみ): (1) 緑バー追跡式(:364と到達判定:365、stop():565)を楽曲実位置に統一: leadMs=audioOffset+getManualOffsetMs()、pos=startMsRef.current+(ctx.currentTime-startCtxTimeRef.current)*1000-leadMs。正オフセットは楽曲が遅れて鳴る分だけ緑バーも遅れて進む(鳴り始めるまでは pos<0 になり得る。描画・録音開始位置算出では0にクランプ)。負オフセットは即鳴りでバッファが先から始まる分、緑バーも先から進む。pos>=endMsRef 到達判定も同じ pos で行う。(2) 録音打刻の -getManualOffsetMs() 補正を撤廃(3箇所): :628(リングSpace押下)→const pos=positionRef.current、:714(セグメント矢印キー離しT105のreleaseBeat算出)→positionRef.current、:739(リングSpace離しhold長終端)→positionRef.current。positionRef が楽曲実位置になったのでそのまま使う。変更不要: GameScreen.tsx(録音はエディタのみ。判定はsongNow()ベースでT135のままで正しい)、clock.ts/metronome.ts、録音ループ連続軌跡サンプル:378-380(pos修正後:364追跡をbeat化するので自動で楽曲実位置に整合)、startRecording:540のstartBeat(positionRef経由で整合)。完了条件: (1) playFrom後、緑バー(positionRef/positionMs)の追跡が pos=startMsRef+(ctx.currentTime-startCtxTimeRef)*1000-(audioOffset+manualOffsetMs) に一致(正+80/負-80両方で、src.start()のwhen/offsetから再現されるバッファ位置と一致)。(2) 録音打刻(リングSpace押下・矢印離し・リングSpace離し)が -getManualOffsetMs() 補正なしの positionRef.current(=楽曲実位置)で beat化される。manualOffsetMs を変えても打刻位置が変わらないこと(audioOffset は楽曲実位置に反映)。(3) audioOffset が0でない(例+200ms)場合、録音したリングが楽曲内の聞こえた位置(バッファ実位置)に記録される(旧実装では audioOffset 分ズレていた)。(4) 回帰なし: T132(キャリブレーション/オフセット補正、エディタ内キャリブレーションモーダル:editor-offset、CalibrationModal)、T102/T103(play中スタンプ禁止)、T129(snap整合性)、T133(キャリブレーションオーバーレイ)。GameScreenの録音・判定は変更しない。(5) tsc --noEmit エラーなし。",
+  "depends_on": [],
+  "type": "fix",
+  "test": true
  }
 ]

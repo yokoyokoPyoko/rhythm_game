@@ -5676,3 +5676,6 @@ Error: No tests found.
 2026-09-02 22:32:06,455 [INFO] Postmortem analyzing failure and formulating actionable prescriptions...
 2026-09-02 22:32:06,456 [INFO] RateLimit sleep: 5s...
 2026-09-02 22:32:11,456 [INFO] Dispatching [1mPostmortem[0m (model=[90mopencode/nemotron-3-ultra-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T135] Postmortem 57007ae5)
+2026-09-02 23:10:36,098 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-02 23:10:37,099 [INFO] Orchestrator range execution: 1 tasks (from=T136, to=T136, budget=600m)
+2026-09-02 23:10:37,099 [INFO] [T136] --only mode: skipping dependency checks.

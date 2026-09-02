@@ -1261,6 +1261,51 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T136] エディタ録音位置のバグ修正：緑バー（positionRef）を楽曲実位置に一致させ、録音打刻をそのまま使う
+
+**バグ（ユーザー報告）**: エディタで録音したリング・セグメントが「再生位置（耳で聞こえた楽曲の位置）」に記録されずズレる。ユーザーの直感「録音の記録位置にオフセットが適用されていない」。
+
+**根本原因**: `manualOffsetMs`（判定オフセット、キャリブレーション/`</>` キーで決まる global 値。`audioOffset`＝チャート設定 `audio_offset` とは別物）が、エディタ録音で**2つの逆向き効果**として適用され相殺するため、録音位置がズレる。
+
+- 効果1（楽曲再生）: `playFrom`（`EditorScreen.tsx:482`、T135 で追加）は楽曲を `(audioOffset + manualOffsetMs) / 1000` 秒**遅らせて**鳴らす。
+- 効果2（録音打刻）: 録音打刻（`:628/:714/:739`、T132 で追加）は `positionRef.current - getManualOffsetMs()` で打刻位置を**手前に**ずらす。
+- さらに緑バー（`positionRef` 追跡式 `:364`）は `startMsRef + (ctx.currentTime - startCtxTimeRef) * 1000` でオフセットを無視してリアルタイム進行するため、緑バーは楽曲実位置より `(audioOffset + manualOffsetMs)` ms **進みっぱなし**になる（打刻で `-manualOffsetMs` を引いても `audioOffset` 分が残る）。
+
+**確定方針（ユーザー承認）**: 「録音は聞こえた楽曲の位置にそのまま記録されるべき」「緑バーの位置＝聞こえている音の位置が常に一致すべき」。判定オフセット `manualOffsetMs` は録音に介入させない（ゲームの判定・メトロノーム・楽曲再生のみに効く）。つまり **緑バー（`positionRef`）を楽曲実位置に正確に一致させ、録音打刻はその位置をそのまま使う**。
+
+**共通規約**: 楽曲の実際の開始遅延 = `leadMs = audioOffset + manualOffsetMs`（正: 遅れて鳴る / 負: 即鳴りでバッファが先から始まる）。緑バーが常に「楽曲実位置」を指すように追跡する。
+
+**修正対象（`src/screens/EditorScreen.tsx` のみ）**:
+
+1. **緑バー追跡式（`:364` と到達判定 `:365`、`stop()` `:565`）を楽曲実位置に統一**:
+   ```
+   leadMs = audioOffset + getManualOffsetMs()
+   pos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000 - leadMs
+   ```
+   - 正オフセット: 楽曲が遅れて鳴る分だけ緑バーも遅れて進む（鳴り始めるまでは `pos < 0` になり得る。描画・録音開始位置算出では 0 にクランプ）
+   - 負オフセット: 即鳴りでバッファが先から始まる分、緑バーも先から進む
+   - `pose >= endMsRef` 到達判定も同じ `pos` で行う
+
+2. **録音打刻の `-getManualOffsetMs()` 補正を撤廃（3箇所）**。`positionRef` が楽曲実位置になったので、そのまま使う:
+   - `:628`（リング Space 押下）→ `const pos = positionRef.current`
+   - `:714`（セグメント矢印キー離し、T105 の releaseBeat 算出）→ `const pos = positionRef.current`
+   - `:739`（リング Space 離し、hold 長終端）→ `const pos = positionRef.current`
+
+**変更不要**:
+- `src/screens/GameScreen.tsx` — 録音はエディタのみ。判定は `songNow()` ベースで厳密打刻補正がないため T135 のままで正しい
+- `src/audio/clock.ts` / `src/audio/metronome.ts` — 変更なし
+- 録音ループの連続軌跡サンプル（`:378-380`）— `pos`（修正後の `:364` 追跡）を beat 化するので、追跡式修正で自動的に楽曲実位置に整合
+- `startRecording`（`:540`）の `startBeat` — `positionRef` 経由なので整合
+
+**完了条件（自動テスト）**:
+1. `playFrom` 後、緑バー（`positionRef`/`positionMs`）の追跡が `pos = startMsRef + (ctx.currentTime - startCtxTimeRef) * 1000 - (audioOffset + manualOffsetMs)` に一致すること。正（例 +80ms）・負（例 -80ms）オフセット両方で、楽曲実位置（=`src.start()` の when/offset から再現されるバッファ位置）と一致すること。
+2. 録音打刻（リング Space 押下・矢印離し・リング Space 離し）が、`-getManualOffsetMs()` 補正なしの `positionRef.current`（＝楽曲実位置）で beat 化されること。`manualOffsetMs` を変えても打刻位置が変わらないこと（`audioOffset` は楽曲実位置に反映される）。
+3. `audioOffset` が 0 でない（例 +200ms）場合、録音したリングが楽曲内の聞こえた位置（バッファ実位置）に記録されること（旧実装では `audioOffset` 分ズレていた）。
+4. 回帰なし: T132 の「キャリブレーション/オフセット補正」「エディタ内キャリブレーションモーダル（`:editor-offset`、CalibrationModal）」「`:editor-offset` 表示」、T102/T103（play 中スタンプ禁止）、T129（snap 整合性）、T133（キャリブレーションオーバーレイ）。`GameScreen` の録音・判定は変更しないこと。
+5. `tsc --noEmit` エラーなし。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
