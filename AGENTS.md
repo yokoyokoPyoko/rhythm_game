@@ -1306,6 +1306,59 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T137] エディタ再生のメトロノーム決定性修正（再生ごとにズレるバグ）
+
+**バグ（ユーザー報告）**: エディタで同じ位置から再生してもメトロノームのオフセットが毎回違う。`再生するごとにメトロノームのオフセットが毎回違う`。
+
+**根本原因（コード確定）**:
+- `playFrom(fromMs)` は `startMsRef=fromMs, startCtxTime=ctx.currentTime` を設定して `setPlaying(true)` するが、メトロノーム起動 `useEffect([isPlaying]:284-289)` は `startMetronome(ctx, positionRef.current)` と stale な `positionRef.current` を読む。`positionRef` は `tick(:381)` 更新前なので前回停止位置のまま。
+- `startMetronome` の `nextBeatTime = ctx.currentTime + (beatToMs(beatIdx)-fromMs)/1000` は `ctx.currentTime` のジッタを含む。`while(nextBeatTime < now) advance` と `schedule` 内 `when = Math.max(now, nextBeatTime+offsetSeconds())` の二重 clamp で初回クリックがフレームタイミング依存でブレる。
+- 音楽可聴 `② = ctxStart+offsetSec+(beatToMs(B)-fromMs)/1000` (`offsetSec=(audioOffset+manualOffset)/1000`) に対しメトロノーム可聴 `⑤ = ctxStart+(beatToMs(B)-fromMs)/1000+manualOffset/1000` で `audioOffset` 分だけ固定的にズレ、`ceil` の端数でブレとして知覚される。
+
+**修正対象（`src/screens/EditorScreen.tsx` 中心）**:
+1. `startMetronome` を決定論化: シグネチャを `startMetronome(ctx, fromMs, startCtxTime, leadMs)` に拡張し、`nextBeatTime` を `startCtxTime + leadMs/1000 + (beatToMs(beatIdx)-fromMs)/1000` ではなく `startCtxTime` 基準の決定論的計算に統一。`playFrom` 内で `setPlaying(true)` 前に直接 `startMetronome(ctx, fromMs, ctx.currentTime, leadMs)` を呼ぶか、`useEffect(isPlaying)` 経由の二重起動を廃止。`fromMs` は `playFrom` 引数の正値を用い `positionRef.current` の stale 読取を廃止。
+2. `beatIdx` の残り計算を `leadMs` 込みで再計算し、`schedule` の `Math.max` clamp が初回で発動しないように `while` 補正を `leadMs` 込みで統一。
+3. `audioOffset` をメトロノームにも反映: `T137` の時点で音楽②とメトロノーム⑤が `audioOffset` 込みで一致するようにする。
+4. `stop()` / `seekTo` の `pos` 計算も同一 `leadMs` 式に統一するが、T138 で最終的に raw vs 可聴のどちらに寄せるかで再調整するため、T137 ではまず現行 T136 の `pos = startMs+delta-leadMs` を維持したまま決定性のみを直す。
+
+**変更不要**: `src/audio/metronome.ts` の `schedule` ロジック自体は維持（`offsetSeconds()` 加算は残す）。`src/screens/GameScreen.tsx` は本タスクでは触らない。
+
+**完了条件（自動テスト）**:
+1. 同じ `fromMs` で `playFrom` を2回連続呼び出し、`__editorPlayFrom.when/offset` とメトロノーム初回 `when` の差が 5ms 以内で毎回一定（ジッタなし）。
+2. `manualOffset=±80`, `audioOffset=0/200` の全組合せで音楽②とメトロノーム⑤の beat 対応が `audioOffset` 込みで一致。
+3. `isPlaying` トグルを Space 連打しても `positionRef` stale 起因のブレが発生しない。
+4. 回帰なし: T102/T103/T129/T133/T136。
+5. `tsc --noEmit` エラーなし。
+
+---
+
+### [T138] 判定ライン＝緑バーの同一化（記録位置とプレイ判定の整合）
+
+**背景**: T136 で `緑バー④ = 可聴位置②` に寄せた結果、Play の `判定① = songNow()` と `leadMs = audioOffset+manualOffset` 分ズレた。ユーザーの要望 `プレイの判定ライン＝緑のライン かつ 緑ライン上に生成であるべき` を満たすには両者を同一にする必要がある。現在 Play `① = raw`, Editor `④ = raw-leadMs` で `leadMs` ズレ。
+
+**不整合の整理**:
+- Play: `判定① = songNow = raw`, `可聴② = raw-leadMs` 相当（音楽が `+leadMs` 遅延）。
+- Editor(現行T136): `緑④ = raw-leadMs = 可聴②`、録音 beat = `msToBeat(緑④)` → chart は可聴基準で保存。Play で再生すると `hitTime = beatToMs(可聴beat)` が `判定①` より `leadMs` 手前で判定される。
+
+**確定方針（案Aを既定、案Bを代替として tasks.json で分岐）**:
+- **案A（推奨・最小差分）– 緑④を判定①に寄せる**: Editor の `tick: pos = startMs+delta-leadMs` の `leadMs` 減算を撤廃し `pos = startMs+delta` (raw) に戻す。録音も `positionRef` そのまま → chart は raw(判定)基準で保存、Play と完全同相。副作用: 緑バーは可聴②より `leadMs` 進んで見えるが Play と一貫するため `判定ライン＝緑ライン` が成立。必要なら WavePreview に可聴ガイド点線を追加。
+- **案B（判定①を可聴②に寄せる）**: `GameScreen.tsx` の `songNow` 判定を `songNowAudible = songNow - leadMs` に変更し、リング `hitTime`/ `judge`/ `waveYAtMs`/ `spawner` を可聴基準に。Editor は T136 のまま正となる。影響範囲が広く回帰リスク大。
+
+**本タスクの実装範囲（案Aを採用）**:
+- `src/screens/EditorScreen.tsx` のみ: `:366-368` と `stop():569-571` の `leadMs` 減算を削除し `pos = startMs + (ctx.currentTime-startCtxTime)*1000` に戻す。T137 で決定論化した `startMetronome` の `leadMs` 参照も raw 基準に合わせる（音楽②は `+leadMs` 遅延のまま、緑④は raw のため乖離は意図的）。
+- `src/audio/clock.ts` に `getLeadMs(audioOffset)` ヘルパを一元化し、Game/Editor の `leadMs` 定義重複を解消。
+
+**変更不要（案Aの場合）**: `src/screens/GameScreen.tsx` / `src/audio/metronome.ts` は触らない。案B を選ぶ場合は Game 側を上記通り変更するが、本タスクでは案Aを完了条件とする。
+
+**完了条件（自動テスト）**:
+1. Editor の `positionRef` 追跡が `pos = startMs + (ctx.currentTime-startCtxTime)*1000` (raw) に一致し、`manualOffset` を変えても緑バー軌跡が変わらない（判定基準は raw）。
+2. Editor で録音したリング beat `B = msToBeat(greenPos)` を Play で再生したとき `songNow == beatToMs(B)` で判定ラインに到達（`leadMs` ズレなし）。
+3. Editor で同じ位置から再生してもメトロノームと緑バーの相対位相が毎回一定（T137 の決定性を維持）。
+4. 回帰なし: T135(音楽同期)/T136の音楽遅延は維持、T102/T103/T129/T133/T137。
+5. `tsc --noEmit` エラーなし。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
