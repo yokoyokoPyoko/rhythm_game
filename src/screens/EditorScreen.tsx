@@ -366,7 +366,7 @@ export default function EditorScreen() {
       const leadMs = audioOffsetRef.current + getManualOffsetMs()
       const rawPos = startMsRef.current + (ctx.currentTime - startCtxTimeRef.current) * 1000 - leadMs
       const pos = Math.max(0, rawPos)
-      if (rawPos >= endMsRef.current) {
+      if (pos >= endMsRef.current) {
         if (sourceRef.current) {
           sourceRef.current.disconnect()
           sourceRef.current = null

@@ -85,6 +85,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
   const scoreRef = useRef(new ScoreManager())
   const lastJudgementRef = useRef<LastJudgement | null>(null)
   const savedOffsetRef = useRef(getManualOffsetMs())
+  const firstTapRef = useRef(true)
 
   const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
   const [lastJudgement, setLastJudgement] = useState<LastJudgement | null>(null)
@@ -133,6 +134,14 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
 
   const handleHit = useCallback(() => {
     try {
+      // T136: reset the manual offset at the start of a calibration session so the
+      // measured taps are not biased by a previously applied offset. Only the first
+      // tap performs this reset; subsequent taps measure relative to the new base.
+      if (firstTapRef.current) {
+        firstTapRef.current = false
+        setManualOffset(0)
+        setOffsetMs(0)
+      }
       const songTimeMs = songNow()
       const beatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
       const judgement = judgeHit(songTimeMs, cursorRef.current.y, ringsRef.current, beatMs)

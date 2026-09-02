@@ -270,7 +270,10 @@ describe('T136-2: 録音打刻は positionRef.current をそのまま使う（-g
     const timeline = new BpmTimeline(120, [], 1.0);
     const snap = 0.5;
     const cases: Array<{ bRel: number; expectedCorrect: number }> = [
-      { bRel: 1.2, expectedCorrect: 1.0 },
+      // 1.35 is off-grid and, at snap 0.5 with manual +80 (0.16 beats), the buggy
+      // subtraction crosses a grid midpoint (1.35 -> 1.5) while the buggy value
+      // (1.19 -> 1.0) lands on a different grid line, so the two are distinguishable.
+      { bRel: 1.35, expectedCorrect: 1.5 },
       { bRel: 1.3, expectedCorrect: 1.5 },
     ];
     for (const c of cases) {
@@ -673,7 +676,7 @@ describe('T136-6: tsc & end detection pos >= endMsRef uses same corrected pos', 
     expect(playFromFixed).toBe(1);
     // Tick and stop should not reintroduce offsetSec double addition – they use leadMs subtraction, not offsetSec
     // But they must contain audioOffset + manual pattern at least via leadMs
-    const leadOccurrences = (src.match(/audioOffset\s*\+\s*getManualOffsetMs\(\)/g) || []).length;
+    const leadOccurrences = (src.match(/audioOffset(?:Ref\.current)?\s*\+\s*getManualOffsetMs\(\)/g) || []).length;
     // Expect at least 2 (tick + stop + playFrom = 3, but playFrom already 1, tick+stop 2 => total 3). If using leadMs variable once, may be 2 distinct lines.
     expect(leadOccurrences).toBeGreaterThanOrEqual(2);
   });
