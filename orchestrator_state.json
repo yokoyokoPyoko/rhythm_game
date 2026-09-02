@@ -762,7 +762,7 @@
         "qa": "ses_f9ea11731ffetuUVF2p904kI04",
         "coder": "ses_f9e9df81dffeF3le333aBdLsTy"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
