@@ -749,7 +749,7 @@
         "postmortem": "ses_fa04890f7ffemSFZ0t3t8GIqyx",
         "coder": "ses_fa04507d1ffeeJyW6rNBSpRWBi"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
