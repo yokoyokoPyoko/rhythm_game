@@ -154,11 +154,13 @@ export default function EditorScreen() {
   })
 
   const playtestActiveRef = useRef(false)
+  const calibrationOpenRef = useRef(false)
   const toastTimerRef = useRef<number | null>(null)
   const modeRef = useRef<'play' | 'record'>('play')
   const editModeRef = useRef<'vertex' | 'edge' | 'ring'>('vertex')
   useEffect(() => { editModeRef.current = editMode }, [editMode])
   useEffect(() => { metronomeEnabledRef.current = metronomeEnabled }, [metronomeEnabled])
+  useEffect(() => { calibrationOpenRef.current = calibrationOpen }, [calibrationOpen])
   const recCursorRef = useRef<Cursor | null>(null)
   const recTrajRef = useRef<TrajPoint[]>([])
   const recStartBeatRef = useRef(0)
@@ -609,6 +611,7 @@ export default function EditorScreen() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (playtestActiveRef.current) return
+      if (calibrationOpenRef.current) return
 
       const target = e.target as HTMLElement | null
       const tag = target?.tagName
@@ -700,6 +703,7 @@ export default function EditorScreen() {
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
+      if (calibrationOpenRef.current) return
       const isUpKey = e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'KeyW'
       const isDownKey = e.code === 'ArrowDown' || e.key === 'ArrowDown' || e.code === 'KeyS'
 
@@ -1110,6 +1114,7 @@ export default function EditorScreen() {
                   savedOffsetRef.current = getManualOffsetMs()
                   stop()
                   stopMetronome()
+                  calibrationOpenRef.current = true
                   setCalibrationOpen(true)
                 }}
                 data-testid="editor-calibration-button"
@@ -1417,6 +1422,7 @@ export default function EditorScreen() {
       {calibrationOpen && (
         <CalibrationModal
           onClose={(save: boolean) => {
+            calibrationOpenRef.current = false
             setCalibrationOpen(false)
             if (!save) setManualOffset(savedOffsetRef.current)
             setOffsetMs(getManualOffsetMs())
