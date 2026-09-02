@@ -690,5 +690,14 @@
   ],
   "type": "feature",
   "ui": true
+ },
+ {
+  "id": "T133",
+  "desc": "プロセカ風フルスクリーンキャリブレーションオーバーレイ（ループ練習譜面）。背景: T132のCalibrationModalは(1)キャリブレーション中にエディタBGMが重複して鳴る(2)エディタの音楽再生状態(positionRef/isPlaying)に依存(3)独立ルート/calibration(CalibrationScreen)が残る、という問題がある。全画面オーバーレイ方式に統一し無限ループ譜面をやらせっぱなしで好きな時に終了できる方式にする。決定仕様: (1) /calibration ルートと CalibrationScreen.tsx を完全削除(App.tsx の path=/calibration と import削除) (2) キャリブレーションはフルスクリーンオーバーレイとして曲選択とエディタの両方から同一コンポーネントを起動(SelectScreenのLキーをオーバーレイ起動setCalibrationOpen(true)へ。EditorScreen は T132 の data-testid=editor-calibration-button のまま起動コンポーネントをオーバーレイへ。起動時に stop()/stopMetronome() で楽曲・BGM・録音を完全停止) (3) 無限ループ練習譜面: BPM=120固定、セグメントは up 2拍/down 2拍 交互、リングは 4拍ごと(beat 4,8,12,...)各{beat,type:single}。Chart形式で数千拍(=20分以上)生成。メトロノームscheduleと同時再生しSpaceでリングを叩いて判定。判定結果と打刻誤差(例 PERFECT(+12ms))を判定線付近にリアルタイム表示。,-/< と ./> キーまたは ±10ms ボタンで manualOffsetMs をリアルタイム微調整。「保存して終了」ボタン(data-testid=calibration-save / Enter)で setManualOffset() 保存して閉じる。「キャンセル」ボタン(data-testid=calibration-cancel / ESC)で開始前オフセットに復元して保存せず閉じる。ループ再生は好きなタイミングで終了できる(8回タップ自動完了は廃止)。完了条件: (1) /calibrationルート廃止(CalibrationScreen.tsx削除済み) (2) オーバーレイ起動時に背景楽曲が停止(isPlaying=false/stop()呼ばれる)しSpace入力が編集と重複しない (3) 譜面生成がBPM120・up2/down2交互・リング4拍ごと (4) Spaceで判定・誤差表示→保存して終了でsetManualOffset保存&閉じる、キャンセル/ESCで直前値復元&非保存 (5) 回帰なし: T132(録音オフセット補正)/T102/T103(play中スタンプ禁止)/T129(snap整合性)。t61/t91/select-screen.spec.ts のLキーテストはオーバーレイ方式に更新。",
+  "depends_on": [
+   "T132"
+  ],
+  "type": "refactor",
+  "ui": true
  }
 ]

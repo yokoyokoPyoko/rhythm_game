@@ -1238,65 +1238,50 @@ def _extract_json_object(out: str) -> dict | None:
     """Extract a top-level JSON object from model output with nested brace / markdown handling."""
     if not out:
         return None
-    # 1. Look for markdown json code block
+    # 1. Look for markdown json code block (try from last to first)
     for pattern in [r'```(?:json)?\s*(\{.*?\})\s*```', r'```(?:json)?\s*(\[.*?\])\s*```']:
-        m = re.search(pattern, out, re.S)
-        if m:
+        matches = list(re.finditer(pattern, out, re.S))
+        for m in reversed(matches):
             try:
                 res = json.loads(m.group(1))
-                if isinstance(res, dict):
-                    return res
-                if isinstance(res, list) and res and isinstance(res[0], dict):
-                    return res[0]
-            except Exception:
-                pass
+                if isinstance(res, dict): return res
+                if isinstance(res, list) and res and isinstance(res[0], dict): return res[0]
+            except Exception: pass
 
-    # 2. Balanced bracket parser (handles nested braces inside strings/code/escapes)
-    first_brace = out.find('{')
-    if first_brace != -1:
-        depth = 0
-        in_string = False
-        escape = False
-        end_idx = -1
-        for i in range(first_brace, len(out)):
-            char = out[i]
-            if escape:
-                escape = False
-                continue
-            if char == '\\':
-                escape = True
-                continue
-            if char == '"':
-                in_string = not in_string
-                continue
-            if not in_string:
-                if char == '{':
-                    depth += 1
-                elif char == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end_idx = i
-                        break
-        if end_idx != -1:
-            try:
-                candidate = out[first_brace:end_idx + 1]
-                res = json.loads(candidate)
-                if isinstance(res, dict):
-                    return res
-            except Exception:
-                pass
-
-    # 3. Fallback: widest outer braces
-    first_brace = out.find('{')
-    last_brace = out.rfind('}')
-    if first_brace != -1 and last_brace > first_brace:
-        try:
-            res = json.loads(out[first_brace:last_brace + 1])
-            if isinstance(res, dict):
-                return res
-        except Exception:
-            pass
-
+    # 2. Search backwards from the end of the text for any valid JSON object
+    for i in range(len(out) - 1, -1, -1):
+        if out[i] == '{':
+            depth = 0
+            in_string = False
+            escape = False
+            end_idx = -1
+            for j in range(i, len(out)):
+                char = out[j]
+                if escape:
+                    escape = False
+                    continue
+                if char == '\\':
+                    escape = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    continue
+                if not in_string:
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end_idx = j
+                            break
+            if end_idx != -1:
+                try:
+                    candidate = out[i:end_idx + 1]
+                    res = json.loads(candidate)
+                    if isinstance(res, dict):
+                        return res
+                except Exception:
+                    pass
     return None
 
 
@@ -1447,8 +1432,12 @@ If ANY requirement is missing or incomplete:
 
 
 def decode_retry_from(pm: Any, coder_commit: str | None) -> str:
-    if isinstance(pm, dict) and pm.get("retry_from") == "qa" and coder_commit:
-        return "qa"
+    if isinstance(pm, dict):
+        retry = pm.get("retry_from")
+        if retry == "qa" and coder_commit:
+            return "qa"
+        if retry == "reviewer":
+            return "reviewer"
     return "coder"
 
 
@@ -1468,6 +1457,7 @@ Failure Log:
 Decide where the next retry should restart from:
 - "coder": the failure is due to the implementation code (Coder output) and it must be regenerated.
 - "qa": the implementation code is acceptable but the dynamic test / verification approach (QA-Gen test script or how it was exercised) was flawed; reuse the Coder output and regenerate only the test.
+- "reviewer": the failure is purely due to the Code Reviewer's output formatting/JSON parsing error rather than any code or test flaw; reuse both Coder and QA outputs and re-run only the Gate C Code Reviewer.
 
 Output JSON only:
 {{
@@ -1475,7 +1465,7 @@ Output JSON only:
   "root_cause": "concise root cause description",
   "prohibited_rule": "prohibited rule for next run (what NOT to do)",
   "fix_hint": "clear, actionable prescription for Coder/QA (e.g. which exact selectors to use, what DOM/state logic to fix, how to calculate values)",
-  "retry_from": "coder" or "qa"
+  "retry_from": "coder" or "qa" or "reviewer"
 }}
 """
     log.info("Postmortem analyzing failure and formulating actionable prescriptions...")
@@ -1878,11 +1868,18 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         if not gc.ok:
             log.error("[%s] Gate C failed: %s", task.id, gc.detail)
             pm = generate_postmortem(task, f"Gate C (Dynamic Review) failed:\n{gc.detail}", models.postmortem, state=state, fresh_sessions=fresh_sessions)
-            if decode_retry_from(pm, coder_commit) == "qa":
+            retry_from = decode_retry_from(pm, coder_commit)
+            if retry_from == "qa":
                 log.info("[%s] Postmortem: retry from QA-Gen (reuse Coder output).", task.id)
                 need_coder = False
+                need_test = True
+            elif retry_from == "reviewer":
+                log.info("[%s] Postmortem: retry from Gate C Reviewer only.", task.id)
+                need_coder = False
+                need_test = False
             else:
                 need_coder = True
+                need_test = False
             mark_stage(2)
             maybe_reset_cycle()
             continue
