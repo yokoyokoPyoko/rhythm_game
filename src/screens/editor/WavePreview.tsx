@@ -427,184 +427,107 @@ export default function WavePreview({
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
-      // T139: Vertex drag — free X/Y movement, adjusting up to 2 adjacent segments.
-      // Y is free (not constrained by previous direction); direction and beats of
-      // adjacent segments are recalculated to match the new vertex position.
       if (vertexDragRef.current && onSegmentsChange) {
         const x = e.clientX - rect.left
-        const rectH = rect.height
-        const fieldH = rectH - RULER_H
-        let beat = xToBeatLocal(x, rect.width)
-        beat = quantizeBeat(beat, safeSnap)
+        const fieldH = rect.height - RULER_H
+        const beat = quantizeBeat(xToBeatLocal(x, rect.width), safeSnap)
         const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
-        let newY = TW_CENTER_Y + yRaw * TW_AMP
-        newY = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, newY))
+        const newY = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + yRaw * TW_AMP))
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
-        const pts = engineTmp.getPoints()
+        const pts = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition).getPoints()
         const idx = vertexDragRef.current.index
-        const last = pts.length - 1
 
         if (segments.length === 0) return
 
-        // --- Endpoint cases: only adjust the single adjacent segment ---
         if (idx === 0 && segments.length > 0) {
           const nextBeat = pts[1]?.beat ?? pts[0].beat + safeSnap
           const clampedBeat = Math.min(nextBeat - safeSnap, beat)
           const segBeats = Math.max(safeSnap, quantizeBeat(clampedBeat - 0, safeSnap))
           const dir = newY < TW_CENTER_Y - 1 ? 'up' : newY > TW_CENTER_Y + 1 ? 'down' : segments[0].direction
-          const next = segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: dir } : s))
-          onSegmentsChange(next)
+          onSegmentsChange(segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: dir } : s)))
           return
         }
-        if (idx === last && segments.length > 0) {
+        if (idx === pts.length - 1 && segments.length > 0) {
           const prevBeat = pts[idx - 1]?.beat ?? 0
           const segBeats = Math.max(safeSnap, quantizeBeat(beat - prevBeat, safeSnap))
-          const next = segments.map((s, i) => (i === idx - 1 ? { ...s, beats: segBeats } : s))
-          onSegmentsChange(next)
+          onSegmentsChange(segments.map((s, i) => (i === idx - 1 ? { ...s, beats: segBeats } : s)))
           return
         }
 
-        // --- Interior vertex: adjust 2 adjacent segments (idx-1 and idx) ---
+        // Interior vertex: adjust 2 adjacent segments (idx-1 and idx), list-driven perBeat (T131)
         const prevBeat = pts[idx - 1].beat
-        const nextBeat = pts[idx + 1].beat
-        const clampedBeat = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beat))
-
-        // Per-beat pixel displacement at each segment's start beat (T131 list-driven)
+        const clampedBeat = Math.max(prevBeat + safeSnap, Math.min(pts[idx + 1].beat - safeSnap, beat))
+        const yPrev = pts[idx - 1].y
+        const yNext = pts[idx + 1].y
         const perBeatPrev = 2 * TW_AMP * timeline.amplitudeAt(prevBeat)
         const perBeatNext = 2 * TW_AMP * timeline.amplitudeAt(clampedBeat)
-
-        // Calculate direction and beats for both adjacent segments
-        const deltaPrev = newY - pts[idx - 1].y
-        let dirPrev: 'up' | 'down' | 'stay'
-        let beatsPrev: number
-        const prevAtTop = pts[idx - 1].y <= (TW_CENTER_Y - TW_AMP) + 1
-        const prevAtBottom = pts[idx - 1].y >= (TW_CENTER_Y + TW_AMP) - 1
-        if (Math.abs(deltaPrev) < 0.5) {
-          dirPrev = 'stay'
-          beatsPrev = safeSnap
-        } else if (prevAtTop && deltaPrev > 0) {
-          dirPrev = 'down'
-          beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(deltaPrev) / perBeatPrev, safeSnap))
-        } else if (prevAtBottom && deltaPrev < 0) {
-          dirPrev = 'up'
-          beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(deltaPrev) / perBeatPrev, safeSnap))
-        } else {
-          dirPrev = deltaPrev < 0 ? 'up' : 'down'
-          beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(deltaPrev) / perBeatPrev, safeSnap))
+        const segFor = (fromY: number, toY: number, atTop: boolean, atBottom: boolean, pp: number, Bt: boolean) => {
+          const d = toY - fromY
+          const beats = Math.max(safeSnap, quantizeBeat(Math.abs(d) / pp, safeSnap))
+          let dir: 'up' | 'down' | 'stay'
+          if (Math.abs(d) < 0.5) dir = 'stay'
+          else if (Bt) dir = atTop && d < 0 ? 'up' : atBottom && d > 0 ? 'down' : d < 0 ? 'up' : 'down'
+          else dir = atTop && d > 0 ? 'down' : atBottom && d < 0 ? 'up' : d < 0 ? 'up' : 'down'
+          return { direction: dir, beats }
         }
-
-        const deltaNext = pts[idx + 1].y - newY
-        let dirNext: 'up' | 'down' | 'stay'
-        let beatsNext: number
-        const nextAtTop = pts[idx + 1].y <= (TW_CENTER_Y - TW_AMP) + 1
-        const nextAtBottom = pts[idx + 1].y >= (TW_CENTER_Y + TW_AMP) - 1
-        if (Math.abs(deltaNext) < 0.5) {
-          dirNext = 'stay'
-          beatsNext = safeSnap
-        } else if (nextAtTop && deltaNext < 0) {
-          dirNext = 'up'
-          beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(deltaNext) / perBeatNext, safeSnap))
-        } else if (nextAtBottom && deltaNext > 0) {
-          dirNext = 'down'
-          beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(deltaNext) / perBeatNext, safeSnap))
-        } else {
-          dirNext = deltaNext < 0 ? 'up' : 'down'
-          beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(deltaNext) / perBeatNext, safeSnap))
-        }
-
-        // Build candidate segments: only seg idx-1 and seg idx change
-        const candidateSegs = segments.map((s, i) => {
-          if (i === idx - 1) return { ...s, beats: beatsPrev, direction: dirPrev }
-          if (i === idx) return { ...s, beats: beatsNext, direction: dirNext }
-          return s
-        })
-
-        onSegmentsChange(candidateSegs)
+        const A = TW_CENTER_Y - TW_AMP
+        const B = TW_CENTER_Y + TW_AMP
+        const prevSeg = segFor(yPrev, newY, yPrev <= A + 1, yPrev >= B - 1, perBeatPrev, false)
+        const nextSeg = segFor(newY, yNext, yNext <= A + 1, yNext >= B - 1, perBeatNext, true)
+        onSegmentsChange(
+          segments.map((s, i) => {
+            if (i === idx - 1) return { ...s, ...prevSeg }
+            if (i === idx) return { ...s, ...nextSeg }
+            return s
+          }),
+        )
         return
       }
       if (edgeDragRef.current && onSegmentsChange) {
         const x = e.clientX - rect.left
-        const rectH = rect.height
-        const fieldH = rectH - RULER_H
+        const fieldH = rect.height - RULER_H
         const drag = edgeDragRef.current
         const idx = drag.index
-
-        // Horizontal delta in beats (quantized to safeSnap)
-        const beatRaw = xToBeatLocal(x, rect.width)
-        const dxBeat = beatRaw - drag.startBeat
-        const dxSnap = quantizeBeat(dxBeat, safeSnap)
-
-        // Vertical delta in field pixels, then converted to TW_AMP px
+        const dxSnap = quantizeBeat(xToBeatLocal(x, rect.width) - drag.startBeat, safeSnap)
         const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
-        const yNow = TW_CENTER_Y + yRaw * TW_AMP
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
-        const pts = engineTmp.getPoints()
+        const pts = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition).getPoints()
         if (segments.length === 0) return
-
-        const dyRaw = yNow - pts[idx].y
+        const dyRaw = TW_CENTER_Y + yRaw * TW_AMP - pts[idx].y
         const dy = Math.max(TW_CENTER_Y - TW_AMP - pts[idx].y, Math.min(TW_CENTER_Y + TW_AMP - pts[idx].y, dyRaw))
-
-        // New translated positions for both edge endpoints
         const beatI = pts[idx].beat + dxSnap
         const beatI1 = pts[idx + 1].beat + dxSnap
-        const clampBeat = Math.max(0, beatI)
-        let yI = pts[idx].y + dy
-        let yI1 = pts[idx + 1].y + dy
-        yI = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yI))
-        yI1 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yI1))
-
-        // per-beat pixel displacement (T131 list-driven) at each start beat
+        const cl = (y: number) => Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, y))
+        const yI = cl(pts[idx].y + dy)
+        const yI1 = cl(pts[idx + 1].y + dy)
         const perBeat = (b: number) => 2 * TW_AMP * timeline.amplitudeAt(b)
-
-        // Helper to compute beats/dir for a segment between two points
         const segmentFor = (fromBeat: number, fromY: number, toY: number): Segment => {
-          const delta = toY - fromY
-          if (Math.abs(delta) < 0.5) return { direction: 'stay', beats: safeSnap }
-          const rawBeat = Math.max(safeSnap, Math.abs(delta) / perBeat(fromBeat))
-          const beats = Math.max(safeSnap, quantizeBeat(rawBeat, safeSnap))
-          const dir: 'up' | 'down' | 'stay' = delta < 0 ? 'up' : 'down'
-          return { direction: dir, beats }
+          const d = toY - fromY
+          if (Math.abs(d) < 0.5) return { direction: 'stay', beats: safeSnap }
+          return { direction: d < 0 ? 'up' : 'down', beats: Math.max(safeSnap, quantizeBeat(Math.abs(d) / perBeat(fromBeat), safeSnap)) }
         }
-
+        const segI = (): Segment => {
+          const origLen = pts[idx + 1].beat - pts[idx].beat
+          const dyPx = Math.abs(yI1 - yI)
+          const pp = perBeat(Math.max(0, beatI))
+          const beatsI = Math.max(safeSnap, quantizeBeat(Math.abs(dxSnap) > Math.abs(dyPx / pp) ? origLen : dyPx / pp, safeSnap))
+          const dir: 'up' | 'down' | 'stay' = dyPx < 0.5 ? 'stay' : yI1 < yI ? 'up' : 'down'
+          return { direction: dir, beats: beatsI }
+        }
         const candidateSegs = segments.map((s, i) => {
-          // seg i-1: p_{i-1} -> p_i'
-          if (i === idx - 1 && i >= 0) {
-            const pPrev = pts[idx - 1]
-            return segmentFor(pPrev.beat, pPrev.y, yI)
-          }
-          // seg i: edge itself — translated by parallel shift; beat length preserved
-          if (i === idx) {
-            const origLen = pts[idx + 1].beat - pts[idx].beat
-            const dyPx = Math.abs(yI1 - yI)
-            // Horizontal priority (dx dominant): edge keeps its translated horizontal span
-            const dxDominant = Math.abs(dxSnap) > Math.abs(dyPx / perBeat(clampBeat))
-            let beatsI: number
-            if (dxDominant) {
-              beatsI = Math.max(safeSnap, quantizeBeat(origLen, safeSnap))
-            } else {
-              beatsI = Math.max(safeSnap, quantizeBeat(dyPx / perBeat(clampBeat), safeSnap))
-            }
-            const dir: 'up' | 'down' | 'stay' = dyPx < 0.5 ? 'stay' : yI1 < yI ? 'up' : 'down'
-            return { direction: dir, beats: beatsI }
-          }
-          // seg i+1: p_{i+1}' -> p_{i+2}
+          if (i === idx - 1 && i >= 0) return segmentFor(pts[idx - 1].beat, pts[idx - 1].y, yI)
+          if (i === idx) return segI()
           if (i === idx + 1 && i + 1 < pts.length) {
             const pAfter = pts[idx + 2]
-            if (!pAfter) return s
-            return segmentFor(beatI1, yI1, pAfter.y)
+            return pAfter ? segmentFor(beatI1, yI1, pAfter.y) : s
           }
           return s
         })
-
         onSegmentsChange(candidateSegs)
         return
       }
       if (dragRef.current) {
-        const x = e.clientX - rect.left
-        const beat = xToBeatLocal(x, rect.width)
-        onMoveRing?.(dragRef.current.index, beat)
+        onMoveRing?.(dragRef.current.index, xToBeatLocal(e.clientX - rect.left, rect.width))
         return
       }
       if (panRef.current) {
