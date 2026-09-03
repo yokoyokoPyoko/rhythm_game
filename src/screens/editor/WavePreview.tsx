@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
+import { quantizeBeat } from '../../chart/quantize'
 import { TW_CENTER_Y, TW_AMP, WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
@@ -433,7 +434,7 @@ export default function WavePreview({
         const rectH = rect.height
         const fieldH = rectH - RULER_H
         let beat = xToBeatLocal(x, rect.width)
-        beat = Math.round(beat / safeSnap) * safeSnap
+        beat = quantizeBeat(beat, safeSnap)
         const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
         let newY = TW_CENTER_Y + yRaw * TW_AMP
         newY = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, newY))
@@ -449,7 +450,7 @@ export default function WavePreview({
         if (idx === 0 && segments.length > 0) {
           const nextBeat = pts[1]?.beat ?? pts[0].beat + safeSnap
           const clampedBeat = Math.min(nextBeat - safeSnap, beat)
-          const segBeats = Math.max(safeSnap, Number((clampedBeat - 0).toFixed(4)))
+          const segBeats = Math.max(safeSnap, quantizeBeat(clampedBeat - 0, safeSnap))
           const dir = newY < TW_CENTER_Y - 1 ? 'up' : newY > TW_CENTER_Y + 1 ? 'down' : segments[0].direction
           const next = segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: dir } : s))
           onSegmentsChange(next)
@@ -457,7 +458,7 @@ export default function WavePreview({
         }
         if (idx === last && segments.length > 0) {
           const prevBeat = pts[idx - 1]?.beat ?? 0
-          const segBeats = Math.max(safeSnap, Number((beat - prevBeat).toFixed(4)))
+          const segBeats = Math.max(safeSnap, quantizeBeat(beat - prevBeat, safeSnap))
           const next = segments.map((s, i) => (i === idx - 1 ? { ...s, beats: segBeats } : s))
           onSegmentsChange(next)
           return
@@ -483,13 +484,13 @@ export default function WavePreview({
           beatsPrev = safeSnap
         } else if (prevAtTop && deltaPrev > 0) {
           dirPrev = 'down'
-          beatsPrev = Math.max(safeSnap, Number((Math.abs(deltaPrev) / perBeatPrev).toFixed(4)))
+          beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(deltaPrev) / perBeatPrev, safeSnap))
         } else if (prevAtBottom && deltaPrev < 0) {
           dirPrev = 'up'
-          beatsPrev = Math.max(safeSnap, Number((Math.abs(deltaPrev) / perBeatPrev).toFixed(4)))
+          beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(deltaPrev) / perBeatPrev, safeSnap))
         } else {
           dirPrev = deltaPrev < 0 ? 'up' : 'down'
-          beatsPrev = Math.max(safeSnap, Number((Math.abs(deltaPrev) / perBeatPrev).toFixed(4)))
+          beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(deltaPrev) / perBeatPrev, safeSnap))
         }
 
         const deltaNext = pts[idx + 1].y - newY
@@ -502,13 +503,13 @@ export default function WavePreview({
           beatsNext = safeSnap
         } else if (nextAtTop && deltaNext < 0) {
           dirNext = 'up'
-          beatsNext = Math.max(safeSnap, Number((Math.abs(deltaNext) / perBeatNext).toFixed(4)))
+          beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(deltaNext) / perBeatNext, safeSnap))
         } else if (nextAtBottom && deltaNext > 0) {
           dirNext = 'down'
-          beatsNext = Math.max(safeSnap, Number((Math.abs(deltaNext) / perBeatNext).toFixed(4)))
+          beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(deltaNext) / perBeatNext, safeSnap))
         } else {
           dirNext = deltaNext < 0 ? 'up' : 'down'
-          beatsNext = Math.max(safeSnap, Number((Math.abs(deltaNext) / perBeatNext).toFixed(4)))
+          beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(deltaNext) / perBeatNext, safeSnap))
         }
 
         // Build candidate segments: only seg idx-1 and seg idx change
