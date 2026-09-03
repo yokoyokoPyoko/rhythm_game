@@ -18,8 +18,12 @@ function readFile(rel: string): string {
 }
 
 function computeMinorStep(viewBeats: number): number {
-  // current production logic (unchanged in T144)
-  return viewBeats <= 8 ? 0.5 : viewBeats <= 32 ? 1 : 4;
+  // T145: 5-stage minorStep (updated from T144's 3-stage)
+  if (viewBeats <= 4) return 0.25;
+  if (viewBeats <= 8) return 0.5;
+  if (viewBeats <= 16) return 1;
+  if (viewBeats <= 64) return 2;
+  return 4;
 }
 
 interface RulerEntry {
@@ -111,9 +115,9 @@ describe('T144-1: File contract WavePreview.tsx 小節ラベル Math.round(b/4) 
     expect(src).not.toMatch(/const\s+strong\s*=\s*Math\.abs\s*\(\s*b\s*%\s*1\s*\)/);
   });
 
-  it('Step1 capture minorStep definition before → Step2 verify beat-based grid → Step3 viewBeats<=8?0.5:viewBeats<=32?1:4 を維持', () => {
+  it('Step1 capture minorStep definition before → Step2 verify beat-based grid → Step3 5-stage viewBeats<=4?0.25:<=8?0.5:<=16?1:<=64?2:4 を維持', () => {
     const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toMatch(/const\s+minorStep\s*=\s*viewBeats\s*<=\s*8\s*\?\s*0\.5\s*:\s*viewBeats\s*<=\s*32\s*\?\s*1\s*:\s*4/);
+    expect(src).toMatch(/const\s+minorStep\s*=\s*viewBeats\s*<=\s*4\s*\?\s*0\.25\s*:\s*viewBeats\s*<=\s*8\s*\?\s*0\.5\s*:\s*viewBeats\s*<=\s*16\s*\?\s*1\s*:\s*viewBeats\s*<=\s*64\s*\?\s*2\s*:\s*4/);
   });
 
   it('Step1 capture ruler rendering completeness before → Step2 verify fillStyle & stroke logic → Step3 strong=0.20/1.5 vs minor=0.07/1', () => {
@@ -273,22 +277,22 @@ describe('T144-2: 完了条件1 viewBeats=16 初期表示 0,1,2,3,4（小節）�
 // T144-3: 完了条件2 — minorStep の縦線（beat グリッド）は従来通り beat 単位で引かれ、小節太線と beat 細線が区別
 // ---------------------------------------------------------------------------
 describe('T144-3: 完了条件2 minorStep beat グリッドは従来通り、小節太線と beat 細線の区別', () => {
-  it('Step1 capture minorStep values before → Step2 compute for viewBeats=4,8,16,32,64,100 → Step3 matches beat-based spec 0.5/1/4', () => {
+  it('Step1 capture minorStep values before → Step2 compute for viewBeats=4,8,16,32,64,100 → Step3 matches 5-stage spec 0.25/0.5/1/2/4', () => {
     const expectations: Array<[number, number]> = [
-      [4, 0.5],
+      [4, 0.25],
       [8, 0.5],
       [16, 1],
-      [32, 1],
-      [64, 4],
+      [32, 2],
+      [64, 2],
       [100, 4],
     ];
     expectations.forEach(([beats, step]) => {
       expect(computeMinorStep(beats), `viewBeats ${beats}`).toBe(step);
     });
-    // Ensure T144 did not change minorStep definition
+    // Ensure T145 5-stage minorStep definition in source
     const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toMatch(/viewBeats\s*<=\s*8\s*\?\s*0\.5/);
-    expect(src).toMatch(/viewBeats\s*<=\s*32\s*\?\s*1\s*:\s*4/);
+    expect(src).toMatch(/viewBeats\s*<=\s*4\s*\?\s*0\.25/);
+    expect(src).toMatch(/viewBeats\s*<=\s*64\s*\?\s*2\s*:\s*4/);
   });
 
   it('Step1 capture total vertical lines for viewBeats=16 before → Step2 compute fixed ruler → Step3 17 beat lines with 5 strong + 12 minor', () => {
@@ -344,7 +348,7 @@ describe('T144-3: 完了条件2 minorStep beat グリッドは従来通り、小
 
   it('Step1 capture file guarantees beat grid remains before → Step2 check source still draws vertical grid per minorStep → Step3 loop uses minorStep and strong check', () => {
     const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('const minorStep = viewBeats');
+    expect(src).toContain('minorStep');
     expect(src).toContain('firstMinor');
     expect(src).toContain('Math.ceil(viewStart / minorStep');
     expect(src).toMatch(/for\s*\(\s*let\s+i\s*=\s*0\s*;\s*;\s*i\+\+\s*\)/);
@@ -353,9 +357,10 @@ describe('T144-3: 完了条件2 minorStep beat グリッドは従来通り、小
     expect(src).toContain('ctx.lineTo(gx, cssH)');
   });
 
-  it('Step1 capture viewBeats=32 minorStep=1 strong every 4 beats before → Step2 compute → Step3 33 lines with 9 strong (0..32) and measure labels 0..8', () => {
+  it('Step1 capture viewBeats=32 minorStep=2 strong every 4 beats before → Step2 compute → Step3 17 lines with 9 strong (0..32) and measure labels 0..8', () => {
     const fixed = computeRulerFixed(0, 32);
-    expect(fixed).toHaveLength(33);
+    // minorStep=2 => beats 0,2,4,...,32 => 17 lines
+    expect(fixed).toHaveLength(17);
     const strong = strongEntries(fixed);
     expect(strong).toHaveLength(9);
     expect(strong.map(e => e.beat)).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32]);
@@ -396,19 +401,21 @@ describe('T144-4: 回帰・off-grid・3-step state-transition robustness', () =>
     });
   });
 
-  it('Step1 capture large viewBeats=64 (wide) before → Step2 compute measure labels → Step3 minorStep=4 only strong lines visible and labels 0..16', () => {
+  it('Step1 capture large viewBeats=64 (wide) before → Step2 compute measure labels → Step3 minorStep=2 with 33 lines and strong every 4 beats, labels 0..16', () => {
     const viewBeats = 64;
     const viewStart = 0;
     const fixed = computeRulerFixed(viewStart, viewBeats);
-    // minorStep=4 => only multiples of 4 are drawn, all are strong
-    expect(computeMinorStep(viewBeats)).toBe(4);
-    expect(fixed.every(e => e.strong)).toBe(true);
-    expect(fixed.map(e => e.beat)).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64]);
-    expect(fixed.map(e => e.label)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16']);
+    // minorStep=2 => beats 0,2,4,...,64 => 33 lines
+    expect(computeMinorStep(viewBeats)).toBe(2);
+    expect(fixed).toHaveLength(33);
+    const strong = strongEntries(fixed);
+    expect(strong).toHaveLength(17);
+    expect(strong.map(e => e.beat)).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64]);
+    expect(strong.map(e => e.label)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16']);
     // Old buggy would have labels equal to beats
     const buggy = computeRulerBuggy(viewStart, viewBeats);
-    expect(buggy.map(e => e.label)).toEqual(['0', '4', '8', '12', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64']);
-    expect(fixed.map(e => e.label)).not.toEqual(buggy.map(e => e.label));
+    expect(strongEntries(buggy).map(e => e.label)).toEqual(['0', '4', '8', '12', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64']);
+    expect(strong.map(e => e.label)).not.toEqual(strongEntries(buggy).map(e => e.label));
   });
 
   it('Step1 capture off-grid viewStart=1.23 viewBeats=16 before → Step2 compute → Step3 strong labels still measure accurate', () => {

@@ -174,7 +174,12 @@ export default function WavePreview({
     ctx.fillRect(0, 0, cssW, RULER_H)
     ctx.font = '11px Inter, system-ui, sans-serif'
     ctx.textBaseline = 'top'
-    const minorStep = viewBeats <= 8 ? 0.5 : viewBeats <= 32 ? 1 : 4
+    const minorStep =
+      viewBeats <= 4  ? 0.25 :
+      viewBeats <= 8  ? 0.5  :
+      viewBeats <= 16 ? 1    :
+      viewBeats <= 64 ? 2    :
+                         4
     const firstMinor = Math.ceil(viewStart / minorStep - 1e-9) * minorStep
     for (let i = 0; ; i++) {
       const b = Number((firstMinor + i * minorStep).toFixed(4))

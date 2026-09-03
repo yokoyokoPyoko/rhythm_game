@@ -922,9 +922,15 @@
       "finished": 1788432360.2659698
     },
     "T145": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788432360.2679355
+      "started": 1788432360.2679355,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f991fc3cbffe2jRF60n1EKptPr",
+        "coder": "ses_f991ec679ffelOdBo78zIfprUL"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
