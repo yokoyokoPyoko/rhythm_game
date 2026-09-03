@@ -425,44 +425,99 @@ export default function WavePreview({
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
-      // Vertex drag: adjust segment beats (position) and direction (height)
+      // T139: Vertex drag — free X/Y movement, adjusting up to 2 adjacent segments.
+      // Y is free (not constrained by previous direction); direction and beats of
+      // adjacent segments are recalculated to match the new vertex position.
       if (vertexDragRef.current && onSegmentsChange) {
         const x = e.clientX - rect.left
+        const rectH = rect.height
+        const fieldH = rectH - RULER_H
         let beat = xToBeatLocal(x, rect.width)
         beat = Math.round(beat / safeSnap) * safeSnap
+        const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
+        let newY = TW_CENTER_Y + yRaw * TW_AMP
+        newY = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, newY))
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
         const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
         const pts = engineTmp.getPoints()
         const idx = vertexDragRef.current.index
-        if (idx <= 0 || idx >= pts.length - 1) {
-          // last vertex or single point: adjust last segment beats only
-          if (segments.length > 0 && idx === pts.length - 1) {
-            const prevBeat = pts[idx - 1]?.beat ?? 0
-            const newBeats = Math.max(safeSnap, Number((beat - prevBeat).toFixed(4)))
-            const next = segments.map((s, i) => (i === segments.length - 1 ? { ...s, beats: newBeats } : s))
-            onSegmentsChange(next)
-          }
+        const last = pts.length - 1
+
+        if (segments.length === 0) return
+
+        // --- Endpoint cases: only adjust the single adjacent segment ---
+        if (idx === 0 && segments.length > 0) {
+          const nextBeat = pts[1]?.beat ?? pts[0].beat + safeSnap
+          const clampedBeat = Math.min(nextBeat - safeSnap, beat)
+          const segBeats = Math.max(safeSnap, Number((clampedBeat - 0).toFixed(4)))
+          const dir = newY < TW_CENTER_Y - 1 ? 'up' : newY > TW_CENTER_Y + 1 ? 'down' : segments[0].direction
+          const next = segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: dir } : s))
+          onSegmentsChange(next)
           return
         }
+        if (idx === last && segments.length > 0) {
+          const prevBeat = pts[idx - 1]?.beat ?? 0
+          const segBeats = Math.max(safeSnap, Number((beat - prevBeat).toFixed(4)))
+          const next = segments.map((s, i) => (i === idx - 1 ? { ...s, beats: segBeats } : s))
+          onSegmentsChange(next)
+          return
+        }
+
+        // --- Interior vertex: adjust 2 adjacent segments (idx-1 and idx) ---
         const prevBeat = pts[idx - 1].beat
         const nextBeat = pts[idx + 1].beat
-        const clamped = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beat))
-        const newBeatsPrev = Number((clamped - prevBeat).toFixed(4))
-        const newBeatsNext = Number((nextBeat - clamped).toFixed(4))
-        if (newBeatsPrev < safeSnap - 1e-9 || newBeatsNext < safeSnap - 1e-9) return
-        // T125: Y is derived via WaveEngine physics (amplitude speed coefficient), not direct mouse coordinate.
-        // Move distance = (2*TW_AMP)/amplitude is fixed by WaveEngine; direction is preserved and Y follows from beats.
-        const newDir = segments[idx - 1].direction
-        // Validate amplitude-consistent Y via temporary engine: new Y = enginePrev.waveYAt(clamped) would equal prevY +/- move (or stay)
+        const clampedBeat = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beat))
+
+        // Per-beat pixel displacement at each segment's start beat (T131 list-driven)
+        const perBeatPrev = 2 * TW_AMP * timeline.amplitudeAt(prevBeat)
+        const perBeatNext = 2 * TW_AMP * timeline.amplitudeAt(clampedBeat)
+
+        // Calculate direction and beats for both adjacent segments
+        const deltaPrev = newY - pts[idx - 1].y
+        let dirPrev: 'up' | 'down' | 'stay'
+        let beatsPrev: number
+        const prevAtTop = pts[idx - 1].y <= (TW_CENTER_Y - TW_AMP) + 1
+        const prevAtBottom = pts[idx - 1].y >= (TW_CENTER_Y + TW_AMP) - 1
+        if (Math.abs(deltaPrev) < 0.5) {
+          dirPrev = 'stay'
+          beatsPrev = safeSnap
+        } else if (prevAtTop && deltaPrev > 0) {
+          dirPrev = 'down'
+          beatsPrev = Math.max(safeSnap, Number((Math.abs(deltaPrev) / perBeatPrev).toFixed(4)))
+        } else if (prevAtBottom && deltaPrev < 0) {
+          dirPrev = 'up'
+          beatsPrev = Math.max(safeSnap, Number((Math.abs(deltaPrev) / perBeatPrev).toFixed(4)))
+        } else {
+          dirPrev = deltaPrev < 0 ? 'up' : 'down'
+          beatsPrev = Math.max(safeSnap, Number((Math.abs(deltaPrev) / perBeatPrev).toFixed(4)))
+        }
+
+        const deltaNext = pts[idx + 1].y - newY
+        let dirNext: 'up' | 'down' | 'stay'
+        let beatsNext: number
+        const nextAtTop = pts[idx + 1].y <= (TW_CENTER_Y - TW_AMP) + 1
+        const nextAtBottom = pts[idx + 1].y >= (TW_CENTER_Y + TW_AMP) - 1
+        if (Math.abs(deltaNext) < 0.5) {
+          dirNext = 'stay'
+          beatsNext = safeSnap
+        } else if (nextAtTop && deltaNext < 0) {
+          dirNext = 'up'
+          beatsNext = Math.max(safeSnap, Number((Math.abs(deltaNext) / perBeatNext).toFixed(4)))
+        } else if (nextAtBottom && deltaNext > 0) {
+          dirNext = 'down'
+          beatsNext = Math.max(safeSnap, Number((Math.abs(deltaNext) / perBeatNext).toFixed(4)))
+        } else {
+          dirNext = deltaNext < 0 ? 'up' : 'down'
+          beatsNext = Math.max(safeSnap, Number((Math.abs(deltaNext) / perBeatNext).toFixed(4)))
+        }
+
+        // Build candidate segments: only seg idx-1 and seg idx change
         const candidateSegs = segments.map((s, i) => {
-          if (i === idx - 1) return { ...s, beats: newBeatsPrev, direction: newDir }
-          if (i === idx) return { ...s, beats: newBeatsNext }
+          if (i === idx - 1) return { ...s, beats: beatsPrev, direction: dirPrev }
+          if (i === idx) return { ...s, beats: beatsNext, direction: dirNext }
           return s
         })
-        // Ensure the candidate respects WaveEngine clamping by constructing an engine and reading back Y
-        const candidateEngine = new WaveEngine(candidateSegs, timeline, EDITOR_BASE_AMP, startPosition)
-        // candidateEngine.waveYAt(clamped) is the amplitude-consistent Y; no direct mouse Y is used
-        void candidateEngine.waveYAt(clamped)
+
         onSegmentsChange(candidateSegs)
         return
       }
