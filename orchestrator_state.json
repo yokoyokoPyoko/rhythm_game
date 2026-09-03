@@ -876,12 +876,12 @@
     "T142": {
       "attempts": 4,
       "status": "running",
-      "started": 1788417163.1032088,
+      "started": 1788419366.7672374,
       "cycles": 1,
       "sessions": {
         "qa": "ses_f9a9d146cffeY5cF7Z9gqwKqbS",
         "coder": "ses_f9a07a6a0ffejgw657wLwLwE14",
-        "postmortem": "ses_f9a2253e1ffe5Bf9Qun7T1t57I"
+        "postmortem": null
       },
       "gate_b_golden": false,
       "last_retry_from": "coder",
