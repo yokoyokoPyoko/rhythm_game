@@ -730,10 +730,38 @@
   "type": "fix",
   "test": true
  },
- {
+  {
   "id": "T138",
   "desc": "判定ライン＝緑バーの同一化（記録位置とプレイ判定の整合）。背景: T136 で緑バー④=可聴位置②に寄せた結果、Play の判定①=songNow() と leadMs=audioOffset+manualOffset 分ズレた。ユーザ要望「プレイの判定ライン＝緑のライン かつ 緑ライン上に生成であるべき」を満たすには両者同一が必要。現在 Play①=raw, Editor④=raw-leadMs で leadMs ズレ。不整合: Play 判定①=songNow=raw, 可聴②=raw-leadMs相当（音楽が+leadMs遅延）。Editor④=raw-leadMs=可聴②、録音beat=msToBeat(緑④)→chartは可聴基準で保存。Playで再生すると hitTime=beatToMs(可聴beat) が判定①より leadMs 手前で判定される。確定方針（案Aを既定、案Bを代替として分岐）: 案A（推奨・最小差分）– 緑④を判定①に寄せる: Editor の tick: pos=startMs+delta-leadMs の leadMs 減算を撤廃し pos=startMs+delta (raw) に戻す。録音も positionRef そのまま→chartは raw(判定)基準で保存、Playと完全同相。副作用: 緑バーは可聴②より leadMs 進んで見えるが Play と一貫するため判定ライン＝緑ライン成立。必要なら WavePreview に可聴ガイド点線追加。案B（判定①を可聴②に寄せる）: GameScreen.tsx の songNow 判定を songNowAudible=songNow-leadMs に変更しリング hitTime/judge/waveYAtMs/spawner を可聴基準に。Editor は T136 のまま正。影響範囲広く回帰リスク大。本タスク実装範囲（案A採用）: EditorScreen.tsx のみ: :366-368 と stop():569-571 の leadMs 減算を削除し pos=startMs+(ctx.currentTime-startCtxTime)*1000 に戻す。T137 で決定論化した startMetronome の leadMs 参照も raw 基準に合わせる（音楽②は+leadMs遅延のまま、緑④は raw のため乖離は意図的）。clock.ts に getLeadMs(audioOffset) ヘルパ一元化で Game/Editor の leadMs 重複解消。変更不要（案Aの場合）: GameScreen.tsx / metronome.ts は触らない。案Bを選ぶ場合は Game 側を上記通り変更するが本タスクでは案Aを完了条件とする。完了条件: (1) Editor の positionRef 追跡が pos=startMs+(ctx.currentTime-startCtxTime)*1000 (raw) に一致し manualOffset を変えても緑バー軌跡が変わらない（判定基準は raw）(2) Editor で録音したリング beat B=msToBeat(greenPos) を Play で再生したとき songNow==beatToMs(B) で判定ラインに到達（leadMs ズレなし）(3) Editor で同じ位置から再生してもメトロノームと緑バーの相対位相が毎回一定（T137 決定性維持）(4) 回帰なし: T135(音楽同期)/T136の音楽遅延は維持、T102/T103/T129/T133/T137 (5) tsc --noEmit エラーなし。",
   "depends_on": ["T137"],
+  "type": "fix",
+  "test": true
+ },
+ {
+  "id": "T139",
+  "desc": "頂点編集の自由移動（左右上下）。要求: 頂点編集は左右上下に自由に移動できるようにする。現行 WavePreview.tsx: vertexDragRef は beats（横）のみ可変で Y は direction 保持のまま WaveEngine で再計算されるため上下自由移動ではない。方式（最小範囲調整・譜面互換維持）: 頂点 i を (beat', y') へドラッグした際、前後 2 セグメントのみを再計算して整合させる。perBeatPx = 2*TW_AMP*amplitudeAt(beat)（T131 の bpm_changes[].amplitude リスト駆動、既定 260px/拍）。beatsNeeded = |y' - yPrev| / perBeatPx を safeSnap に量子化し <safeSnap なら safeSnap に clamp。y' が clamp で届かない場合は candidateEngine.waveYAt(beat') に補正して描画と保存を一致させる。前頂点 yPrev から次頂点 y' へ行くのに必要な beats: beats_{i-1}' = |y' - y_{i-1}| / perBeat(prevBeat), dir' = sign。seg i: beats_i' = |y_{i+1} - y'| / perBeat(beat')。両方 safeSnap 量子化、端点（i=0/last）は 1 セグメントのみ調整。影響範囲は 2 セグメントのみ。getPoints().length === segments.length+1 を維持。対象ファイル: src/screens/editor/WavePreview.tsx のみ。完了条件: (1) Vertex モードで頂点をドラッグし X/Y ともに safeSnap 吸着で移動し2セグメントのみ伸縮 (2) 全 segments[].beats が safeSnap の整数倍 (3) getPoints().length === segments.length+1 維持、後続 beat が dx だけずれる (4) tsc --noEmit。",
+  "depends_on": ["T138"],
+  "type": "fix",
+  "test": true
+ },
+ {
+  "id": "T140",
+  "desc": "辺編集のドラッグ移動（左右上下）。要求: 辺の編集はドラッグで左右上下に移動できるようにする。現行 WavePreview.tsx: nearestEdgeIndex はクリックで onSelectSegment のみでドラッグ無し。方式（最小範囲調整）: 辺 i（頂点 i→i+1）を (dxBeat, dy) だけ平行移動し、前後を含む 3 セグメントを再計算。beat_i' = beat_i + dxBeat, beat_{i+1}' = beat_{i+1} + dxBeat（dxBeat は xToBeat 差分を safeSnap 量子化）、y_i' = y_i + dy, y_{i+1}' = y_{i+1} + dy（dy は mapYInverse 差分を fieldH 内 clamp）。seg i-1: p_{i-1}→p_i' へ beats/dir 再計算、seg i: p_i'→p_{i+1}' は beats_i' = |y_{i+1}' - y_i'| / perBeat(beat_i') を safeSnap 量子化。|dx|>|dy| なら横優先で beats_i' を dx 起因に、逆は縦優先で y 起因に。seg i+1: p_{i+1}'→p_{i+2} へ再計算。edgeDragRef = {index, startBeat, startPrevBeat, startNextBeat} を新設。panRef と排他（edgeDrag 中は pan 無効）。対象ファイル: src/screens/editor/WavePreview.tsx のみ。完了条件: (1) Edge モードで辺をドラッグし 3 セグメントのみ再計算され辺長が保たれたまま平行移動 (2) safeSnap 整数倍維持、getPoints 長さ不変 (3) 空ドラッグは pan、辺上ドラッグは edge 移動として正しく分離 (4) tsc --noEmit。",
+  "depends_on": ["T139"],
+  "type": "fix",
+  "test": true
+ },
+ {
+  "id": "T141",
+  "desc": "頂点のダブルクリック追加 / 右クリック削除。要求: 頂点をダブルクリックで追加、右クリックで削除できるようにする。現行は頂点追加手段なし、削除手段なし。方式: 追加: onDoubleClick（button 0, detail 2）で beatAdd = quantize(xToBeat, safeSnap)、所属セグメント k（points[k].beat < beatAdd < points[k+1].beat）を 2 分割。yAdd = mapYInverse(mouseY) を自由 Y とし、segA: p_k→p_add と segB: p_add→p_{k+1} に beats/dir を |yAdd - y_k|/perBeat で算出（T139 と同様）。segments.splice(k,1, segA, segB)。削除: onContextMenu（button 2）で nearestVertexIndex < 14px なら頂点 i を削除し、前後 2 セグメント seg_{i-1}, seg_i を 1 本にマージ: beats_merged = |y_{i+1} - y_{i-1}| / perBeat(prevBeat), dir_merged = sign。端点は削除不可。e.preventDefault() でブラウザメニューを抑止。対象ファイル: src/screens/editor/WavePreview.tsx のみ。完了条件: (1) Vertex モードでダブルクリックした位置に頂点が +1 され頂点数と getPoints().length が +1 (2) 頂点上で右クリックすると該当頂点が -1 され前後が 1 本にマージされる即時削除でコンテキストメニュー出ない (3) 追加/削除後の全 beats が safeSnap 整数倍 (4) tsc --noEmit。",
+  "depends_on": ["T140"],
+  "type": "fix",
+  "test": true
+ },
+ {
+  "id": "T142",
+  "desc": "リング追加/削除の統一（ダブルクリック追加 / 右クリック削除）。要求: リングの追加/削除操作を頂点と同様（ダブルクリックで追加、右クリックで削除）に統一する。現行リングはクリック追加 / ダブルクリック削除。方式: 追加: 現行 onMouseDown → pan.moved==false の mouseup で addRingAt を廃止。onDoubleClick（button 0, detail 2）で beat = quantize(xToBeat, safeSnap) → onAddRing(beat)。editMode==='ring' かつ nearestRingIndex が hit していない空領域でのみ発火。削除: onContextMenu（button 2）で nearestRingIndex < 35px なら onDeleteRing(hit)。e.preventDefault() で抑止。ドラッグ（dragRef）は左クリックのみ有効（e.button===0）とし、右クリックドラッグでは dragRef を立てない。handleMouseDown の panRef 起点での mouseup 追加は削除し、ダブルクリックとの二重発火を e.detail と panRef.moved で厳密に分離。対象ファイル: src/screens/editor/WavePreview.tsx のみ。完了条件: (1) Ring モードで空領域をダブルクリックするとリングが +1 されクリック単発では追加されない (2) リング上で右クリックすると該当リングが -1 されコンテキストメニュー出ない (3) 左ドラッグでリング移動が従来通り機能し右クリックドラッグでは移動しない (4) 回帰: T116（V/E/R 分離）/ T141 との右クリック排他が正しい (5) tsc --noEmit。",
+  "depends_on": ["T141"],
   "type": "fix",
   "test": true
  }

@@ -811,7 +811,7 @@
     },
     "T138": {
       "attempts": 10,
-      "status": "running",
+      "status": "passed",
       "started": 1788396904.4618137,
       "cycles": 1,
       "sessions": {
@@ -822,7 +822,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788397040.370528
+      "last_postmortem_at": 1788397040.370528,
+      "finished": 1788397280.640818
+    },
+    "T139": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788403042.0769916
     }
   },
   "consecutive_no_action": 0

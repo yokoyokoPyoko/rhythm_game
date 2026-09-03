@@ -1359,6 +1359,88 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T139] 頂点編集の自由移動（左右上下）
+
+**要求**: 頂点編集は左右上下に自由に移動できるようにする。現行 `WavePreview.tsx: vertexDragRef` は `beats`（横）のみ可変で Y は `direction` 保持のまま `WaveEngine` で再計算されるため上下自由移動ではない。これを譜面形式 `{direction, beats}` を変えずに実現する。
+
+**方式（最小範囲調整・譜面互換維持）**: 頂点 `i` を `(beat', y')` へドラッグした際、前後 2 セグメントのみを再計算して整合させる。`perBeatPx = 2*TW_AMP*amplitudeAt(beat)`（`T131` の `bpm_changes[].amplitude` リスト駆動、既定 260px/拍）。`beatsNeeded = |y' - yPrev| / perBeatPx` を `safeSnap` に量子化し `<safeSnap` なら `safeSnap` に clamp。`y'` が clamp で届かない場合は `candidateEngine.waveYAt(beat')` に補正して描画と保存を一致させる。
+
+- 対象: `points[i]`（`WaveEngine.getPoints()` の `i` 番目）。`beat' = quantize(xToBeat, safeSnap)`, `y' = clamp(mapYInverse(mouseY), fieldH)`。
+- `seg i-1`: `beats_{i-1}' = |y' - y_{i-1}| / perBeat(prevBeat)`, `dir' = sign`
+- `seg i`: `beats_i' = |y_{i+1} - y'| / perBeat(beat')`
+- 両方 `safeSnap` 量子化、端点（`i=0/last`）は 1 セグメントのみ調整。`perBeat` は `amplitudeAt(prevBeat)` と `amplitudeAt(beat')` で個別に算出。
+- 影響範囲は 2 セグメントのみ。`getPoints().length === segments.length+1` を維持。
+
+**対象ファイル**: `src/screens/editor/WavePreview.tsx` のみ（`EditorScreen.tsx` は `onSegmentsChange` 既存コールバックを流用）。`WaveEngine` は変更なし。
+
+**完了条件**:
+1. Vertex モードで頂点をドラッグし X/Y ともに `safeSnap` 吸着で移動し、2 セグメントのみが伸縮すること。
+2. 全 `segments[].beats` が `safeSnap` の整数倍であること。
+3. `getPoints().length === segments.length+1` を維持し、後続 beat が `dx = beat' - beat_old` だけ正しくずれること。
+4. 回帰: `T125`（Y は `WaveEngine` 物理で導出）/ `T128`（`dY` クランプ）/ `T139-142` 以外の挙動不変。`tsc --noEmit`。
+
+---
+
+### [T140] 辺編集のドラッグ移動（左右上下）
+
+**要求**: 辺の編集はドラッグで左右上下に移動できるようにする。現行 `WavePreview.tsx: nearestEdgeIndex` はクリックで `onSelectSegment` のみでドラッグが無い。
+
+**方式（最小範囲調整）**: 辺 `i`（頂点 `i→i+1`）を `(dxBeat, dy)` だけ平行移動し、前後を含む 3 セグメントを再計算して整合させる。
+
+- `beat_i' = beat_i + dxBeat`, `beat_{i+1}' = beat_{i+1} + dxBeat`（`dxBeat` は `xToBeat` 差分を `safeSnap` 量子化）
+- `y_i' = y_i + dy`, `y_{i+1}' = y_{i+1} + dy`（`dy` は `mapYInverse` 差分を `fieldH` 内 clamp）
+- `seg i-1`: `p_{i-1}→p_i'` へ `beats/dir` 再計算
+- `seg i`: `p_i'→p_{i+1}'` は辺自体。`beats_i' = |y_{i+1}' - y_i'| / perBeat(beat_i')` を `safeSnap` 量子化。`|dx| > |dy|` なら横優先で `beats_i'` を `dx` 起因に、逆は縦優先で `y` 起因に（見た目の主方向を優先）。
+- `seg i+1`: `p_{i+1}'→p_{i+2}` へ再計算
+- `edgeDragRef = {index, startBeat, startPrevBeat, startNextBeat}` を新設。`panRef` と排他（`edgeDrag` 中は pan 無効）。
+
+**対象ファイル**: `src/screens/editor/WavePreview.tsx` のみ。`useEffect onMove` に `edgeDrag` ケース追加、`handleMouseDown` で `edgeHit` 時に `edgeDragRef` を初期化（現行の `onSelectSegment` 後にドラッグ開始も行う）。
+
+**完了条件**:
+1. Edge モードで辺をドラッグし 3 セグメントのみが再計算され、辺長が保たれたまま平行移動すること。
+2. `safeSnap` 整数倍維持、`getPoints` 長さ不変。
+3. 空ドラッグは pan、辺上ドラッグは edge 移動として正しく分離されること。
+4. `tsc --noEmit`。
+
+---
+
+### [T141] 頂点のダブルクリック追加 / 右クリック削除
+
+**要求**: 頂点をダブルクリックで追加、右クリックで削除できるようにする。現行は頂点追加手段なし、削除手段なし。
+
+**方式**:
+- **追加**: `onDoubleClick`（`e.detail===2, button 0`）で `beatAdd = quantize(xToBeat, safeSnap)`、所属セグメント `k`（`points[k].beat < beatAdd < points[k+1].beat`）を 2 分割。`yAdd = mapYInverse(mouseY)` を自由 Y とし、`segA: p_k→p_add` と `segB: p_add→p_{k+1}` に `beats/dir` を `|yAdd - y_k|/perBeat` で算出（`T139` と同様）。`segments.splice(k,1, segA, segB)`。
+- **削除**: `onContextMenu`（`button 2`）で `nearestVertexIndex < 14px` なら頂点 `i` を削除し、前後 2 セグメント `seg_{i-1}, seg_i` を 1 本にマージ: `beats_merged = |y_{i+1} - y_{i-1}| / perBeat(prevBeat)`, `dir_merged = sign`。端点は削除不可。`e.preventDefault()` でブラウザメニューを抑止。
+
+**対象ファイル**: `src/screens/editor/WavePreview.tsx` のみ。`onDoubleClick` を全モード対応に拡張（現行は `ring` のみ）、`onContextMenu` ハンドラを canvas に新設。
+
+**完了条件**:
+1. Vertex モードでダブルクリックした位置に頂点が +1 され、頂点数と `getPoints().length` が +1 されること。
+2. 頂点上で右クリックすると該当頂点が -1 され、前後が 1 本にマージされること。即時削除でコンテキストメニューが出ないこと。
+3. 追加/削除後の全 `beats` が `safeSnap` 整数倍であること。
+4. `tsc --noEmit`。
+
+---
+
+### [T142] リング追加/削除の統一（ダブルクリック追加 / 右クリック削除）
+
+**要求**: リングの追加/削除操作を頂点と同様（ダブルクリックで追加、右クリックで削除）に統一する。現行リングはクリック追加 / ダブルクリック削除。
+
+**方式**:
+- **追加**: 現行 `onMouseDown → pan.moved==false の mouseup で addRingAt` を **廃止**。`onDoubleClick`（`button 0, detail 2`）で `beat = quantize(xToBeat, safeSnap)` → `onAddRing(beat)`。`editMode==='ring'` かつ `nearestRingIndex` が hit していない空領域でのみ発火。
+- **削除**: `onContextMenu`（`button 2`）で `nearestRingIndex < 35px` なら `onDeleteRing(hit)`。`e.preventDefault()` で抑止。ドラッグ（`dragRef`）は左クリックのみ有効（`e.button===0`）とし、右クリックドラッグでは `dragRef` を立てない。
+- `handleMouseDown` の `panRef` 起点での `mouseup` 追加は削除し、ダブルクリックとの二重発火を `e.detail` と `panRef.moved` で厳密に分離。
+
+**対象ファイル**: `src/screens/editor/WavePreview.tsx` のみ。
+
+**完了条件**:
+1. Ring モードで空領域をダブルクリックするとリングが +1 され、クリック単発では追加されないこと。
+2. リング上で右クリックすると該当リングが -1 され、コンテキストメニューが出ないこと。
+3. 左ドラッグでリング移動が従来通り機能し、右クリックドラッグでは移動しないこと。
+4. 回帰: `T116`（V/E/R 分離）/ `T141` との右クリック排他が正しいこと。`tsc --noEmit`。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
