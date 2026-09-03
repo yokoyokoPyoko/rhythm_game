@@ -757,9 +757,80 @@ export default function WavePreview({
   }
 
   const handleDoubleClick = (e: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (editMode !== 'ring') return
-    const hit = nearestRingIndex(e.clientX)
-    if (hit >= 0) onDeleteRing?.(hit)
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+
+    if (editMode === 'ring') {
+      const hit = nearestRingIndex(e.clientX)
+      if (hit >= 0) onDeleteRing?.(hit)
+      return
+    }
+
+    if (editMode === 'vertex' && onSegmentsChange) {
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      const beatAdd = quantizeBeat(xToBeatLocal(x, rect.width), safeSnap)
+      const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+      const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+      const pts = engine.getPoints()
+
+      let k = -1
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (beatAdd > pts[i].beat + 1e-6 && beatAdd < pts[i + 1].beat - 1e-6) {
+          k = i
+          break
+        }
+      }
+      if (k < 0 || k >= segments.length) return
+
+      const fieldH = rect.height - RULER_H
+      const yRaw = ((y - RULER_H) / fieldH - 0.5) * 2
+      const yAdd = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + yRaw * TW_AMP))
+
+      const yPrev = pts[k].y
+      const yNext = pts[k + 1].y
+      const perBeatA = 2 * TW_AMP * timeline.amplitudeAt(pts[k].beat)
+      const perBeatB = 2 * TW_AMP * timeline.amplitudeAt(beatAdd)
+
+      const dA = yAdd - yPrev
+      const beatsA = Math.max(safeSnap, quantizeBeat(Math.abs(dA) / perBeatA, safeSnap))
+      const dirA = Math.abs(dA) < 0.5 ? ('stay' as const) : dA < 0 ? ('up' as const) : ('down' as const)
+
+      const dB = yNext - yAdd
+      const beatsB = Math.max(safeSnap, quantizeBeat(Math.abs(dB) / perBeatB, safeSnap))
+      const dirB = Math.abs(dB) < 0.5 ? ('stay' as const) : dB < 0 ? ('up' as const) : ('down' as const)
+
+      const newSegments = [...segments]
+      newSegments.splice(k, 1, { direction: dirA, beats: beatsA }, { direction: dirB, beats: beatsB })
+      onSegmentsChange(newSegments)
+    }
+  }
+
+  const handleContextMenu = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    if (editMode !== 'vertex' || !onSegmentsChange) return
+
+    const vi = nearestVertexIndex(e.clientX, e.clientY)
+    if (vi <= 0) return
+
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+    const pts = engine.getPoints()
+
+    if (vi >= pts.length - 1) return
+
+    const yPrev = pts[vi - 1].y
+    const yNext = pts[vi + 1].y
+    const prevBeat = pts[vi - 1].beat
+    const perBeat = 2 * TW_AMP * timeline.amplitudeAt(prevBeat)
+    const d = yNext - yPrev
+    const beats = Math.max(safeSnap, quantizeBeat(Math.abs(d) / perBeat, safeSnap))
+    const dir = Math.abs(d) < 0.5 ? ('stay' as const) : d < 0 ? ('up' as const) : ('down' as const)
+
+    const newSegments = [...segments]
+    newSegments.splice(vi - 1, 2, { direction: dir, beats })
+    onSegmentsChange(newSegments)
   }
 
   const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
@@ -815,11 +886,12 @@ export default function WavePreview({
         data-testid="wave-preview-canvas"
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={handleContextMenu}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
-        {editMode === 'vertex' && '頂点モード: 頂点をドラッグで位置・高さを微調整。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'vertex' && '頂点モード: ダブルクリックで追加、右クリックで削除、ドラッグで微調整。空白ドラッグでパン、ホイールでズーム'}
         {editMode === 'edge' && '辺モード: 辺をドラッグで左右上下に移動・選択。空白ドラッグでパン、ホイールでズーム'}
         {editMode === 'ring' && 'リングモード: クリックで追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム'}
       </p>

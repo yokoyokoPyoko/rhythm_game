@@ -858,9 +858,18 @@
       "finished": 1788406611.3884478
     },
     "T141": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1788406611.3898358
+      "started": 1788406611.3898358,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f9aa00a85ffeSGfB0cBil5cDnI",
+        "coder": "ses_f9a9e2b88ffeUKhuACBLhOJUpI",
+        "postmortem": "ses_f9aa1e4acffeFqRDA7JUlKJokH"
+      },
+      "gate_b_golden": false,
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1788407175.9985254
     }
   },
   "consecutive_no_action": 0
