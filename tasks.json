@@ -803,5 +803,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T146",
+    "desc": "フォーカス時スクロール除去（ハイライトのみ）。要求: フォーカスするときにスクロールする機能を除去し、青くハイライトするのみにする。案A（focus() 自体を削除）を採用。現状: src/screens/EditorScreen.tsx:799-822 の handleSelectRing / handleSelectSegment は、WavePreview 上の頂点/リング選択時に右ペインの該当 li（data-focus-id=\"ring-${index}\" / \"segment-${index}\"）へ el.focus() + el.scrollIntoView({block:'nearest', behavior:'smooth'}) を実行する。focus() は :focus-visible の青輪郭とキーボードフォーカス移動のためだが、選択ハイライト本体は ring-list-item-selected / segment-list-item-selected（border-color: var(--accent)）のクラスで既に付くため focus() は必須ではない。scrollIntoView が右ペインをガタッとスクロールさせるのが問題。修正: src/screens/EditorScreen.tsx のみ。handleSelectRing と handleSelectSegment の requestAnimationFrame 内の el.focus() と el.scrollIntoView(...) の両方を削除。setSelectedRing/Segment と setRing/SegmentDetailsOpen(true) によるクラスベースの青ハイライトのみを残す。requestAnimationFrame 自体は details の open 反映待ちのため維持するが、中身は空（または setSelected* のみ）に近い形に。focus({preventScroll:true}) は使わない（案A）。対象ファイル: src/screens/EditorScreen.tsx:804-820 の2箇所のみ。WavePreview.tsx / SegmentEditor.tsx / index.css は変更なし。完了条件: (1) WavePreview 上のリング/頂点をクリックしても右ペインやページが一切スクロールしないこと (2) 該当 li が *-selected クラスで青くハイライトされること（focus() 無しでも視認できる）(3) tsc --noEmit。",
+    "depends_on": [
+      "T145"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
