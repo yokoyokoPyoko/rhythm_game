@@ -939,7 +939,7 @@
     },
     "T146": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788433217.1608994,
       "cycles": 1,
       "sessions": {
@@ -948,9 +948,15 @@
         "postmortem": "ses_f991131eeffeIhiNNy135zE5rs",
         "reviewer": "ses_f99092df2ffedwmZs8UiMTKmdX"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "qa",
-      "last_postmortem_at": 1788433725.3301213
+      "last_postmortem_at": 1788433725.3301213,
+      "finished": 1788433863.2208402
+    },
+    "T147": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788435584.7591872
     }
   },
   "consecutive_no_action": 0

@@ -1521,6 +1521,36 @@ const minorStep =
 
 ---
 
+### [T147] 頂点/辺ドラッグの直感性と影響範囲最小化のバグ修正
+
+**バグ**: T139（頂点自由移動）と T140（辺ドラッグ）で、**直感的な左右上下移動ができず、影響範囲も最小（2/3 セグメント）になっていない**。頂点ドラッグでは `segFor` の `atTop/atBottom/Bt` 分岐が非対称でマウス Y と表示 Y が食い違い、辺ドラッグでは `beatsI = dx vs dy/pp` の大小分岐で斜めドラッグ時に閾値が不安定で辺長が保たれない。T131 の時変 `amp` と T128 の `dY` クランプを考慮していないため `candidateEngine.waveYAt` と保存 `beats` が不一致になるケースがある。
+
+**修正方針**: `src/screens/editor/WavePreview.tsx` の `onMove` のみ。
+- **頂点**: `beat' = quantize(xToBeat, safeSnap)` を `prevBeat+safeSnap … nextBeat-safeSnap` で clamp。`y' = clamp(mapYInverse(mouseY), fieldH)` を目標 Y とし、`beats_{i-1}' = quantize(|y' - yPrev|/perBeat(prevBeat), safeSnap)`, `beats_i' = quantize(|yNext - y'|/perBeat(beat'), safeSnap)` に統一。`perBeat = 2*TW_AMP*amplitudeAt(beat)` で個別算出。`dir = |d|<0.5 ? stay : d<0 ? up : down` に簡素化し、`candidateEngine = new WaveEngine(candidateSegs, timeline, ...)` で `waveYAt(beat')` を読み戻してマウス Y との誤差を `±0.5*perBeat*safeSnap` 以内に収める。端点は 1 セグメントのみ調整。
+- **辺**: `dxBeat = quantize(beat - startBeat, safeSnap)`, `dy = clamp(newY - startY, fieldH)` を分離。`beat_i' = beat_i + dxBeat`, `beat_{i+1}' = beat_{i+1}+dxBeat`, `y_i' = y_i+dy`, `y_{i+1}' = y_{i+1}+dy` を `clamp` し、3 セグメント（`i-1, i, i+1`）を `segmentFor(fromBeat,fromY,toY)` で統一再計算。`seg_i` の `beats` は `max(quantize(|dxBeat|), quantize(|yI1-yI|/perBeat(beat_i')))` で横/縦の優先分岐を廃止し常時 Y 差分基準で決定。`edgeDragRef` に `startY` を追加し `panRef` と排他。
+
+**完了条件**:
+1. Vertex/Edge を複雑な `amp`（0.7/1.3/2.7）と端数拍（0.37/1.23）でドラッグし、マウス追従と `waveYAt` 表示が一致し、後続 beat が `dx` だけずれる以外は不変（2/3 セグメントのみ）。
+2. 全 `beats` が `safeSnap` 整数倍、`getPoints().length === segments.length+1` 維持。
+3. `tsc --noEmit`。
+
+---
+
+### [T148] 頂点/辺削除時の周辺変化最小化
+
+**バグ**: T141（頂点削除）で `beats_merged = |yNext - yPrev|/perBeat` は Y 差分から逆算するため元の合計 `beats_{i-1}+beats_i` と一致せず、後続全体が `Δ = beats_merged - total` だけシフト。辺削除（未実装）も同様。
+
+**修正方針**: `WavePreview.tsx: handleContextMenu` のみ。
+- **頂点削除**（`vi`）: `totalBeats = segments[vi-1].beats + segments[vi].beats` を保存。`dir = |d|<0.5 ? stay : d<0 ? up : down`（`d = yNext - yPrev`）、`beats = quantizeBeat(totalBeats, safeSnap)`（**総拍数保存優先**）。後続ズレ `|Δ| < 0.5*safeSnap` のみ。表示 Y は `candidateEngine.waveYAt(prevBeat+beats)` で補正しマウス誤差を収める。端点は削除不可。
+- **辺削除**（`ei`）: 辺 `i` を削除 → 頂点 `i+1` を削除と等価。`beats_merged = quantize(segments[i].beats + segments[i+1].beats, safeSnap)` で 2→1 マージ。前後 1 本のみ影響。
+
+**完了条件**:
+1. 頂点/辺削除前後で `totalBeats` が `±0.5*safeSnap` 以内で不変、後続波形が横に大きく動かないこと。
+2. 削除で `getPoints().length` が `-1` のみ、追加→削除で round-trip しても総拍数が元に戻ること。
+3. 全 `beats` が `safeSnap` 整数倍、`tsc --noEmit`。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
