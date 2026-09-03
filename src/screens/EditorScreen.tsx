@@ -800,11 +800,8 @@ export default function EditorScreen() {
     setSelectedRing(index)
     if (index != null) {
       setRingDetailsOpen(true)
-      // focus corresponding list item after details expand
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-focus-id="ring-${index}"]`) as HTMLElement | null
-        el?.focus()
-        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        /* details open 差分反映待ち — ハイライトは ring-list-item-selected クラスで付与 */
       })
     }
   }, [])
@@ -814,9 +811,7 @@ export default function EditorScreen() {
     if (index != null) {
       setSegmentDetailsOpen(true)
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-focus-id="segment-${index}"]`) as HTMLElement | null
-        el?.focus()
-        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        /* details open 差分反映待ち — ハイライトは segment-list-item-selected クラスで付与 */
       })
     }
   }, [])
