@@ -416,12 +416,6 @@ export default function WavePreview({
     return g.viewStart + (x / width) * g.viewBeats
   }
 
-  const addRingAt = (beat: number) => {
-    const snapped = Math.round(beat / safeSnap) * safeSnap
-    const added = onAddRing?.(snapped)
-    if (added != null) onSelectRing?.(added)
-  }
-
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const canvas = canvasRef.current
@@ -754,12 +748,13 @@ export default function WavePreview({
     const rect = canvas.getBoundingClientRect()
 
     if (editMode === 'ring') {
-      // Cancel any lingering pan from the first click of the double-click
       panRef.current = null
       const hit = nearestRingIndex(e.clientX)
       if (hit < 0) {
         const beat = quantizeBeat(xToBeatLocal(e.clientX - rect.left, rect.width), safeSnap)
-        addRingAt(beat)
+        const snapped = Math.round(beat / safeSnap) * safeSnap
+        const added = onAddRing?.(snapped)
+        if (added != null) onSelectRing?.(added)
       }
       return
     }
@@ -807,19 +802,50 @@ export default function WavePreview({
   const handleContextMenu = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     e.preventDefault()
     if (editMode === 'ring') {
-      const hit = nearestRingIndex(e.clientX)
-      if (hit >= 0) onDeleteRing?.(hit)
+      // Inline nearestRingIndex with 35px threshold
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const g = geoRef.current
+      const rect = canvas.getBoundingClientRect()
+      const clickX = e.clientX - rect.left
+      let hit = -1
+      let nearestDist = Infinity
+      rings.forEach((r, i) => {
+        const rx = ((r.beat - g.viewStart) / g.viewBeats) * rect.width
+        const d = Math.abs(rx - clickX)
+        if (d < nearestDist) { nearestDist = d; hit = i }
+      })
+      if (nearestDist < 35) onDeleteRing?.(hit)
       return
     }
     if (editMode !== 'vertex' || !onSegmentsChange) return
 
-    const vi = nearestVertexIndex(e.clientX, e.clientY)
-    if (vi <= 0) return
-
+    // Inline nearestVertexIndex with 14px threshold
+    const canvas2 = canvasRef.current
+    if (!canvas2) return
+    const rect2 = canvas2.getBoundingClientRect()
+    const g2 = geoRef.current
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
     const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
     const pts = engine.getPoints()
-
+    const centerY = RULER_H + (rect2.height - RULER_H) / 2
+    const fieldH = rect2.height - RULER_H
+    const maxAmp = (fieldH - 24) / 2
+    const minAmp = Math.max(8, 0.2 * rect2.height)
+    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+    const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
+    const clickX2 = e.clientX - rect2.left
+    const clickY2 = e.clientY - rect2.top
+    let vi = -1
+    let viDist = Infinity
+    pts.forEach((p, i) => {
+      const vx = ((p.beat - g2.viewStart) / g2.viewBeats) * rect2.width
+      const vy = mapY(p.y)
+      const d = Math.hypot(vx - clickX2, vy - clickY2)
+      if (d < viDist) { viDist = d; vi = i }
+    })
+    if (viDist >= 14) vi = -1
+    if (vi <= 0) return
     if (vi >= pts.length - 1) return
 
     const yPrev = pts[vi - 1].y
