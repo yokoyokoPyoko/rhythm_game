@@ -1441,6 +1441,69 @@ CSS Transition のみ（ライブラリ不使用）:
 
 ---
 
+### [T143] メトロノームのオーディオオフセット反映撤廃（ルーラー/再生バー固定）
+
+**要求**: メトロノームがオーディオオフセット（`audioOffset`）も反映されてしまうのを撤廃し、再生バー（緑バー）・編集画面のルーラー（`WavePreview` の beat グリッド）に固定してほしい。
+
+**現状**: `EditorScreen.tsx: startMetronome` は `T137` で `leadMs = audioOffset`（`metronomeLeadRef.current = audioOffset`）を `nextBeatTime = startCtxTime + leadMs/1000 + (beatToMs(beatIdx)-fromMs)/1000` に焼き込み、`schedule()` 内でさらに `manualOffset` を加算することで `音楽② (=getLeadMs(audioOffset)/1000 + delta)` と一致させている。結果ルーラー（beat 目盛）とメトロクリックが `audioOffset` 分ズレる。
+
+**修正**: `src/screens/editor/WavePreview.tsx` ではなく `src/screens/EditorScreen.tsx` の `startMetronome` のみ。
+- `startMetronome(ctx, fromMs, startCtxTime, leadMs)` の `leadMs` 引数を削除し `startMetronome(ctx, fromMs, startCtxTime)` に。`nextBeatTime = startCtxTime + (beatToMs(beatIdx)-fromMs)/1000` に戻す（`T137` 前の純粋な ruler 基準、決定性の `startCtxTime` スナップショット化は維持）。`metronomeLeadRef` への `audioOffset` 代入と `while(nextBeatTime + manual/1000 < ctx.currentTime)` の `+manual` 補正を除去し `while(nextBeatTime < ctx.currentTime)` に。
+- `playFrom` 内の `startMetronome(ctx, fromMs, t0, audioOffset)` 呼び出しを `startMetronome(ctx, fromMs, t0)` に。`useEffect([isPlaying])` 経由の `startMetronome(ctx, startMsRef.current, startCtxTimeRef.current)` も同様に `leadMs` なしに。
+- `schedule()`（`src/audio/metronome.ts:65`）の `offsetSeconds()`（`manualOffset`）は残す。今回の要求は `audioOffset` の撤廃のみのため。完全固定（manual も含め）を求める場合は別タスクで分離。
+- `GameScreen.tsx` の `Metronome` クラスは元々 `ctx.currentTime` 起点で beat 0 から刻むため ruler 固定済み、変更なし。
+
+**完了条件**:
+1. `audioOffset` を `0 → 200ms` に変えて再生しても、メトロクリックの `when` が `startCtxTime + (beatToMs(B)-fromMs)/1000 + manualOffset/1000` のまま（`audioOffset` 加算なし）で、ルーラーの beat 目盛り（`beatToX`）と緑バー通過時刻と一致すること。
+2. 音楽可聴（`getLeadMs(audioOffset)/1000 + delta`）は従来通り `audioOffset` で遅延し、メトロと `audioOffset` 分ズレることが意図通りであること（テストでは音楽 when とメトロ when の差が `audioOffset` に一致することを検証）。
+3. 同じ `fromMs` からの再生でメトロ初回 `when` が `audioOffset` に依らず一定（`T137` の決定性維持）。
+4. `tsc --noEmit`。
+
+---
+
+### [T144] ルーラーを小節単位（0,1,2...）に変更
+
+**要求**: 現行ルーラーが `0,4,8...`（beat 番号）の表示を `0,1,2...`（小節番号 = beat/4）に変更。
+
+**現状**: `WavePreview.tsx:184-194` で `strong = b % 4 == 0` のときに `ctx.fillText(String(b), gx+4, 4)` で beat 番号を表示。`minorStep` は beat 単位でグリッド線を引くがラベルは 4 拍ごとのみ。
+
+**修正**: `src/screens/editor/WavePreview.tsx` のみ。
+- `if (strong)` ブロックのラベルを `String(Math.round(b / 4))` に変更。例 `b=0→"0"`, `b=4→"1"`, `b=8→"2"`。
+- 線自体は `strong` 判定 `b%4==0` を維持（4 拍ごとに太線）。`minorStep` による細かい beat 線はそのまま残すため、見た目は「小節ごとに太線＋小節番号、間は細い beat 線」になる。
+
+**完了条件**:
+1. `viewBeats=16` などの初期表示でルーラー上部に `0,1,2,3,4`（小節）が表示され、`4,8,12` が表示されないこと。
+2. `minorStep` の縦線（beat グリッド）は従来通り beat 単位で引かれ、小節太線と beat 細線が区別できること。
+3. `tsc --noEmit`。
+
+---
+
+### [T145] ルーラーの拡大率しきい値調整（細かい拍が見えるように）
+
+**要求**: 現行 `minorStep` の拡大率しきい値が広すぎてスペースが余り、細かい拍が見えない。しきい値を調整して拡大時に細かい拍が段階的に見えるようにする。
+
+**現状**: `WavePreview.tsx:177` `minorStep = viewBeats<=8 ? 0.5 : viewBeats<=32 ? 1 : 4` の 3 段階。`viewBeats=16`（デフォ）でも `1` 拍刻みしか出ず、`viewBeats=32` 以上で一気に `4` 拍（小節）刻みに飛ぶ。
+
+**修正**: `src/screens/editor/WavePreview.tsx` のみ。`minorStep` を 5 段階に細分化:
+
+```ts
+const minorStep =
+  viewBeats <= 4  ? 0.25 : // 1/16拍まで（強拡大）
+  viewBeats <= 8  ? 0.5  : // 1/8拍
+  viewBeats <= 16 ? 1    : // 1拍
+  viewBeats <= 64 ? 2    : // 2拍
+                     4;   // 4拍（小節）
+```
+
+- `viewBeats=16`（初期）で `1` 拍、`viewBeats=8` で `0.5` 拍、`viewBeats=4` で `0.25` 拍まで見える。`viewBeats=32` でも `2` 拍刻みで空白が詰まる。
+
+**完了条件**:
+1. `viewBeats=4,8,16,32,64,100` の各拡大率で `minorStep` が上記 `0.25/0.5/1/2/4` に一致すること（ユニットテストで検証）。
+2. ルーラーの小節ラベル（`T144` の `b/4`）は `strong` のときのみ表示されること（`minorStep` 変更でラベル密度が変わらない）。
+3. `tsc --noEmit`。
+
+---
+
 ## よくある迷い → デフォルト
 
 | 迷った場合 | デフォルト |
