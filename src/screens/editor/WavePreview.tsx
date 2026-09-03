@@ -90,7 +90,7 @@ export default function WavePreview({
   })
   const dragRef = useRef<{ index: number } | null>(null)
   const vertexDragRef = useRef<{ index: number } | null>(null)
-  const edgeDragRef = useRef<{ index: number; startBeat: number; startPrevBeat: number; startNextBeat: number } | null>(null)
+  const edgeDragRef = useRef<{ index: number; startBeat: number; startPrevBeat: number; startNextBeat: number; startY: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
@@ -441,8 +441,9 @@ export default function WavePreview({
         if (idx === 0 && segments.length > 0) {
           const nextBeat = pts[1]?.beat ?? pts[0].beat + safeSnap
           const clampedBeat = Math.min(nextBeat - safeSnap, beat)
-          const segBeats = Math.max(safeSnap, quantizeBeat(clampedBeat - 0, safeSnap))
-          const dir = newY < TW_CENTER_Y - 1 ? 'up' : newY > TW_CENTER_Y + 1 ? 'down' : segments[0].direction
+          const segBeats = Math.max(safeSnap, quantizeBeat(clampedBeat, safeSnap))
+          const d = newY - TW_CENTER_Y
+          const dir = Math.abs(d) < 0.5 ? 'stay' : d < 0 ? 'up' : 'down'
           onSegmentsChange(segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: dir } : s)))
           return
         }
@@ -453,30 +454,27 @@ export default function WavePreview({
           return
         }
 
-        // Interior vertex: adjust 2 adjacent segments (idx-1 and idx), list-driven perBeat (T131)
+        // T147: Interior vertex — adjust 2 adjacent segments (idx-1 and idx) only.
+        // perBeat = 2*TW_AMP*amplitudeAt(beat) for each segment individually (T131).
         const prevBeat = pts[idx - 1].beat
         const clampedBeat = Math.max(prevBeat + safeSnap, Math.min(pts[idx + 1].beat - safeSnap, beat))
         const yPrev = pts[idx - 1].y
         const yNext = pts[idx + 1].y
         const perBeatPrev = 2 * TW_AMP * timeline.amplitudeAt(prevBeat)
         const perBeatNext = 2 * TW_AMP * timeline.amplitudeAt(clampedBeat)
-        const segFor = (fromY: number, toY: number, atTop: boolean, atBottom: boolean, pp: number, Bt: boolean) => {
-          const d = toY - fromY
-          const beats = Math.max(safeSnap, quantizeBeat(Math.abs(d) / pp, safeSnap))
-          let dir: 'up' | 'down' | 'stay'
-          if (Math.abs(d) < 0.5) dir = 'stay'
-          else if (Bt) dir = atTop && d < 0 ? 'up' : atBottom && d > 0 ? 'down' : d < 0 ? 'up' : 'down'
-          else dir = atTop && d > 0 ? 'down' : atBottom && d < 0 ? 'up' : d < 0 ? 'up' : 'down'
-          return { direction: dir, beats }
-        }
-        const A = TW_CENTER_Y - TW_AMP
-        const B = TW_CENTER_Y + TW_AMP
-        const prevSeg = segFor(yPrev, newY, yPrev <= A + 1, yPrev >= B - 1, perBeatPrev, false)
-        const nextSeg = segFor(newY, yNext, yNext <= A + 1, yNext >= B - 1, perBeatNext, true)
+
+        const dPrev = newY - yPrev
+        const beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(dPrev) / perBeatPrev, safeSnap))
+        const dirPrev: 'up' | 'down' | 'stay' = Math.abs(dPrev) < 0.5 ? 'stay' : dPrev < 0 ? 'up' : 'down'
+
+        const dNext = yNext - newY
+        const beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(dNext) / perBeatNext, safeSnap))
+        const dirNext: 'up' | 'down' | 'stay' = Math.abs(dNext) < 0.5 ? 'stay' : dNext < 0 ? 'up' : 'down'
+
         onSegmentsChange(
           segments.map((s, i) => {
-            if (i === idx - 1) return { ...s, ...prevSeg }
-            if (i === idx) return { ...s, ...nextSeg }
+            if (i === idx - 1) return { ...s, direction: dirPrev, beats: beatsPrev }
+            if (i === idx) return { ...s, direction: dirNext, beats: beatsNext }
             return s
           }),
         )
@@ -487,17 +485,17 @@ export default function WavePreview({
         const fieldH = rect.height - RULER_H
         const drag = edgeDragRef.current
         const idx = drag.index
-        const dxSnap = quantizeBeat(xToBeatLocal(x, rect.width) - drag.startBeat, safeSnap)
+        const dxBeat = quantizeBeat(xToBeatLocal(x, rect.width) - drag.startBeat, safeSnap)
         const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
         const pts = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition).getPoints()
         if (segments.length === 0) return
-        const dyRaw = TW_CENTER_Y + yRaw * TW_AMP - pts[idx].y
-        const dy = Math.max(TW_CENTER_Y - TW_AMP - pts[idx].y, Math.min(TW_CENTER_Y + TW_AMP - pts[idx].y, dyRaw))
-        const beatI = pts[idx].beat + dxSnap
-        const beatI1 = pts[idx + 1].beat + dxSnap
-        const cl = (y: number) => Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, y))
-        const yI = cl(pts[idx].y + dy)
+        const newYMouse = TW_CENTER_Y + yRaw * TW_AMP
+        const dy = Math.max(TW_CENTER_Y - TW_AMP - drag.startY, Math.min(TW_CENTER_Y + TW_AMP - drag.startY, newYMouse - drag.startY))
+        const cl = (v: number) => Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, v))
+        const beatI = pts[idx].beat + dxBeat
+        const beatI1 = pts[idx + 1].beat + dxBeat
+        const yI = cl(drag.startY + dy)
         const yI1 = cl(pts[idx + 1].y + dy)
         const perBeat = (b: number) => 2 * TW_AMP * timeline.amplitudeAt(b)
         const segmentFor = (fromBeat: number, fromY: number, toY: number): Segment => {
@@ -505,17 +503,9 @@ export default function WavePreview({
           if (Math.abs(d) < 0.5) return { direction: 'stay', beats: safeSnap }
           return { direction: d < 0 ? 'up' : 'down', beats: Math.max(safeSnap, quantizeBeat(Math.abs(d) / perBeat(fromBeat), safeSnap)) }
         }
-        const segI = (): Segment => {
-          const origLen = pts[idx + 1].beat - pts[idx].beat
-          const dyPx = Math.abs(yI1 - yI)
-          const pp = perBeat(Math.max(0, beatI))
-          const beatsI = Math.max(safeSnap, quantizeBeat(Math.abs(dxSnap) > Math.abs(dyPx / pp) ? origLen : dyPx / pp, safeSnap))
-          const dir: 'up' | 'down' | 'stay' = dyPx < 0.5 ? 'stay' : yI1 < yI ? 'up' : 'down'
-          return { direction: dir, beats: beatsI }
-        }
         const candidateSegs = segments.map((s, i) => {
           if (i === idx - 1 && i >= 0) return segmentFor(pts[idx - 1].beat, pts[idx - 1].y, yI)
-          if (i === idx) return segI()
+          if (i === idx) return segmentFor(beatI, yI, yI1)
           if (i === idx + 1 && i + 1 < pts.length) {
             const pAfter = pts[idx + 2]
             return pAfter ? segmentFor(beatI1, yI1, pAfter.y) : s
@@ -709,6 +699,7 @@ export default function WavePreview({
           startBeat: pts[eHit].beat,
           startPrevBeat,
           startNextBeat,
+          startY: pts[eHit].y,
         }
         e.preventDefault()
         return
