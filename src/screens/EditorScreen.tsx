@@ -186,8 +186,6 @@ export default function EditorScreen() {
   const metronomeTimerRef = useRef<number | null>(null)
   const metronomeEnabledRef = useRef(true)
   const metronomeLeadRef = useRef(0)
-  const audioOffsetRef = useRef(audioOffset)
-  useEffect(() => { audioOffsetRef.current = audioOffset }, [audioOffset])
 
   const setPlaying = (v: boolean) => {
     isPlayingRef.current = v
