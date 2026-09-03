@@ -185,7 +185,6 @@ export default function EditorScreen() {
   const isPlayingRef = useRef(false)
   const metronomeTimerRef = useRef<number | null>(null)
   const metronomeEnabledRef = useRef(true)
-  const metronomeLeadRef = useRef(0)
 
   const setPlaying = (v: boolean) => {
     isPlayingRef.current = v
@@ -234,7 +233,7 @@ export default function EditorScreen() {
     }
   }, [])
 
-  const startMetronome = useCallback((ctx: AudioContext, fromMs: number, startCtxTime: number, leadMs: number) => {
+  const startMetronome = useCallback((ctx: AudioContext, fromMs: number, startCtxTime: number) => {
     stopMetronome()
     if (!metronomeEnabledRef.current) return
     ensureGainNodes(ctx)
@@ -242,15 +241,14 @@ export default function EditorScreen() {
     const lookaheadSec = LOOKAHEAD_MS / 1000
     let beatIdx = Math.ceil(timeline.msToBeat(fromMs))
     if (!Number.isFinite(beatIdx) || beatIdx < 0) beatIdx = 0
-    // T137: Deterministic grid anchored to startCtxTime (the snapshot taken when
+    // T143: Deterministic grid anchored to startCtxTime (the snapshot taken when
     // playback began), not the live ctx.currentTime (which has frame jitter).
-    // schedule() internally adds offsetSeconds() (manualOffset/1000), so the
-    // only lead that must be baked into the grid here is the audio offset to
-    // line the metronome up with the audible music: music② == metronome⑤.
-    let nextBeatTime = startCtxTime + leadMs / 1000 + (timeline.beatToMs(beatIdx) - fromMs) / 1000
+    // audioOffset is NOT baked in so the clicks stay fixed to the ruler/green bar.
+    // schedule() internally adds offsetSeconds() (manualOffset/1000).
+    let nextBeatTime = startCtxTime + (timeline.beatToMs(beatIdx) - fromMs) / 1000
     // Advance until the first click is still in the future after schedule() adds
     // manualOffset, so the first click is never clamped to "now" (deterministic).
-    while (nextBeatTime + getManualOffsetMs() / 1000 < ctx.currentTime) {
+    while (nextBeatTime < ctx.currentTime) {
       nextBeatTime += timeline.beatMsAt(beatIdx) / 1000
       beatIdx++
     }
@@ -292,7 +290,7 @@ export default function EditorScreen() {
       // using the values captured at playFrom time (never the stale positionRef).
       try {
         const ctx = AudioManager.getInstance().ctx
-        startMetronome(ctx, startMsRef.current, startCtxTimeRef.current, metronomeLeadRef.current)
+        startMetronome(ctx, startMsRef.current, startCtxTimeRef.current)
       } catch { /* ctx not ready */ }
     } else if (!isPlaying || !metronomeEnabled) {
       stopMetronome()
@@ -539,16 +537,14 @@ export default function EditorScreen() {
     const t0 = ctx.currentTime
     startCtxTimeRef.current = t0
     startMsRef.current = fromMs
-    // T137: start the metronome deterministically from this playback's own
-    // snapshot (t0, fromMs), never a stale positionRef. T138 (案A): the green
-    // bar uses raw (判定 line) while the metronome stays anchored to the audible
-    // music (② = raw - leadMs). schedule() adds manualOffset, so only the chart
-    // audioOffset is baked here to line music② and metronome⑤ up. The green bar
-    // vs metronome leadMs divergence is intentional and deterministic (per-play fixed).
-    metronomeLeadRef.current = audioOffset
+    // T143: start the metronome deterministically from this playback's own
+    // snapshot (t0, fromMs), never a stale positionRef. The metronome is NOT
+    // given audioOffset so clicks stay fixed to the ruler/green bar. The music
+    // (getLeadMs(audioOffset)/1000 + delta) is still delayed by audioOffset, so
+    // the metronome is intentionally audioOffset apart from the audible music.
     if (metronomeEnabledRef.current) {
       try {
-        startMetronome(ctx, fromMs, t0, audioOffset)
+        startMetronome(ctx, fromMs, t0)
       } catch { /* ignore */ }
     }
     setPlaying(true)
