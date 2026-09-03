@@ -542,7 +542,7 @@ export default function WavePreview({
         })
       }
     }
-    const onUp = (e: MouseEvent) => {
+    const onUp = (_e: MouseEvent) => {
       if (vertexDragRef.current) {
         vertexDragRef.current = null
         return
