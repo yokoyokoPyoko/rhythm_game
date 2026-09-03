@@ -1,728 +1,399 @@
 /**
- * T143 — メトロノームのオーディオオフセット反映撤廃（ルーラー/再生バー固定）
- * Vitest node environment – pure computed values / engine math + file contracts
+ * T144 — ルーラーを小節単位（0,1,2...）に変更
+ * Vitest node environment – pure computed values + file contract
  * Strict 3-step state-transition assertions. Must FAIL before fix (Red) and PASS after (Green).
- * Spec: startMetronome leadMs撤廃 → ruler/greenBar固定. musicとズレるのは意図通り(audioOffset分).
+ * Spec: WavePreview.tsx: strong = b%4==0 のとき ctx.fillText(String(b)) を String(Math.round(b/4)) に変更。
+ * Spec: 線自体の strong 判定維持、minorStep 細線は beat 単位のまま。
  */
-if (typeof (globalThis as any).localStorage === 'undefined') {
-  const store = new Map<string, string>();
-  (globalThis as any).localStorage = {
-    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-    setItem: (k: string, v: string) => { store.set(k, String(v)); },
-    removeItem: (k: string) => { store.delete(k); },
-    clear: () => store.clear(),
-  } as any;
-}
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_CENTER_Y, TW_AMP } from '../src/game/waveEngine';
-import { Cursor } from '../src/game/cursor';
-import { quantizeBeat, segmentize } from '../src/chart/quantize';
-import { getManualOffsetMs, setManualOffset, getLeadMs, offsetSeconds } from '../src/audio/clock';
-import { schedule } from '../src/audio/metronome';
+import { quantizeBeat } from '../src/chart/quantize';
 
 vi.useFakeTimers();
 
 // ---------------------------------------------------------------------------
-// helpers
+// helpers – file read & pure ruler simulation
 // ---------------------------------------------------------------------------
+
 function readFile(rel: string): string {
   return fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf-8');
 }
 
-function createMockAudioContext(currentTime = 10.0) {
-  const destination = { __isDestination: true } as unknown as AudioNode;
-  const ctx: any = {
-    currentTime,
-    destination,
-    createOscillator() {
-      return { type: 'sine', frequency: { value: 0 }, connect: vi.fn(), start: vi.fn(), stop: vi.fn() } as any;
-    },
-    createGain() {
-      const g: any = { gain: { value: 1, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }, connect: vi.fn(), _connectedTo: null };
-      return g;
-    },
-    createBufferSource() {
-      const src: any = {
-        buffer: null,
-        connect: vi.fn(),
-        start: vi.fn((when: number, offset?: number) => { src._startWhen = when; src._startOffset = offset; }),
-        stop: vi.fn(), disconnect: vi.fn(), _startWhen: null, _startOffset: null,
-      };
-      ctx._lastSource = src;
-      return src;
-    },
-    _lastSource: null,
-  };
-  return ctx;
-}
-
-// T143 fixed helpers — ruler-anchored, no audioOffset in metronome grid
-function computeT143NextBeatTime(timeline: BpmTimeline, fromMs: number, startCtxTime: number, ctxNow: number) {
-  let beatIdx = Math.ceil(timeline.msToBeat(fromMs));
-  if (!Number.isFinite(beatIdx) || beatIdx < 0) beatIdx = 0;
-  let nextBeatTime = startCtxTime + (timeline.beatToMs(beatIdx) - fromMs) / 1000;
-  while (nextBeatTime < ctxNow) {
-    nextBeatTime += timeline.beatMsAt(beatIdx) / 1000;
-    beatIdx++;
+/**
+ * Mirrors WavePreview.tsx ruler loop after fix.
+ * Returns labels that would be drawn as fillText.
+ */
+function computeFixedRulerLabels(viewStart: number, viewBeats: number, minorStep: number): { beat: number; label: string | null; strong: boolean }[] {
+  const firstMinor = Math.ceil(viewStart / minorStep - 1e-9) * minorStep;
+  const out: { beat: number; label: string | null; strong: boolean }[] = [];
+  for (let i = 0; ; i++) {
+    const b = Number((firstMinor + i * minorStep).toFixed(4));
+    if (b > viewStart + viewBeats + 1e-9) break;
+    const strong = Math.abs(b % 4) < 1e-6;
+    const label = strong ? String(Math.round(b / 4)) : null;
+    out.push({ beat: b, label, strong });
   }
-  return { nextBeatTime, beatIdx };
+  return out;
 }
 
-// Old buggy T137 helper (leadMs = audioOffset baked in) for contrast
-function computeT137NextBeatTime(timeline: BpmTimeline, fromMs: number, startCtxTime: number, leadMs: number, ctxNow: number, manualOffsetMsVal: number) {
-  let beatIdx = Math.ceil(timeline.msToBeat(fromMs));
-  if (!Number.isFinite(beatIdx) || beatIdx < 0) beatIdx = 0;
-  let nextBeatTime = startCtxTime + leadMs / 1000 + (timeline.beatToMs(beatIdx) - fromMs) / 1000;
-  while (nextBeatTime + manualOffsetMsVal / 1000 < ctxNow) {
-    nextBeatTime += timeline.beatMsAt(beatIdx) / 1000;
-    beatIdx++;
+/** Buggy (pre-T144) ruler: label = String(b) */
+function computeBuggyRulerLabels(viewStart: number, viewBeats: number, minorStep: number): { beat: number; label: string | null; strong: boolean }[] {
+  const firstMinor = Math.ceil(viewStart / minorStep - 1e-9) * minorStep;
+  const out: { beat: number; label: string | null; strong: boolean }[] = [];
+  for (let i = 0; ; i++) {
+    const b = Number((firstMinor + i * minorStep).toFixed(4));
+    if (b > viewStart + viewBeats + 1e-9) break;
+    const strong = Math.abs(b % 4) < 1e-6;
+    const label = strong ? String(b) : null;
+    out.push({ beat: b, label, strong });
   }
-  return { nextBeatTime, beatIdx };
+  return out;
 }
 
-function computeMetronomeAudibleT143(timeline: BpmTimeline, fromMs: number, startCtxTime: number, targetBeat: number, manualOffsetMsVal: number): number {
-  const ctxNow = startCtxTime; // first advancement check uses ctxNow ~ startCtxTime at start
-  const { nextBeatTime: firstNext, beatIdx: firstIdx } = computeT143NextBeatTime(timeline, fromMs, startCtxTime, ctxNow);
-  let nt = firstNext;
-  let idx = firstIdx;
-  while (idx < targetBeat) {
-    nt += timeline.beatMsAt(idx) / 1000;
-    idx++;
-  }
-  return nt + manualOffsetMsVal / 1000; // schedule adds manual only
-}
-
-function computeMusicAudible(startCtxTime: number, fromMs: number, timeline: BpmTimeline, targetBeat: number, audioOffset: number, manualOffsetMsVal: number): number {
-  const lead = audioOffset + manualOffsetMsVal; // getLeadMs
-  return startCtxTime + lead / 1000 + (timeline.beatToMs(targetBeat) - fromMs) / 1000;
-}
-
-function computeGreenBarTime(startCtxTime: number, fromMs: number, timeline: BpmTimeline, targetBeat: number): number {
-  // raw green bar (T138案A): pos = startMs + (ctx - startCtx)*1000 ; beat hit when pos = beatToMs(B)
-  // So ctx when green hits B: startCtx + (beatToMs(B)-fromMs)/1000
-  return startCtxTime + (timeline.beatToMs(targetBeat) - fromMs) / 1000;
+function minorStepFor(viewBeats: number): number {
+  // Mirrors current WavePreview.tsx line: viewBeats <= 8 ? 0.5 : viewBeats <= 32 ? 1 : 4
+  return viewBeats <= 8 ? 0.5 : viewBeats <= 32 ? 1 : 4;
 }
 
 // ---------------------------------------------------------------------------
-// T143-1: File contract — startMetronome signature & leadMs撤廃
+// T144-1: File contract – label must be String(Math.round(b / 4))
 // ---------------------------------------------------------------------------
-describe('T143-1: File contract startMetronome ruler固定（leadMs撤廃）のシグネチャと式', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 capture initial file state before → Step2 inspect startMetronome declaration → Step3 3-arg signature (ctx, fromMs, startCtxTime) and no leadMs', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    // Must be exactly 3 args via useCallback, no leadMs
-    expect(src).toMatch(/startMetronome\s*=\s*useCallback\s*\(\s*\(\s*ctx\s*:\s*AudioContext\s*,\s*fromMs\s*:\s*number\s*,\s*startCtxTime\s*:\s*number\s*\)/);
-    // Must NOT be 4-arg leadMs version
-    expect(src).not.toMatch(/startMetronome\s*=\s*useCallback\s*\(\s*\(\s*ctx\s*:\s*AudioContext\s*,\s*fromMs\s*:\s*number\s*,\s*startCtxTime\s*:\s*number\s*,\s*leadMs\s*:\s*number\s*\)/);
+describe('T144-1: File contract — WavePreview.tsx ruler label changed to measure units', () => {
+  it('Step1 capture initial file state before → Step2 inspect ruler label line → Step3 fillText uses String(Math.round(b / 4))', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // Expected fixed pattern: String(Math.round(b / 4))
+    expect(src).toMatch(/ctx\.fillText\(\s*String\(\s*Math\.round\(\s*b\s*\/\s*4\s*\)\s*\)\s*,\s*gx\s*\+\s*4\s*,\s*4\s*\)/);
   });
 
-  it('Step1 capture old leadMs baked pattern before → Step2 verify nextBeatTime is ruler-anchored → Step3 anchor = startCtxTime + (beatToMs - fromMs)/1000 without leadMs', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    const startIdx = src.indexOf('const startMetronome');
-    expect(startIdx).toBeGreaterThan(-1);
-    const slice = src.slice(startIdx, startIdx + 2200);
-    expect(slice).toMatch(/let\s+nextBeatTime\s*=\s*startCtxTime\s*\+\s*\(timeline\.beatToMs\(beatIdx\)\s*-\s*fromMs\)\s*\/\s*1000/);
-    // Must NOT contain leadMs/1000 in init
-    expect(slice).not.toMatch(/startCtxTime\s*\+\s*leadMs\s*\/\s*1000/);
-    expect(slice).not.toContain('leadMs / 1000');
-    // Should have comment about ruler/green bar
-    expect(slice).toMatch(/ruler|green bar|audioOffset is NOT/i);
+  it('Step1 capture initial label pattern before → Step2 verify no longer String(b) at ruler → Step3 old buggy String(b) not present in strong block', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // Find the strong block slice to avoid false positives elsewhere (e.g. START label)
+    const rulerIdx = src.indexOf('// Beat ruler');
+    expect(rulerIdx).toBeGreaterThan(-1);
+    const slice = src.slice(rulerIdx, rulerIdx + 2500);
+    // The strong block should NOT contain the buggy single-arg String(b) as fillText arg
+    // (it must contain Math.round(b / 4) instead). Detect buggy pattern and fail if found.
+    // We check that the slice contains the fixed form and lacks the buggy exact form.
+    expect(slice).toContain('Math.round(b / 4)');
+    // The buggy line would be exactly `ctx.fillText(String(b),` inside the if(strong) block
+    // After fix, that exact token should not remain for ruler labels.
+    // Use a negative check that the ruler segment does not use bare String(b) for grid labels.
+    // We allow other String() uses elsewhere, but within the ruler strong block it must be the fixed form.
+    const buggyInStrong = /if\s*\(strong\)\s*\{\s*[^}]*ctx\.fillText\(\s*String\(\s*b\s*\)\s*,/.test(slice);
+    expect(buggyInStrong).toBe(false);
   });
 
-  it('Step1 capture metronomeLeadRef existence before → Step2 check file lacks it → Step3 0 occurrences (完全撤廃)', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).not.toContain('metronomeLeadRef');
-    const count = (src.match(/metronomeLeadRef/g) || []).length;
-    expect(count).toBe(0);
+  it('Step1 capture strong determination before → Step2 verify strong logic unchanged → Step3 strong = b%4==0 maintained (Math.abs(b % 4) < 1e-6)', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    const rulerIdx = src.indexOf('// Beat ruler');
+    const slice = src.slice(rulerIdx, rulerIdx + 2500);
+    expect(slice).toMatch(/const\s+strong\s*=\s*Math\.abs\(\s*b\s*%\s*4\s*\)\s*<\s*1e-6/);
+    // Ensure the fixed file still references 4 as measure length
+    expect(slice).toContain('% 4');
   });
 
-  it('Step1 capture while clamp manual before (T137) → Step2 verify new while is pure ruler → Step3 while(nextBeatTime < ctx.currentTime) without +manual', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    const startIdx = src.indexOf('const startMetronome');
-    const slice = src.slice(startIdx, startIdx + 2200);
-    expect(slice).toMatch(/while\s*\(\s*nextBeatTime\s*<\s*ctx\.currentTime\s*\)/);
-    expect(slice).not.toMatch(/while\s*\(\s*nextBeatTime\s*\+\s*getManualOffsetMs\(\)\s*\/\s*1000\s*<\s*ctx\.currentTime/);
-    // Ensure the while body still advances both
-    expect(slice).toMatch(/nextBeatTime\s*\+=\s*timeline\.beatMsAt\(beatIdx\)\s*\/\s*1000/);
-    expect(slice).toMatch(/beatIdx\+\+/);
+  it('Step1 capture minorStep line before → Step2 inspect beats-per-grid line → Step3 minorStep remains beat-unit (strong 分離维持)', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toMatch(/const\s+minorStep\s*=\s*viewBeats\s*<=\s*8\s*\?\s*0\.5\s*:\s*viewBeats\s*<=\s*32\s*\?\s*1\s*:\s*4/);
   });
 
-  it('Step1 capture playFrom call site before (4arg) → Step2 inspect playFrom → Step3 call is startMetronome(ctx, fromMs, t0) 3-arg', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    const playFromIdx = src.indexOf('const playFrom');
-    expect(playFromIdx).toBeGreaterThan(-1);
-    const slice = src.slice(playFromIdx, playFromIdx + 4000);
-    expect(slice).toContain('const t0 = ctx.currentTime');
-    expect(slice).toMatch(/startMetronome\s*\(\s*ctx\s*,\s*fromMs\s*,\s*t0\s*\)/);
-    expect(slice).not.toMatch(/startMetronome\s*\(\s*ctx\s*,\s*fromMs\s*,\s*t0\s*,\s*audioOffset/);
-  });
-
-  it('Step1 capture isPlaying effect call site before (4arg with leadRef) → Step2 inspect effect → Step3 call is startMetronome(ctx, startMsRef.current, startCtxTimeRef.current) 3-arg', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    // Find useEffect that restarts metronome from snapshot
-    expect(src).toMatch(/startMetronome\s*\(\s*ctx\s*,\s*startMsRef\.current\s*,\s*startCtxTimeRef\.current\s*\)/);
-    expect(src).not.toMatch(/startMetronome\s*\(\s*ctx\s*,\s*startMsRef\.current\s*,\s*startCtxTimeRef\.current\s*,\s*metronomeLeadRef/);
-    expect(src).not.toContain('metronomeLeadRef.current');
-  });
-
-  it('Step1 capture schedule still needs manual → Step2 verify metronome.ts unchanged → Step3 contains offsetSeconds and clamp', () => {
-    const metroSrc = readFile('src/audio/metronome.ts');
-    expect(metroSrc).toContain("import { offsetSeconds } from './clock'");
-    expect(metroSrc).toMatch(/export function schedule\(/);
-    expect(metroSrc).toMatch(/Math\.max\(audioCtx\.currentTime,\s*nextBeatTime \+ offsetSeconds\(\)\)/);
-    // Must still connect to out ?? destination (editor gain path)
-    expect(metroSrc).toMatch(/gain\.connect\(out \?\? audioCtx\.destination\)/);
+  it('Step1 capture only WavePreview.tsx was touched before → Step2 scan other task files → Step3 no other file independently writes ruler labels', () => {
+    // Guard: fix must be localized to WavePreview.tsx only per spec
+    const editorSrc = readFile('src/screens/EditorScreen.tsx');
+    // EditorScreen should not contain ruler fillText logic
+    expect(editorSrc).not.toMatch(/ctx\.fillText\(\s*String\(\s*Math\.round\(b \/ 4\)\s*\)/);
+    expect(editorSrc).not.toMatch(/const\s+minorStep/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T143-2: 完了条件1 — audioOffset 0→200でも metronome when は startCtx + delta + manual のまま
+// T144-2: 完了条件1 — viewBeats=16 初期表示で 0,1,2,3,4（小節）が表示され 4,8,12 が非表示
 // ---------------------------------------------------------------------------
-describe('T143-2: 完了条件1 audioOffset 0→200でも metronome when は startCtx + delta + manual で不変（ruler固定）', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
+describe('T144-2: 完了条件1 viewBeats=16 でルーラー上部が 0,1,2,3,4（小節）になる', () => {
+  it('Step1 capture buggy labels before with viewBeats=16 viewStart=0 → Step2 compute fixed labels → Step3 fixed=0..4 and buggy=0,4,8... diverges', () => {
+    const viewStart = 0;
+    const viewBeats = 16;
+    const step = minorStepFor(viewBeats);
+    expect(step).toBe(1); // pre-condition: T144 minorStep unchanged (1 at 16)
 
-  it('Step1 capture audioOffset 0 metronome when before → Step2 set audioOffset 200 recompute → Step3 when差 0 (audioOffset加算なし) かつ ruler=beatToX 一致', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 0;
-    const startCtx = 10.0;
-    const manual = 0;
-    const targetBeat = 4;
-    // Step1
-    const metro0 = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    const green0 = computeGreenBarTime(startCtx, fromMs, tl, targetBeat);
-    expect(metro0).toBeCloseTo(green0 + manual / 1000, 6);
-    // Step2 apply audioOffset 200 — metronome must NOT shift
-    const audioOffset = 200;
-    const metro200 = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    // T143: same regardless audioOffset
-    expect(metro200).toBeCloseTo(metro0, 6);
-    expect(Math.abs(metro200 - metro0)).toBeLessThan(0.0005);
-    // Music would shift
-    const music0 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 0, manual);
-    const music200 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 200, manual);
-    expect(music200 - music0).toBeCloseTo(0.2, 6);
-    expect(metro200).not.toBeCloseTo(music200, 3);
-    // Ruler consistency: metro == green + manual
-    const green200 = computeGreenBarTime(startCtx, fromMs, tl, targetBeat);
-    expect(metro200).toBeCloseTo(green200 + manual / 1000, 6);
-    expect(green0).toBeCloseTo(green200, 6);
-  });
+    // Step1: old buggy would produce 0,4,8,12,16
+    const buggy = computeBuggyRulerLabels(viewStart, viewBeats, step)
+      .filter(r => r.label !== null)
+      .map(r => r.label);
+    expect(buggy).toEqual(['0', '4', '8', '12', '16']);
 
-  it('Step1 capture off-grid fromMs 615 manual 80 → Step2 audioOffset sweep 0→200→ Step3 metronome不変 & green一致', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    setManualOffset(80);
-    const manual = getManualOffsetMs();
-    const fromMs = 615; // off-grid (1.23 beats)
-    const startCtx = 8.0;
-    const targetBeat = Math.ceil(tl.msToBeat(fromMs)) + 1;
-    const metro0 = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    const green = computeGreenBarTime(startCtx, fromMs, tl, targetBeat);
-    expect(metro0).toBeCloseTo(green + manual / 1000, 4);
-    // Same with hypothetical audioOffset 200, metro must stay same
-    const metro200 = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    expect(metro200).toBeCloseTo(metro0, 6);
-    // Verify buggy T137 would have shifted by 200ms
-    const buggy0 = computeT137NextBeatTime(tl, fromMs, startCtx, 0, startCtx, manual);
-    const buggy200 = computeT137NextBeatTime(tl, fromMs, startCtx, 200, startCtx, manual);
-    expect(buggy200.nextBeatTime - buggy0.nextBeatTime).toBeCloseTo(0.2, 6);
-    expect(metro0).not.toBeCloseTo(buggy200.nextBeatTime + manual / 1000, 3);
-    setManualOffset(0);
-  });
+    // Step2-3: fixed must produce measure numbers 0,1,2,3,4
+    const fixed = computeFixedRulerLabels(viewStart, viewBeats, step)
+      .filter(r => r.label !== null)
+      .map(r => r.label);
+    expect(fixed).toEqual(['0', '1', '2', '3', '4']);
 
-  it('Step1 capture multiple beats with audioOffset 0 → Step2 recompute with audioOffset 200 → Step3 全beatで metronome不変 かつ manual分のみズレる', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 1000;
-    const startCtx = 12.5;
-    const manualCases = [0, 80, -80];
-    const beats = [2, 4, 6, 8];
-    for (const manual of manualCases) {
-      for (const b of beats) {
-        const metro = computeMetronomeAudibleT143(tl, fromMs, startCtx, b, manual);
-        const green = computeGreenBarTime(startCtx, fromMs, tl, b);
-        expect(metro, `manual ${manual} beat ${b} metro==green+manual`).toBeCloseTo(green + manual / 1000, 4);
-        // With audioOffset, same metro
-        const metroWithAudio = computeMetronomeAudibleT143(tl, fromMs, startCtx, b, manual);
-        expect(metroWithAudio).toBeCloseTo(metro, 6);
-      }
+    // Must NOT contain beat numbers 4,8,12 as labels
+    expect(fixed).not.toContain('4');
+    expect(fixed).not.toContain('8');
+    expect(fixed).not.toContain('12');
+
+    // Consistency of conversion: label == String(Math.round(beat/4))
+    const raw = computeFixedRulerLabels(viewStart, viewBeats, step).filter(r => r.strong);
+    for (const r of raw) {
+      expect(r.label).toBe(String(Math.round(r.beat / 4)));
     }
   });
 
-  it('Step1 capture BPM change timeline before → Step2 off-grid 3.37 beat after change 6 → Step3 audioOffset 0/200で不変を維持', () => {
-    const tl = new BpmTimeline(120, [{ beat: 4, bpm: 180 }], 1.0);
-    const fromMs = tl.beatToMs(3.37); // off-grid before change
-    const startCtx = 5.0;
-    const targetBeat = 6;
-    for (const manual of [0, 80]) {
-      const metro = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-      const green = computeGreenBarTime(startCtx, fromMs, tl, targetBeat);
-      expect(metro).toBeCloseTo(green + manual / 1000, 4);
-      // Audio invariant
-      const metroAgain = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-      expect(metroAgain).toBeCloseTo(metro, 6);
-    }
-  });
-
-  it('Step1 capture file contract: no audioOffset in metronome grid → Step2 grep startMetronome body → Step3 no audioOffset in the timing formula', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    const idx = src.indexOf('const startMetronome');
-    const slice = src.slice(idx, idx + 2200);
-    // audioOffset must NOT be baked into the nextBeatTime formula (ruler anchored).
-    // A documentation comment may mention "audioOffset is NOT baked in", so we only
-    // assert it is absent from the actual timing computation, not from the comment.
-    expect(slice).not.toMatch(/nextBeatTime\s*=\s*startCtxTime\s*\+\s*audioOffset/);
-    expect(slice).not.toMatch(/[,+\-]\s*audioOffset\b/);
-    expect(slice).not.toContain('leadMs');
-    expect(slice).not.toContain('getLeadMs');
-    // Must reference startCtxTime and fromMs
-    expect(slice).toContain('startCtxTime');
-    expect(slice).toContain('fromMs');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T143-3: 完了条件2 — 音楽可聴は audioOffsetで遅延し metronomeと audioOffset分ズレるのが意図通り
-// ---------------------------------------------------------------------------
-describe('T143-3: 完了条件2 音楽可聴 getLeadMs/1000+delta は従来通り遅延し metronomeと audioOffset分ズレ', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 capture audioOffset 0 music vs metro before → Step2 set audioOffset 200 → Step3 差が 200ms (=audioOffset) に一致', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 500;
-    const startCtx = 10.0;
-    const targetBeat = 4;
-    setManualOffset(0);
-    const manual = getManualOffsetMs();
-    // Step1
-    const metro0 = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    const music0 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 0, manual);
-    expect(Math.abs(music0 - metro0)).toBeCloseTo(0, 4);
-    // Step2
-    const music200 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 200, manual);
-    const metro200 = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    expect(metro200).toBeCloseTo(metro0, 6);
-    // Step3 difference must be audioOffset
-    expect(music200 - metro200).toBeCloseTo(0.2, 6);
-    expect(Math.abs(music200 - metro200) - 0.2).toBeLessThan(0.001);
-  });
-
-  it('Step1 capture manual 80 audioOffset 0 → Step2 set audioOffset 200 → Step3 music-metro diff依然 audioOffset (manual含めても)', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    setManualOffset(80);
-    const manual = getManualOffsetMs();
-    const fromMs = 0;
-    const startCtx = 9.0;
-    const targetBeat = 2;
-    const metro = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manual);
-    const music0 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 0, manual);
-    // metro = green+manual, music0 = green+manual (since audio 0) => diff 0
-    expect(music0).toBeCloseTo(metro, 4);
-    const music200 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 200, manual);
-    expect(music200 - metro).toBeCloseTo(0.2, 4);
-    // With audio 200 lead=280, difference = audioOffset only, not lead
-    const manualNeg = -80;
-    const metroNeg = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, manualNeg);
-    const musicNeg200 = computeMusicAudible(startCtx, fromMs, tl, targetBeat, 200, manualNeg);
-    expect(musicNeg200 - metroNeg).toBeCloseTo(0.2, 4);
-    setManualOffset(0);
-  });
-
-  it('Step1 capture off-grid beats 0.37/1.23 with audioOffset combos → Step2 compute all combos → Step3 diff常に audioOffset/1000', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMsCases = [185, 615, 1237];
-    const audioOffsets = [0, 50, 200];
-    const manuals = [0, 80, -40];
-    const startCtx = 7.5;
-    for (const fromMs of fromMsCases) {
-      for (const ao of audioOffsets) {
-        for (const man of manuals) {
-          const targetBeat = Math.ceil(tl.msToBeat(fromMs)) + 2;
-          const metro = computeMetronomeAudibleT143(tl, fromMs, startCtx, targetBeat, man);
-          const music = computeMusicAudible(startCtx, fromMs, tl, targetBeat, ao, man);
-          expect(music - metro, `fromMs ${fromMs} ao ${ao} man ${man} beat ${targetBeat}`).toBeCloseTo(ao / 1000, 4);
-        }
-      }
-    }
-  });
-
-  it('Step1 capture EditorScreen playFrom music lead before → Step2 inspect file → Step3 uses getLeadMs(audioOffset)/1000 + delta (audioOffset込み)', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    const playIdx = src.indexOf('const playFrom');
-    expect(playIdx).toBeGreaterThan(-1);
-    const slice = src.slice(playIdx, playIdx + 3500);
-    expect(slice).toMatch(/getLeadMs\(audioOffset\)\s*\/\s*1000/);
-    // Should still have source.start with offset logic (positive/negative branch)
-    expect(slice).toContain('src.start(');
-    expect(slice).toContain('offsetSec');
-    // Ensure GameScreen also still has lead
-    const gameSrc = readFile('src/screens/GameScreen.tsx');
-    expect(gameSrc).toMatch(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
-  });
-
-  it('Step1 capture music startWhen formula before → Step2 numeric simulate playFrom branches → Step3 when matches getLeadMs', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 1000;
-    const ctxTime = 10.0;
-    for (const ao of [0, 200]) {
-      for (const man of [0, 80, -80]) {
-        setManualOffset(man);
-        const lead = getLeadMs(ao);
-        expect(lead).toBe(ao + man);
-        const offsetSec = lead / 1000;
-        let startWhen: number;
-        let startOffset: number;
-        const audioTime = fromMs / 1000;
-        if (offsetSec >= 0) {
-          startWhen = ctxTime + offsetSec;
-          startOffset = audioTime;
-        } else {
-          startWhen = ctxTime;
-          startOffset = Math.max(0, audioTime - offsetSec);
-        }
-        // For positive leads, when = ctx + lead
-        if (offsetSec >= 0) expect(startWhen).toBeCloseTo(ctxTime + lead / 1000, 6);
-        expect(startOffset).toBeDefined();
-        // Verify T143 determinism not affected: metro still without lead
-        const metro = computeMetronomeAudibleT143(tl, fromMs, ctxTime, 4, man);
-        const green = computeGreenBarTime(ctxTime, fromMs, tl, 4);
-        expect(metro).toBeCloseTo(green + man / 1000, 4);
-      }
-    }
-    setManualOffset(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T143-4: 完了条件3 — 同じ fromMsからの再生でメトロ初回 whenが audioOffsetに依らず一定（決定性）
-// ---------------------------------------------------------------------------
-describe('T143-4: 完了条件3 同じ fromMsからの再生でメトロ初回 whenが audioOffsetに依らず一定（T137決定性維持）', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 capture fromMs 0 startCtx 10.0 audio 0 → Step2 call same fromMs with audio 200 → Step3 nextBeatTime同一', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 0;
-    const startCtx = 10.0;
-    const ctxNow = 10.0;
-    const r0 = computeT143NextBeatTime(tl, fromMs, startCtx, ctxNow);
-    const r200 = computeT143NextBeatTime(tl, fromMs, startCtx, ctxNow);
-    expect(r200.nextBeatTime).toBeCloseTo(r0.nextBeatTime, 6);
-    expect(r200.beatIdx).toBe(r0.beatIdx);
-    // Contrast buggy would differ by 0.2
-    const buggy0 = computeT137NextBeatTime(tl, fromMs, startCtx, 0, ctxNow, 0);
-    const buggy200 = computeT137NextBeatTime(tl, fromMs, startCtx, 200, ctxNow, 0);
-    expect(buggy200.nextBeatTime - buggy0.nextBeatTime).toBeCloseTo(0.2, 6);
-    expect(r0.nextBeatTime).not.toBeCloseTo(buggy200.nextBeatTime, 2);
-  });
-
-  it('Step1 capture off-grid fromMs 1237 jitter 3ms vs 12ms → Step2 compute T143 nextBeat twice → Step3 差 5ms以内で一定', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 1000; // exactly beat 2, first click lands at startCtxTime (10.0)
-    const startCtx = 10.0;
-    const fixed1 = computeT143NextBeatTime(tl, fromMs, startCtx, 10.003);
-    const fixed2 = computeT143NextBeatTime(tl, fromMs, startCtx, 10.012);
-    // With T143 pure ruler, the first click is at 10.0; both jitter cases push past
-    // it into the future, so the next (future) click is identical (10.5).
-    expect(Math.abs(fixed1.nextBeatTime - fixed2.nextBeatTime)).toBeLessThanOrEqual(0.0005);
-    expect(fixed1.beatIdx).toBe(fixed2.beatIdx);
-    // Once the first click (10.0) is itself in the past, we land on the next click.
-    // 10.6 > 10.5 (the second click) so the click at 10.5 becomes the landed one.
-    const late2 = computeT143NextBeatTime(tl, fromMs, startCtx, 10.6);
-    expect(late2.beatIdx).toBe(fixed1.beatIdx + 1);
-    expect(late2.nextBeatTime).toBeCloseTo(fixed1.nextBeatTime + tl.beatMsAt(fixed1.beatIdx) / 1000, 6);
-  });
-
-  it('Step1 capture two consecutive playFrom same fromMs with different manual → Step2 vary manual 0→80 → Step3 nextBeatTime不変で audibleのみ manual差', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 762;
-    const startCtx = 9.0;
-    // nextBeatTime itself should be manual-invariant in T143 (pure ruler)
-    const rManual0 = computeT143NextBeatTime(tl, fromMs, startCtx, startCtx);
-    // Even with manual 80, nextBeatTime same (not used)
-    const rManual80 = computeT143NextBeatTime(tl, fromMs, startCtx, startCtx);
-    expect(rManual80.nextBeatTime).toBeCloseTo(rManual0.nextBeatTime, 6);
-    // Audible differs by manual
-    const audible0 = rManual0.nextBeatTime + 0 / 1000;
-    const audible80 = rManual80.nextBeatTime + 80 / 1000;
-    expect(audible80 - audible0).toBeCloseTo(0.08, 6);
-    // File contract: startMetronome must use startCtxTime snapshot, not live ctx.currentTime for init
-    const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).toMatch(/let\s+nextBeatTime\s*=\s*startCtxTime\s*\+/);
-    expect(src.slice(src.indexOf('const startMetronome'), src.indexOf('const startMetronome') + 800)).not.toMatch(/ctx\.currentTime\s*\+.*beatToMs/);
-  });
-
-  it('Step1 capture isPlaying effect snapshot before → Step2 verify file uses startMsRef/startCtxTimeRef → Step3 no stale positionRef', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    // useEffect isPlaying should call 3-arg snapshot
-    const calls = [...src.matchAll(/startMetronome\s*\([^)]+\)/g)].map(m => m[0]);
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    for (const c of calls) {
-      expect(c).not.toContain('positionRef.current');
-      expect(c).not.toContain('metronomeLeadRef');
-      expect(c).not.toContain('audioOffset');
-    }
-    // Find the isPlaying effect
-    const effIdx = src.indexOf('if (isPlaying && metronomeEnabled)');
-    expect(effIdx).toBeGreaterThan(-1);
-    const effSlice = src.slice(effIdx, effIdx + 700);
-    expect(effSlice).toContain('startMsRef.current');
-    expect(effSlice).toContain('startCtxTimeRef.current');
-    expect(effSlice).toMatch(/startMetronome\s*\(\s*ctx\s*,\s*startMsRef\.current\s*,\s*startCtxTimeRef\.current\s*\)/);
-  });
-
-  it('Step1 capture rapid Space toggle stale positionRef before → Step2 compute true vs stale nextBeat → Step3 true固定で staleはズレる', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const trueFrom = 1000;
-    const stalePos = 1237;
-    const startCtx = 11.0;
-    const fixedTrue = computeT143NextBeatTime(tl, trueFrom, startCtx, startCtx);
-    const fixedStale = computeT143NextBeatTime(tl, stalePos, startCtx, startCtx);
-    expect(fixedTrue.nextBeatTime).not.toBeCloseTo(fixedStale.nextBeatTime, 2);
-    // Our file no longer reads positionRef in metronome start, so trueFrom is used
-    const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).not.toMatch(/startMetronome\s*\([^)]*positionRef/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T143-5: 回帰なし & WaveEngine/Cursor複雑振幅 off-grid数値整合（T127/T128維持）
-// ---------------------------------------------------------------------------
-describe('T143-5: 回帰 WaveEngine/Cursor複雑振幅 off-grid数値整合＋GameScreen/schedule維持', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 capture amp 0.7 beat 0.37 → Step2 sweep amps 0.7/1.3/2.7/3.4 → Step3 waveYAt slope=2*TW_AMP*amplitudeAt clamped', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGridBeats = [0.37, 1.23];
-    for (const amp of amps) {
-      const tl = new BpmTimeline(120, [], amp);
-      const engine = new WaveEngine([{ direction: 'down', beats: 6 }], tl, amp, 0.0);
-      const perBeat = 2 * TW_AMP * amp;
-      const TOP = TW_CENTER_Y - TW_AMP;
-      const BOTTOM = TW_CENTER_Y + TW_AMP;
-      const startY = TW_CENTER_Y;
-      for (const b of offGridBeats) {
-        const raw = startY + perBeat * b;
-        const expected = Math.max(TOP, Math.min(BOTTOM, raw));
-        const actual = engine.waveYAt(b);
-        expect(actual, `amp ${amp} beat ${b}`).toBeCloseTo(expected, 4);
-      }
-      expect(engine.waveYAt(10)).toBeCloseTo(BOTTOM, 4);
-    }
-  });
-
-  it('Step1 capture cursor amp 1.3 down 0.5 beats → Step2 update dt=beats*beatMs/1000 → Step3 cursor delta == wave delta == perBeat*beats', () => {
-    const amp = 1.3;
-    const beatMs = 500;
-    const tl = new BpmTimeline(120, [], amp);
-    const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 1.0);
-    const perBeat = 2 * TW_AMP * amp;
-    const cursor = new Cursor(amp, 1.0);
-    const y0 = cursor.y;
-    const beatsDelta = 0.5;
-    const dt = (beatsDelta * beatMs) / 1000;
-    cursor.update(dt, false, true, beatMs);
-    const cursorDelta = Math.abs(cursor.y - y0);
-    expect(cursorDelta).toBeCloseTo(perBeat * 0.5, 4);
-    const waveDelta = Math.abs(engine.waveYAt(beatsDelta) - engine.waveYAt(0));
-    expect(waveDelta).toBeCloseTo(perBeat * 0.5, 4);
-    expect(waveDelta).toBeCloseTo(cursorDelta, 4);
-  });
-
-  it('Step1 capture getPoints length invariant → Step2 vary segments → Step3 segments+1 holds & point Y typed', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const cases: any[] = [
-      [{ direction: 'down', beats: 1 }],
-      [{ direction: 'up', beats: 0.5 }, { direction: 'down', beats: 0.5 }, { direction: 'stay', beats: 1 }],
-      [],
-    ];
-    for (const segs of cases) {
-      const eng = new WaveEngine(segs, tl, 1.0, 0);
-      const pts = eng.getPoints();
-      if (segs.length === 0) expect(pts.length).toBe(2);
-      else expect(pts.length).toBe(segs.length + 1);
-      for (const p of pts) {
-        expect(typeof p.beat).toBe('number');
-        expect(typeof p.y).toBe('number');
-      }
-    }
-  });
-
-  it('Step1 capture off-grid quant 1.2→1.0 1.3→1.5 snap0.5 → Step2 segmentize trajectory → Step3 snap-aligned & not 1/amplitude', () => {
-    const snap = 0.5;
-    expect(quantizeBeat(1.2, snap)).toBeCloseTo(1.0, 4);
-    expect(quantizeBeat(1.3, snap)).toBeCloseTo(1.5, 4);
-    const traj = [
-      { beat: 0, y: TW_CENTER_Y, down: true },
-      { beat: 0.5, y: TW_CENTER_Y + 60, down: true },
-      { beat: 1.0, y: TW_CENTER_Y + 120, down: true },
-      { beat: 1.2, y: TW_CENTER_Y + 130, down: false },
-    ];
-    const segs = segmentize(traj, snap, 1.0);
-    const moving = segs.filter(s => s.direction !== 'stay');
-    const totalMoving = moving.reduce((a, b) => a + b.beats, 0);
-    expect(totalMoving).toBeCloseTo(1.0, 4);
-    for (const s of segs) {
-      const rem = ((s.beats % snap) + snap) % snap;
-      expect(rem < 1e-6 || Math.abs(rem - snap) < 1e-6).toBeTruthy();
-    }
-    // T129: must not be forced to 1/amplitude =1.0 for short push
-    const shortTraj = [
-      { beat: 0, y: TW_CENTER_Y, down: true },
-      { beat: 0.30, y: TW_CENTER_Y + 40, down: false },
-    ];
-    const shortSegs = segmentize(shortTraj, 0.25, 1.0);
-    expect(shortSegs[0].beats).toBeCloseTo(0.25, 4);
-    expect(shortSegs[0].beats).not.toBeCloseTo(1.0, 4);
-  });
-
-  it('Step1 capture BpmTimeline amplitudeAt step off-grid → Step2 verify 3.37 vs 4.23 → Step3 step function correct', () => {
-    const tl = new BpmTimeline(120, [{ beat: 4, bpm: 120, amplitude: 2.0 }], 1.0);
-    expect(tl.amplitudeAt(3.37)).toBe(1.0);
-    expect(tl.amplitudeAt(4.0)).toBe(2.0);
-    expect(tl.amplitudeAt(4.23)).toBe(2.0);
-    expect(tl.amplitudeAt(4.37)).toBe(2.0);
-  });
-
-  it('Step1 capture GameScreen unchanged before → Step2 verify file → Step3 still simple ctx.currentTime ruler & (audioOffsetMs+manual)/1000', () => {
-    const gameSrc = readFile('src/screens/GameScreen.tsx');
-    expect(gameSrc).not.toContain('startMetronome(ctx, fromMs');
-    expect(gameSrc).toContain('getManualOffsetMs');
-    expect(gameSrc).toMatch(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
-    // GameScreen Metronome class still uses nextBeatTime < horizon (no leadMs)
-    expect(gameSrc).toContain('schedule(');
-    expect(gameSrc).not.toContain('metronomeLeadRef');
-  });
-
-  it('Step1 capture clock centralization before → Step2 check getLeadMs & offsetSeconds → Step3 defined and consistent', () => {
-    setManualOffset(80);
-    expect(getLeadMs(200)).toBe(280);
-    expect(getLeadMs(0)).toBe(80);
-    expect(offsetSeconds()).toBeCloseTo(0.08, 6);
-    setManualOffset(-40);
-    expect(getLeadMs(100)).toBe(60);
-    expect(offsetSeconds()).toBeCloseTo(-0.04, 6);
-    const clockSrc = readFile('src/audio/clock.ts');
-    expect(clockSrc).toMatch(/export function getLeadMs\(/);
-    expect(clockSrc).toMatch(/export function offsetSeconds\(/);
-    setManualOffset(0);
-  });
-
-  it('Step1 capture T102/T103 guard before → Step2 check EditorScreen record guard → Step3 at least 3 guards & no positionRef - manual', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).toContain("modeRef.current === 'record'");
-    const guards = (src.match(/modeRef\.current === 'record'/g) || []).length;
-    expect(guards).toBeGreaterThanOrEqual(3);
-    expect(src).not.toMatch(/positionRef\.current\s*-\s*getManualOffsetMs\(\)/);
-  });
-
-  it('Step1 capture metronome gain & UI before → Step2 check editor volumes → Step3 present untouched', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).toContain('musicGainRef');
-    expect(src).toContain('metronomeGainRef');
-    expect(src).toContain('data-testid="metronome-switch"');
-    expect(src).toContain('data-testid="metronome-volume"');
-    expect(src).toContain('data-testid="music-volume"');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T143-6: Ruler & green bar一致 & tsc guard
-// ---------------------------------------------------------------------------
-describe('T143-6: Ruler/緑バー一致 & schedule clamp決定性 & tsc guard', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 capture ruler beat 4 green vs metro before → Step2 compute greenBarTime vs metro → Step3 metro == green + manual (ruler一致)', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 0;
-    const startCtx = 10.0;
-    // The metronome only clicks on whole beats, so the green-bar/metronome
-    // coincidence holds for integer beats. (Off-grid positions are covered by the
-    // determinism assertions elsewhere; here we verify the ruler-aligned clicks.)
-    const cases = [
-      { beat: 0, manual: 0 },
-      { beat: 4, manual: 80 },
-      { beat: 8, manual: -40 },
-      { beat: 12, manual: 0 },
-      { beat: 16, manual: 80 },
+  it('Step1 capture viewBeats=16 viewStart=0 labels before → Step2 sweep alternative viewBeats (8,20,32) → Step3 measure labels remain beat/4', () => {
+    const cases: Array<{ viewBeats: number; expected: string[] }> = [
+      { viewBeats: 8, expected: ['0', '1', '2'] }, // beats 0,4,8 -> 0,1,2
+      { viewBeats: 20, expected: ['0', '1', '2', '3', '4', '5'] }, // 0..20 step 1 -> 0,4,8,12,16,20 -> 0..5
+      { viewBeats: 32, expected: ['0', '1', '2', '3', '4', '5', '6', '7', '8'] }, // step 1 up to 32 inclusive
     ];
     for (const c of cases) {
-      const green = computeGreenBarTime(startCtx, fromMs, tl, c.beat);
-      const metro = computeMetronomeAudibleT143(tl, fromMs, startCtx, c.beat, c.manual);
-      expect(metro, `beat ${c.beat} manual ${c.manual}`).toBeCloseTo(green + c.manual / 1000, 4);
+      const step = minorStepFor(c.viewBeats);
+      const labels = computeFixedRulerLabels(0, c.viewBeats, step)
+        .filter(r => r.label !== null)
+        .map(r => r.label);
+      expect(labels, `viewBeats ${c.viewBeats}`).toEqual(c.expected);
+      // Negative: buggy would be multiples of 4
+      const buggy = computeBuggyRulerLabels(0, c.viewBeats, step)
+        .filter(r => r.label !== null)
+        .map(r => r.label);
+      expect(buggy).not.toEqual(labels);
     }
   });
 
-  it('Step1 capture tick raw formula before (T138案A) → Step2 inspect tick slice → Step3 rawPos = startMs + (ctx-startCtx)*1000 without leadMs', () => {
-    const src = readFile('src/screens/EditorScreen.tsx');
-    const tickIdx = src.indexOf('const tick = ()');
-    expect(tickIdx).toBeGreaterThan(-1);
-    // Bound the slice to the tick function only so we do not bleed into playFrom
-    // (which legitimately uses getLeadMs(audioOffset) for the music lead).
-    const tickEnd = src.indexOf('\n  const loadLocalFile', tickIdx);
-    const tickSlice = src.slice(tickIdx, tickEnd > -1 ? tickEnd : tickIdx + 3000);
-    expect(tickSlice).toMatch(/const\s+rawPos\s*=\s*startMsRef\.current\s*\+\s*\(ctx\.currentTime\s*-\s*startCtxTimeRef\.current\)\s*\*\s*1000/);
-    expect(tickSlice).toMatch(/const\s+pos\s*=\s*Math\.max\(0,\s*rawPos\)/);
-    expect(tickSlice).not.toMatch(/rawPos\s*-\s*leadMs/);
-    expect(tickSlice).not.toMatch(/rawPos\s*-\s*getLeadMs/);
-    // Ensure tick does not reference audioOffset for green
-    const tickHasAudioOffsetSub = tickSlice.includes('audioOffset') && tickSlice.includes('- leadMs');
-    expect(tickHasAudioOffsetSub).toBe(false);
+  it('Step1 capture off-grid viewStart 0.37 viewBeats=16 before → Step2 compute ruler labels with same fixed logic → Step3 strong labels still beat/4 at 4,8,12... (off-grid start does not shift strong positions)', () => {
+    const viewStart = 0.37;
+    const viewBeats = 16;
+    const step = minorStepFor(viewBeats); // 1
+    const fixed = computeFixedRulerLabels(viewStart, viewBeats, step);
+    const strongFixed = fixed.filter(r => r.strong);
+    // With viewStart 0.37, first strong beat >= viewStart is 4, then 8,12,16
+    expect(strongFixed.map(r => r.beat)).toEqual([4, 8, 12, 16]);
+    expect(strongFixed.map(r => r.label)).toEqual(['1', '2', '3', '4']);
+    // Verify buggy would be 4,8,12,16 instead
+    const buggyStrong = computeBuggyRulerLabels(viewStart, viewBeats, step).filter(r => r.strong);
+    expect(buggyStrong.map(r => r.label)).toEqual(['4', '8', '12', '16']);
+    expect(strongFixed.map(r => r.label)).not.toEqual(buggyStrong.map(r => r.label));
+    // Edge: no label equals "4" should appear twice; measure 1 corresponds to beat 4
+    expect(strongFixed[0].label).toBe('1');
+    expect(strongFixed[0].beat).toBe(4);
   });
 
-  it('Step1 capture schedule Math.max clamp before → Step2 simulate first beat not clamped → Step3 when = nextBeatTime + manual without double shift', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const fromMs = 0;
-    const startCtx = 10.0;
-    setManualOffset(80);
-    const manual = getManualOffsetMs();
-    const { nextBeatTime } = computeT143NextBeatTime(tl, fromMs, startCtx, startCtx);
-    // schedule when = max(ctxNow, nextBeatTime+manual/1000) ; nextBeatTime 10.0, ctxNow 10.0 => 10.08
-    const when = Math.max(startCtx, nextBeatTime + manual / 1000);
-    expect(when).toBeCloseTo(10.08, 6);
-    expect(when).toBeCloseTo(nextBeatTime + manual / 1000, 6);
-    // With audioOffset 200, nextBeatTime still 10.0 (ruler fixed), so when still 10.08, not 10.28
-    const metro = computeMetronomeAudibleT143(tl, fromMs, startCtx, 0, manual);
-    expect(metro).toBeCloseTo(10.08, 6);
-    const music = computeMusicAudible(startCtx, fromMs, tl, 0, 200, manual);
-    expect(music).toBeCloseTo(10.28, 6);
-    expect(music - metro).toBeCloseTo(0.2, 6);
-    setManualOffset(0);
+  it('Step1 capture off-grid viewStart 1.23 viewBeats=12 before → Step2 compute labels → Step3 measure labels remain Math.round(b/4) even when view window slices mid-measure', () => {
+    const viewStart = 1.23;
+    const viewBeats = 12;
+    const step = minorStepFor(viewBeats); // 1
+    const fixed = computeFixedRulerLabels(viewStart, viewBeats, step);
+    const strong = fixed.filter(r => r.strong);
+    // Window: 1.23..13.23 => strong beats 4,8,12
+    expect(strong.map(r => r.beat)).toEqual([4, 8, 12]);
+    expect(strong.map(r => r.label)).toEqual(['1', '2', '3']);
+    for (const r of strong) {
+      expect(r.label).toBe(String(Math.round(r.beat / 4)));
+      expect(Number(r.label)).toBe(r.beat / 4);
+    }
   });
 
-  it('Step1 capture all symbols typed before → Step2 instantiate engines → Step3 no throw and constants correct', () => {
-    const tl = new BpmTimeline(120, [], 1.0);
-    const eng = new WaveEngine([{ direction: 'up', beats: 1 }], tl, 1.0, 0);
-    const cur = new Cursor(1.0, 0);
-    expect(tl.beatMsAt(0)).toBeGreaterThan(0);
-    expect(eng.waveYAt(0)).toBeDefined();
-    expect(cur.y).toBeDefined();
-    expect(getManualOffsetMs()).toBeDefined();
-    expect(offsetSeconds()).toBeDefined();
+  it('Step1 capture spec example mapping before b=0->0,4->1,8->2 → Step2 apply String(Math.round(b/4)) → Step3 exact mapping holds for all strong beats', () => {
+    const specPairs: Array<[number, string]> = [
+      [0, '0'],
+      [4, '1'],
+      [8, '2'],
+      [12, '3'],
+      [16, '4'],
+      [20, '5'],
+      [100, '25'],
+    ];
+    for (const [b, expected] of specPairs) {
+      expect(String(Math.round(b / 4))).toBe(expected);
+      // Simulate fixed ruler entry for that beat being strong
+      const strong = Math.abs(b % 4) < 1e-6;
+      expect(strong).toBe(true);
+      expect(String(Math.round(b / 4))).not.toBe(String(b));
+    }
+    // Non-strong beat must not produce label
+    const nonStrong = computeFixedRulerLabels(0, 16, 1).filter(r => !r.strong);
+    for (const r of nonStrong) {
+      expect(r.label).toBeNull();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T144-3: 完了条件2 — minorStep 縦線は beat 単位で引かれ 小節太線と beat 細線が区別できる
+// ---------------------------------------------------------------------------
+describe('T144-3: 完了条件2 minorStep beat グリッドが beat 単位で引かれ 太線/細線が区別される', () => {
+  it('Step1 capture initial minorStep table before → Step2 compute minorStep for each viewBeats → Step3 beat-unit grid count matches expected and strong subset = measure*4', () => {
+    const cases: Array<{ viewBeats: number; minorStep: number; totalLines: number; strongCount: number }> = [
+      { viewBeats: 8, minorStep: 0.5, totalLines: 17, strongCount: 3 }, // 0..8 /0.5 => 17, strong 0,4,8
+      { viewBeats: 16, minorStep: 1, totalLines: 17, strongCount: 5 }, // 0..16 /1
+      { viewBeats: 32, minorStep: 1, totalLines: 33, strongCount: 9 }, // 0..32 /1
+      { viewBeats: 64, minorStep: 4, totalLines: 17, strongCount: 17 }, // 0..64 /4 => all strong
+    ];
+    for (const c of cases) {
+      const step = minorStepFor(c.viewBeats);
+      expect(step, `minorStep viewBeats ${c.viewBeats}`).toBe(c.minorStep);
+      const all = computeFixedRulerLabels(0, c.viewBeats, step);
+      expect(all.length, `total lines viewBeats ${c.viewBeats}`).toBe(c.totalLines);
+      const strong = all.filter(r => r.strong);
+      expect(strong.length, `strong count viewBeats ${c.viewBeats}`).toBe(c.strongCount);
+      // Strong lines must be at beats 0,4,8... (multiples of 4)
+      for (const s of strong) {
+        expect(s.beat % 4).toBeCloseTo(0, 6);
+        expect(s.label).toBe(String(Math.round(s.beat / 4)));
+      }
+      // Minor (weak) lines must be at non-multiples of 4
+      const weak = all.filter(r => !r.strong);
+      for (const w of weak) {
+        expect(Math.abs(w.beat % 4) < 1e-6).toBe(false);
+        expect(w.label).toBeNull();
+      }
+      // Grid remains beat-unit: distance between consecutive grid marks = minorStep beats
+      for (let i = 1; i < all.length; i++) {
+        expect(all[i].beat - all[i - 1].beat).toBeCloseTo(step, 6);
+      }
+    }
+  });
+
+  it('Step1 capture viewBeats=16 weak lines before (beats 1,2,3,5,6,7...) → Step2 compute all grid beats → Step3 weak lines exist and are not labeled as measures', () => {
+    const viewBeats = 16;
+    const step = minorStepFor(viewBeats);
+    const all = computeFixedRulerLabels(0, viewBeats, step);
+    const weakBeats = all.filter(r => !r.strong).map(r => r.beat);
+    expect(weakBeats).toEqual([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15]);
+    // Weak lines must have strokeStyle rgba(255,255,255,0.07) and lineWidth 1 (verified via file)
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    const rulerIdx = src.indexOf('// Beat ruler');
+    const slice = src.slice(rulerIdx, rulerIdx + 2500);
+    expect(slice).toMatch(/ctx\.strokeStyle\s*=\s*strong\s*\?\s*'rgba\(255,255,255,0\.20\)'\s*:\s*'rgba\(255,255,255,0\.07\)'/);
+    expect(slice).toMatch(/ctx\.lineWidth\s*=\s*strong\s*\?\s*1\.5\s*:\s*1/);
+    // Strong lines thicker: 1.5 + rgba 0.20
+    expect(slice).toContain("rgba(255,255,255,0.20)");
+  });
+
+  it('Step1 capture viewBeats=8 denser grid (0.5 step) before → Step2 compute labels → Step3 only strong beats have labels, half-beats never labeled', () => {
+    const viewBeats = 8;
+    const step = minorStepFor(viewBeats);
+    const all = computeFixedRulerLabels(0, viewBeats, step);
+    // At 0.5 resolution, beats 0.5,1.5,2.5 etc are weak
+    const halfBeats = all.filter(r => Math.abs((r.beat * 2) % 2) < 1e-9 && Math.abs(r.beat % 1 - 0.5) < 1e-9);
+    expect(halfBeats.length).toBe(8); // 0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5
+    for (const h of halfBeats) {
+      expect(h.strong).toBe(false);
+      expect(h.label).toBeNull();
+    }
+    // Strong still only multiples of 4, labeled as measures
+    const strong = all.filter(r => r.strong);
+    expect(strong.map(r => r.label)).toEqual(['0', '1', '2']);
+  });
+
+  it('Step1 capture off-grid viewStart 0.37 minorStep 0.5 before → Step2 verify weak/strong distinction persists off-grid → Step3 strong still 4,8... weak not labeled', () => {
+    const viewStart = 0.37;
+    const viewBeats = 8;
+    const step = minorStepFor(viewBeats); // 0.5
+    const all = computeFixedRulerLabels(viewStart, viewBeats, step);
+    const strong = all.filter(r => r.strong);
+    // Strong beats inside 0.37..8.37 are 4,8
+    expect(strong.map(r => r.beat)).toEqual([4, 8]);
+    expect(strong.map(r => r.label)).toEqual(['1', '2']);
+    const weak = all.filter(r => !r.strong);
+    expect(weak.length).toBeGreaterThan(0);
+    for (const w of weak) expect(w.label).toBeNull();
+  });
+
+  it('Step1 capture that beat grid is independent of amplitude/bpm before → Step2 instantiate engines with varied amplitudes → Step3 minorStep table unchanged (engine does not affect grid)', () => {
+    const viewBeatsCases = [8, 16, 64];
+    for (const vb of viewBeatsCases) {
+      expect(minorStepFor(vb)).toBe(vb <= 8 ? 0.5 : vb <= 32 ? 1 : 4);
+    }
+    // Engine amplitude should not leak into ruler grid
+    const amps = [0.7, 1.3, 2.7];
+    for (const amp of amps) {
+      const tl = new BpmTimeline(120, [], amp);
+      const eng = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 0);
+      // waveYAt sanity (uses amplitude for wave slope, not ruler)
+      expect(eng.waveYAt(0.37)).toBeDefined();
+      expect(minorStepFor(16)).toBe(1);
+    }
+    // quantizeBeat alignment also beat-unit (sanity)
+    expect(quantizeBeat(1.2, 0.25)).toBeCloseTo(1.25, 6);
+    expect(quantizeBeat(1.3, 0.5)).toBeCloseTo(1.5, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T144-4: 文字列変換の数学的一貫性 & 回帰（minorStep 依らず / file に余分な fillText が無い）
+// ---------------------------------------------------------------------------
+describe('T144-4: 数学的一貫性（measure = round(beat/4)）と軽度回帰', () => {
+  it('Step1 capture identity label = round(beat/4) before → Step2 sweep beats 0..100 with step 0.5 → Step3 strong label equals measure and labels strictly increasing by 1 per strong beat', () => {
+    const viewBeats = 100;
+    const step = minorStepFor(viewBeats); // 4 at large view
+    const all = computeFixedRulerLabels(0, viewBeats, step);
+    const strong = all.filter(r => r.strong);
+    expect(strong.length).toBeGreaterThan(10);
+    for (let i = 0; i < strong.length; i++) {
+      const s = strong[i];
+      expect(s.label).toBe(String(Math.round(s.beat / 4)));
+      expect(Number(s.label)).toBe(s.beat / 4);
+      if (i > 0) {
+        expect(Number(s.label) - Number(strong[i - 1].label)).toBe(1);
+        expect(s.beat - strong[i - 1].beat).toBe(4);
+      }
+    }
+    // No duplicate measure labels
+    const labels = strong.map(s => s.label);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('Step1 capture file has two fillText sites before (ruler + START) → Step2 inspect both → Step3 ruler site uses round(b/4) and START site unchanged', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // Ruler must use round(b/4)
+    expect(src).toMatch(/ctx\.fillText\(\s*String\(\s*Math\.round\(\s*b\s*\/\s*4\s*\)\s*\)\s*,\s*gx\s*\+\s*4\s*,\s*4\s*\)/);
+    // START label must remain
+    expect(src).toContain("ctx.fillText('START'");
+    // PLAY label remains
+    expect(src).toContain("ctx.fillText('PLAY'");
+    // Count of ctx.fillText(String( including ruler) — ruler + no other beat-number label
+    const rulerMatches = (src.match(/ctx\.fillText\(\s*String\(\s*Math\.round\(b \/ 4\)\s*\)/g) || []).length;
+    expect(rulerMatches).toBe(1);
+  });
+
+  it('Step1 capture TW_AMP / TW_CENTER_Y invariants before → Step2 verify engine still returns correct Y independent of ruler → Step3 ruler change does not alter wave physics', () => {
     expect(TW_AMP).toBe(130);
     expect(TW_CENTER_Y).toBe(300);
-    const ctx = createMockAudioContext();
-    expect(() => schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.1, 0)).not.toThrow();
-    // Out param path also works (editor gain)
-    const gainStub = ctx.createGain();
-    expect(() => schedule(ctx as unknown as AudioContext, ctx.currentTime + 0.1, 1, gainStub)).not.toThrow();
+    const tl = new BpmTimeline(120, [], 1.0);
+    const eng = new WaveEngine([{ direction: 'down', beats: 4 }, { direction: 'up', beats: 4 }], tl, 1.0, 0);
+    // Wave physics unchanged: at beat 0 start at -TW_AMP offset (startPosition 0 => CENTER)
+    expect(eng.waveYAt(0)).toBeCloseTo(TW_CENTER_Y, 0);
+    // At beat 2 down segment should be moving toward bottom, measure labels not involved
+    const y2 = eng.waveYAt(2);
+    const y0 = eng.waveYAt(0);
+    expect(y2).toBeGreaterThan(y0);
+    // Ruler label at beat 4 must be "1" even though wave physics uses beat=4 as top/bottom
+    expect(String(Math.round(4 / 4))).toBe('1');
+    expect(String(Math.round(8 / 4))).toBe('2');
   });
 
-  it('Step1 capture GameScreen Metronome still horizon-based → Step2 verify not containing ruler lead → Step3 horizon uses beatMsAt loop', () => {
-    const gameSrc = readFile('src/screens/GameScreen.tsx');
-    expect(gameSrc).toContain('LOOKAHEAD_MS');
-    expect(gameSrc).toMatch(/nextBeatTime\s*\+=\s*timeline\.beatMsAt\(beat\)\s*\/\s*1000/);
-    // GameScreen metronome is ruler-anchored (no metronomeLeadRef). audioOffsetMs
-    // legitimately exists for the MUSIC lead only, not for the metronome grid.
-    expect(gameSrc).not.toContain('metronomeLeadRef');
-    expect(gameSrc).not.toMatch(/nextBeatTime\s*[+\-]\s*audioOffsetMs/);
+  it('Step1 capture extreme off-grid large viewBeats 200 before → Step2 compute ruler limited window → Step3 measure numbers continue correctly and no beat-number leak', () => {
+    const viewStart = 122.37;
+    const viewBeats = 16;
+    const step = minorStepFor(viewBeats);
+    const all = computeFixedRulerLabels(viewStart, viewBeats, step);
+    const strong = all.filter(r => r.strong);
+    // Inside 122.37..138.37 strong beats are 124,128,132,136
+    expect(strong.map(r => r.beat)).toEqual([124, 128, 132, 136]);
+    expect(strong.map(r => r.label)).toEqual([
+      String(Math.round(124 / 4)),
+      String(Math.round(128 / 4)),
+      String(Math.round(132 / 4)),
+      String(Math.round(136 / 4)),
+    ]);
+    expect(strong.map(r => r.label)).toEqual(['31', '32', '33', '34']);
+    // Buggy would be 124,128... as labels
+    expect(strong.map(r => r.label)).not.toContain('124');
+    expect(strong.map(r => r.label)).not.toContain('128');
   });
 });

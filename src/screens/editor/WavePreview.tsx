@@ -190,7 +190,7 @@ export default function WavePreview({
       ctx.stroke()
       if (strong) {
         ctx.fillStyle = 'rgba(255,255,255,0.5)'
-        ctx.fillText(String(b), gx + 4, 4)
+        ctx.fillText(String(Math.round(b / 4)), gx + 4, 4)
       }
     }
 
