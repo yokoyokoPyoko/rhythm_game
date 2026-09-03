@@ -781,9 +781,8 @@ export default function WavePreview({
       if (nearestDist < 35) onDeleteRing?.(hit)
       return
     }
-    if (editMode !== 'vertex' || !onSegmentsChange) return
+    if ((editMode !== 'vertex' && editMode !== 'edge') || !onSegmentsChange) return
 
-    // Inline nearestVertexIndex with 14px threshold
     const canvas2 = canvasRef.current
     if (!canvas2) return
     const rect2 = canvas2.getBoundingClientRect()
@@ -797,26 +796,35 @@ export default function WavePreview({
     const minAmp = Math.max(8, 0.2 * rect2.height)
     const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
     const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
-    const clickX2 = e.clientX - rect2.left
-    const clickY2 = e.clientY - rect2.top
+
     let vi = -1
-    let viDist = Infinity
-    pts.forEach((p, i) => {
-      const vx = ((p.beat - g2.viewStart) / g2.viewBeats) * rect2.width
-      const vy = mapY(p.y)
-      const d = Math.hypot(vx - clickX2, vy - clickY2)
-      if (d < viDist) { viDist = d; vi = i }
-    })
-    if (viDist >= 14) vi = -1
+    if (editMode === 'vertex') {
+      const clickX2 = e.clientX - rect2.left
+      const clickY2 = e.clientY - rect2.top
+      let viDist = Infinity
+      pts.forEach((p, i) => {
+        const vx = ((p.beat - g2.viewStart) / g2.viewBeats) * rect2.width
+        const vy = mapY(p.y)
+        const d = Math.hypot(vx - clickX2, vy - clickY2)
+        if (d < viDist) { viDist = d; vi = i }
+      })
+      if (viDist >= 14) vi = -1
+    } else if (editMode === 'edge') {
+      const ei = nearestEdgeIndex(e.clientX, e.clientY)
+      if (ei >= 0) {
+        vi = ei + 1
+        if (vi >= pts.length - 1) vi = segments.length - 1
+      }
+    }
+
     if (vi <= 0) return
     if (vi >= pts.length - 1) return
 
     const yPrev = pts[vi - 1].y
     const yNext = pts[vi + 1].y
-    const prevBeat = pts[vi - 1].beat
-    const perBeat = 2 * TW_AMP * timeline.amplitudeAt(prevBeat)
+    const totalBeats = segments[vi - 1].beats + segments[vi].beats
+    const beats = Math.max(safeSnap, quantizeBeat(totalBeats, safeSnap))
     const d = yNext - yPrev
-    const beats = Math.max(safeSnap, quantizeBeat(Math.abs(d) / perBeat, safeSnap))
     const dir = Math.abs(d) < 0.5 ? ('stay' as const) : d < 0 ? ('up' as const) : ('down' as const)
 
     const newSegments = [...segments]
