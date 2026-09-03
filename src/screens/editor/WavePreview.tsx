@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { quantizeBeat } from '../../chart/quantize'
+import { calculateVertexDrag, calculateEdgeDrag } from '../../game/editorDrag'
 import { TW_CENTER_Y, TW_AMP, WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
@@ -431,88 +432,47 @@ export default function WavePreview({
         const fieldH = rect.height - RULER_H
         const beat = quantizeBeat(xToBeatLocal(x, rect.width), safeSnap)
         const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
-        const newY = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + yRaw * TW_AMP))
+        const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + yRaw * TW_AMP))
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-        const pts = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition).getPoints()
-        const idx = vertexDragRef.current.index
 
         if (segments.length === 0) return
 
-        if (idx === 0 && segments.length > 0) {
-          const nextBeat = pts[1]?.beat ?? pts[0].beat + safeSnap
-          const clampedBeat = Math.min(nextBeat - safeSnap, beat)
-          const segBeats = Math.max(safeSnap, quantizeBeat(clampedBeat, safeSnap))
-          const d = newY - TW_CENTER_Y
-          const dir = Math.abs(d) < 0.5 ? 'stay' : d < 0 ? 'up' : 'down'
-          onSegmentsChange(segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: dir } : s)))
-          return
-        }
-        if (idx === pts.length - 1 && segments.length > 0) {
-          const prevBeat = pts[idx - 1]?.beat ?? 0
-          const segBeats = Math.max(safeSnap, quantizeBeat(beat - prevBeat, safeSnap))
-          onSegmentsChange(segments.map((s, i) => (i === idx - 1 ? { ...s, beats: segBeats } : s)))
-          return
-        }
-
-        // T147: Interior vertex — adjust 2 adjacent segments (idx-1 and idx) only.
-        // perBeat = 2*TW_AMP*amplitudeAt(beat) for each segment individually (T131).
-        const prevBeat = pts[idx - 1].beat
-        const clampedBeat = Math.max(prevBeat + safeSnap, Math.min(pts[idx + 1].beat - safeSnap, beat))
-        const yPrev = pts[idx - 1].y
-        const yNext = pts[idx + 1].y
-        const perBeatPrev = 2 * TW_AMP * timeline.amplitudeAt(prevBeat)
-        const perBeatNext = 2 * TW_AMP * timeline.amplitudeAt(clampedBeat)
-
-        const dPrev = newY - yPrev
-        const beatsPrev = Math.max(safeSnap, quantizeBeat(Math.abs(dPrev) / perBeatPrev, safeSnap))
-        const dirPrev: 'up' | 'down' | 'stay' = Math.abs(dPrev) < 0.5 ? 'stay' : dPrev < 0 ? 'up' : 'down'
-
-        const dNext = yNext - newY
-        const beatsNext = Math.max(safeSnap, quantizeBeat(Math.abs(dNext) / perBeatNext, safeSnap))
-        const dirNext: 'up' | 'down' | 'stay' = Math.abs(dNext) < 0.5 ? 'stay' : dNext < 0 ? 'up' : 'down'
-
-        onSegmentsChange(
-          segments.map((s, i) => {
-            if (i === idx - 1) return { ...s, direction: dirPrev, beats: beatsPrev }
-            if (i === idx) return { ...s, direction: dirNext, beats: beatsNext }
-            return s
-          }),
-        )
+        const result = calculateVertexDrag({
+          segments,
+          bpmTimeline: timeline,
+          startPosition,
+          pointIndex: vertexDragRef.current.index,
+          targetBeat: beat,
+          targetY: yPrime,
+          snap: safeSnap,
+        })
+        if (result) onSegmentsChange(result)
         return
       }
       if (edgeDragRef.current && onSegmentsChange) {
         const x = e.clientX - rect.left
         const fieldH = rect.height - RULER_H
         const drag = edgeDragRef.current
-        const idx = drag.index
         const dxBeat = quantizeBeat(xToBeatLocal(x, rect.width) - drag.startBeat, safeSnap)
         const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-        const pts = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition).getPoints()
-        if (segments.length === 0) return
         const newYMouse = TW_CENTER_Y + yRaw * TW_AMP
         const dy = Math.max(TW_CENTER_Y - TW_AMP - drag.startY, Math.min(TW_CENTER_Y + TW_AMP - drag.startY, newYMouse - drag.startY))
-        const cl = (v: number) => Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, v))
-        const beatI = pts[idx].beat + dxBeat
-        const beatI1 = pts[idx + 1].beat + dxBeat
-        const yI = cl(drag.startY + dy)
-        const yI1 = cl(pts[idx + 1].y + dy)
-        const perBeat = (b: number) => 2 * TW_AMP * timeline.amplitudeAt(b)
-        const segmentFor = (fromBeat: number, fromY: number, toY: number): Segment => {
-          const d = toY - fromY
-          if (Math.abs(d) < 0.5) return { direction: 'stay', beats: safeSnap }
-          return { direction: d < 0 ? 'up' : 'down', beats: Math.max(safeSnap, quantizeBeat(Math.abs(d) / perBeat(fromBeat), safeSnap)) }
-        }
-        const candidateSegs = segments.map((s, i) => {
-          if (i === idx - 1 && i >= 0) return segmentFor(pts[idx - 1].beat, pts[idx - 1].y, yI)
-          if (i === idx) return segmentFor(beatI, yI, yI1)
-          if (i === idx + 1 && i + 1 < pts.length) {
-            const pAfter = pts[idx + 2]
-            return pAfter ? segmentFor(beatI1, yI1, pAfter.y) : s
-          }
-          return s
+
+        const result = calculateEdgeDrag({
+          segments,
+          bpmTimeline: timeline,
+          startPosition,
+          edgeIndex: drag.index,
+          startBeat: drag.startBeat,
+          startY: drag.startY,
+          startPrevBeat: drag.startPrevBeat,
+          startNextBeat: drag.startNextBeat,
+          dxBeat,
+          dy,
+          snap: safeSnap,
         })
-        onSegmentsChange(candidateSegs)
+        if (result) onSegmentsChange(result)
         return
       }
       if (dragRef.current) {
