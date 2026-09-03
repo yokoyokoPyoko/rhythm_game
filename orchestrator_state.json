@@ -819,7 +819,7 @@
         "coder": "ses_f9b3cc886ffeBj8e02PH2KpXr6",
         "postmortem": "ses_f9b607a44ffetlIWT9J30YbS6s"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
