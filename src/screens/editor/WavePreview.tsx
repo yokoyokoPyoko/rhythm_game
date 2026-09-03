@@ -737,7 +737,7 @@ export default function WavePreview({
       e.preventDefault()
       return
     }
-    // empty area: begin a potential pan; if no movement, treat as add on mouseup
+    // empty area: begin a potential pan
     panRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -754,12 +754,12 @@ export default function WavePreview({
     const rect = canvas.getBoundingClientRect()
 
     if (editMode === 'ring') {
+      // Cancel any lingering pan from the first click of the double-click
+      panRef.current = null
       const hit = nearestRingIndex(e.clientX)
       if (hit < 0) {
         const beat = quantizeBeat(xToBeatLocal(e.clientX - rect.left, rect.width), safeSnap)
         addRingAt(beat)
-        // Clear panRef so the subsequent mouseup does not add a duplicate ring
-        panRef.current = null
       }
       return
     }
