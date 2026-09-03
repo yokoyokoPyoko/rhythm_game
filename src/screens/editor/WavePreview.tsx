@@ -727,17 +727,17 @@ export default function WavePreview({
       return
     }
 
-    // ring mode: isolated layer for add/drag/delete
+    // ring mode: isolated layer for add/drag/delete (T142: left-click only for select/drag)
     const hit = nearestRingIndex(e.clientX)
     if (hit >= 0) {
-      onSelectRing?.(hit)
       if (e.button === 0) {
+        onSelectRing?.(hit)
         dragRef.current = { index: hit }
       }
       e.preventDefault()
       return
     }
-    // empty area: begin a potential pan
+    // empty area: begin a potential pan (any button)
     panRef.current = {
       startX: e.clientX,
       startY: e.clientY,
