@@ -810,14 +810,14 @@
       "finished": 1788387867.8042407
     },
     "T138": {
-      "attempts": 4,
+      "attempts": 6,
       "status": "running",
-      "started": 1788393300.9072325,
+      "started": 1788394424.4275477,
       "cycles": 1,
       "sessions": {
-        "qa": null,
+        "qa": "ses_f9b6efbc9ffeB08shh3rtRmyfX",
         "coder": "ses_f9bc48497ffeua77mCwWz9uMvO",
-        "postmortem": "ses_f9bc00e71ffeQxctw53Xja4zy0"
+        "postmortem": null
       },
       "gate_b_golden": false
     }
