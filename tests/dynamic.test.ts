@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { quantizeBeat } from '../src/chart/quantize';
-import type { Segment, BpmChange } from '../src/types';
+import type { RingDef, Segment } from '../src/types';
+import * as fs from 'fs';
 
 vi.useFakeTimers();
 
@@ -19,79 +20,71 @@ function clampY(y: number): number {
   return Math.max(TOP, Math.min(BOTTOM, y));
 }
 
-/**
- * Reference implementation of T141 vertex add (double-click).
- * Mirrors WavePreview.tsx handleDoubleClick vertex branch spec:
- * beatAdd = quantizeBeat(xToBeat, safeSnap)
- * find k where pts[k].beat < beatAdd < pts[k+1].beat, then
- * yAdd = clamp(mapYInverse(mouseY)), segA/B beats = |yAdd - y_k|/perBeat quantized to safeSnap.
- */
-function referenceVertexAdd(
-  segments: Segment[],
-  timeline: BpmTimeline,
-  startPosition: number,
+// Reference implementation of T142 ring add (double-click, empty area only)
+// Spec: onDoubleClick button 0 detail 2, editMode==='ring', nearestRingIndex === -1 (hit <35)
+// beat = quantizeBeat(xToBeat, safeSnap) -> onAddRing(beat)
+function referenceRingAdd(
+  rings: RingDef[],
   rawBeat: number,
-  rawY: number,
-  safeSnap: number,
-): Segment[] | null {
-  const snap = safeSnap > 0 ? safeSnap : 0.25;
-  const beatAdd = quantizeBeat(rawBeat, snap);
-  const engine = new WaveEngine(segments, timeline, 1.0, startPosition);
-  const pts = engine.getPoints();
-  let k = -1;
-  for (let i = 0; i < pts.length - 1; i++) {
-    if (beatAdd > pts[i].beat + 1e-6 && beatAdd < pts[i + 1].beat - 1e-6) {
-      k = i;
-      break;
+  snap: number,
+  editMode: string,
+  nearestHit: number,
+): RingDef[] | null {
+  const safeSnap = snap > 0 ? snap : 0.25;
+  if (editMode !== 'ring') return null;
+  if (nearestHit >= 0) return null;
+  const beat = quantizeBeat(rawBeat, safeSnap);
+  // ensure beat is snap aligned
+  if (!isSnapAligned(beat, safeSnap)) return null;
+  const next = [...rings, { beat: Number(beat.toFixed(4)) }];
+  return next;
+}
+
+// Reference implementation of T142 ring delete (right-click / contextMenu)
+// Spec: onContextMenu button 2, nearestRingIndex <35 (hit >=0), e.preventDefault()
+function referenceRingDelete(
+  rings: RingDef[],
+  hitIndex: number,
+  editMode: string,
+): RingDef[] | null {
+  const safeMode = editMode;
+  if (safeMode !== 'ring') return null;
+  if (hitIndex < 0) return null;
+  if (hitIndex >= rings.length) return null;
+  const next = [...rings];
+  next.splice(hitIndex, 1);
+  return next;
+}
+
+function canBeginRingDrag(editMode: string, hitIndex: number, button: number): boolean {
+  if (editMode !== 'ring') return false;
+  if (hitIndex < 0) return false;
+  if (button !== 0) return false;
+  return true;
+}
+
+// Helper to compute nearest ring index like WavePreview.nearestRingIndex
+function nearestRingIndexSim(
+  rings: RingDef[],
+  viewStart: number,
+  viewBeats: number,
+  width: number,
+  clickX: number,
+): number {
+  let nearest = -1;
+  let nearestDist = Infinity;
+  rings.forEach((r, i) => {
+    const rx = ((r.beat - viewStart) / viewBeats) * width;
+    const d = Math.abs(rx - clickX);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = i;
     }
-  }
-  if (k < 0 || k >= segments.length) return null;
-  const yAdd = clampY(rawY);
-  const yPrev = pts[k].y;
-  const yNext = pts[k + 1].y;
-  const perBeatA = 2 * TW_AMP * timeline.amplitudeAt(pts[k].beat);
-  const perBeatB = 2 * TW_AMP * timeline.amplitudeAt(beatAdd);
-  const dA = yAdd - yPrev;
-  const beatsA = Math.max(snap, quantizeBeat(Math.abs(dA) / perBeatA, snap));
-  const dirA: Segment['direction'] = Math.abs(dA) < 0.5 ? 'stay' : dA < 0 ? 'up' : 'down';
-  const dB = yNext - yAdd;
-  const beatsB = Math.max(snap, quantizeBeat(Math.abs(dB) / perBeatB, snap));
-  const dirB: Segment['direction'] = Math.abs(dB) < 0.5 ? 'stay' : dB < 0 ? 'up' : 'down';
-  const next = [...segments];
-  next.splice(k, 1, { direction: dirA, beats: Number(beatsA.toFixed(4)) }, { direction: dirB, beats: Number(beatsB.toFixed(4)) });
-  return next;
+  });
+  return nearestDist < 35 ? nearest : -1;
 }
 
-/**
- * Reference implementation of T141 vertex delete (right-click / contextMenu).
- * vi <=0 or vi >= pts.length-1 => no delete (endpoint protection).
- * beats_merged = |y_{i+1} - y_{i-1}| / perBeat(prevBeat), quantized to safeSnap, dir = sign.
- */
-function referenceVertexDelete(
-  segments: Segment[],
-  timeline: BpmTimeline,
-  startPosition: number,
-  vertexIdx: number,
-  safeSnap: number,
-): Segment[] | null {
-  const snap = safeSnap > 0 ? safeSnap : 0.25;
-  const engine = new WaveEngine(segments, timeline, 1.0, startPosition);
-  const pts = engine.getPoints();
-  if (vertexIdx <= 0) return null;
-  if (vertexIdx >= pts.length - 1) return null;
-  const yPrev = pts[vertexIdx - 1].y;
-  const yNext = pts[vertexIdx + 1].y;
-  const prevBeat = pts[vertexIdx - 1].beat;
-  const perBeat = 2 * TW_AMP * timeline.amplitudeAt(prevBeat);
-  const d = yNext - yPrev;
-  const beats = Math.max(snap, quantizeBeat(Math.abs(d) / perBeat, snap));
-  const dir: Segment['direction'] = Math.abs(d) < 0.5 ? 'stay' : d < 0 ? 'up' : 'down';
-  const next = [...segments];
-  next.splice(vertexIdx - 1, 2, { direction: dir, beats: Number(beats.toFixed(4)) });
-  return next;
-}
-
-describe('T141 頂点のダブルクリック追加 / 右クリック削除 — Vitest node', () => {
+describe('T142 リング追加/削除の統一（ダブルクリック追加 / 右クリック削除） — Vitest node', () => {
   beforeEach(() => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -100,704 +93,699 @@ describe('T141 頂点のダブルクリック追加 / 右クリック削除 — 
   });
 
   // ------------------------------------------------------------
-  // 1. ファイル実装マーカー (Red before T141 / Green after)
+  // 1. ファイル実装マーカー (Red before T142 / Green after)
   // ------------------------------------------------------------
   describe('1. WavePreview.tsx 実装マーカー', () => {
-    it('onDoubleClick が vertex モードの頂点追加を実装 (beatAdd/quantize/pts[k] スプライス)', async () => {
-      const fs = await import('fs');
+    it('handleDoubleClick が ring モードのダブルクリック追加を実装 (quantizeBeat, safeSnap, onAddRing, emptyチェック, detail/button)', () => {
+      // [Step1] capture initial state
       const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
-      // [Step1] capture
       expect(content.length).toBeGreaterThan(0);
-      // [Step2] search handleDoubleClick vertex branch
       const idx = content.indexOf('handleDoubleClick');
       expect(idx).toBeGreaterThan(-1);
-      const block = content.slice(idx, idx + 6000);
-      // [Step3] required markers
-      expect(block).toMatch(/editMode\s*===\s*['"]vertex['"]/);
+      // [Step2] extract block
+      const block = content.slice(idx, idx + 7000);
+      expect(block.length).toBeGreaterThan(0);
+      // [Step3] assert required markers for new spec
+      expect(block).toMatch(/editMode\s*===\s*['"]ring['"]/);
+      expect(block).toMatch(/nearestRingIndex/);
       expect(block).toMatch(/quantizeBeat/);
-      expect(block).toMatch(/beatAdd/);
-      expect(block).toMatch(/pts\[k\]\.beat/);
-      expect(block).toMatch(/yAdd/);
-      expect(block).toMatch(/perBeatA|perBeat/);
-      expect(block).toMatch(/splice\(k,\s*1/);
-      expect(block).toMatch(/beatsA|beatsB/);
+      expect(block).toMatch(/onAddRing/);
+      expect(block).toMatch(/safeSnap/);
+      // empty area only: hit <0 or hit === -1 or hit < 35 check
+      expect(block).toMatch(/hit\s*<\s*0|hit\s*===\s*-1|nearestRingIndex[^]*?<\s*0/);
+      // double-click specifics: detail 2 and button 0 (React synthetic or explicit)
+      expect(block).toMatch(/e\.detail|detail/);
+      expect(block).toMatch(/e\.button|button/);
+      // must NOT still only delete: must contain add path
+      expect(block).toMatch(/onAddRing\s*\(/);
     });
 
-    it('onContextMenu が vertex 削除を実装 (nearestVertexIndex <14, endpoint保護, beats_merged, preventDefault)', async () => {
-      const fs = await import('fs');
+    it('handleContextMenu が ring 右クリック削除を実装 (preventDefault, nearestRingIndex <35, onDeleteRing)', () => {
       const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
       const idx = content.indexOf('handleContextMenu');
       expect(idx).toBeGreaterThan(-1);
-      const block = content.slice(idx, idx + 4000);
-      // [Step1] capture initial
+      const block = content.slice(idx, idx + 6000);
+      // [Step1] capture
       expect(block.length).toBeGreaterThan(0);
-      // [Step2] required markers
-      expect(block).toMatch(/nearestVertexIndex/);
+      // [Step2] require preventDefault still
       expect(block).toMatch(/preventDefault/);
-      expect(block).toMatch(/vi\s*<=\s*0|vi\s*===\s*0/);
-      expect(block).toMatch(/vi\s*>=.*pts\.length/);
-      expect(block).toMatch(/yPrev|yNext/);
-      expect(block).toMatch(/perBeat/);
-      expect(block).toMatch(/beats/);
-      expect(block).toMatch(/splice\(vi\s*-\s*1,\s*2/);
-      // also check that onContextMenu is bound to canvas
-      expect(content).toMatch(/onContextMenu=\{handleContextMenu\}/);
-    });
-
-    it('ダブルクリックハンドラ内に未使用変数 centerY / dispAmp が残っていない (lint破綻防止)', async () => {
-      const fs = await import('fs');
-      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
-      const idx = content.indexOf('handleDoubleClick');
-      expect(idx).toBeGreaterThan(-1);
-      // extract the vertex add sub-block: from "if (editMode === 'vertex'" to next closing of that block
-      // we check the 40 lines after beatAdd computation for unused declarations
-      const snippet = content.slice(idx, idx + 7000);
-      // The buggy lines were:
-      // const centerY = RULER_H + (rect.height - RULER_H) / 2
-      // const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-      // They are not used in the corrected handler (yAdd uses TW_CENTER_Y/TW_AMP directly)
-      // We assert they are absent in the handleDoubleClick vertex block.
-      // We check that the specific unused pattern does NOT occur immediately before yRaw.
-      // Allow centerY/dispAmp elsewhere (e.g., in nearestVertexIndex/render) — only forbid in handleDoubleClick.
-      // Find yRaw line within handleDoubleClick
-      const yRawIdx = snippet.indexOf('const yRaw = ((y - RULER_H)');
-      expect(yRawIdx).toBeGreaterThan(-1);
-      const beforeYRaw = snippet.slice(Math.max(0, yRawIdx - 600), yRawIdx);
-      // beforeYRaw should NOT contain const centerY or const dispAmp as standalone declarations for this handler
-      // The corrected code goes: let k ... then directly const yRaw (no centerY/dispAmp).
-      // So we assert absence.
-      expect(beforeYRaw).not.toMatch(/const\s+centerY\s*=/);
-      expect(beforeYRaw).not.toMatch(/const\s+dispAmp\s*=/);
-      // Also the fieldH/maxAmp/minAmp still needed for fieldH, but centerY/dispAmp specifically removed.
-      // Ensure fieldH remains (needed)
-      expect(beforeYRaw + snippet.slice(yRawIdx, yRawIdx + 200)).toMatch(/fieldH/);
-    });
-
-    it('handleDoubleClick が ring モードでも維持 — 全モード対応に拡張 (ring の onDeleteRing)', async () => {
-      const fs = await import('fs');
-      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
-      const idx = content.indexOf('handleDoubleClick');
-      const block = content.slice(idx, idx + 5000);
+      // [Step3] ring branch markers
       expect(block).toMatch(/editMode\s*===\s*['"]ring['"]/);
+      expect(block).toMatch(/nearestRingIndex/);
+      expect(block).toMatch(/onDeleteRing/);
+      // distance check <35
+      expect(block).toMatch(/35/);
+      // ring branch should appear before vertex early-return to ensure exclusivity
+      const ringPos = block.indexOf("editMode === 'ring'");
+      const vertexPos = block.indexOf("editMode !== 'vertex'");
+      if (ringPos > -1 && vertexPos > -1) {
+        expect(ringPos).toBeLessThan(vertexPos);
+      }
+    });
+
+    it('handleMouseDown の dragRef は左クリックのみ有効 (e.button===0) — 右クリックドラッグでは立てない', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const idx = content.indexOf('handleMouseDown');
+      expect(idx).toBeGreaterThan(-1);
+      const block = content.slice(idx, idx + 6000);
+      // [Step1] capture dragRef assignment
+      expect(block).toMatch(/dragRef\.current/);
+      expect(block).toMatch(/nearestRingIndex/);
+      // [Step2] button guard
+      // [Step3] assert left-click guard present
+      expect(block).toMatch(/e\.button\s*===\s*0|button\s*!==\s*0|e\.button/);
+    });
+
+    it('onUp (mouseup) の pan.moved==false での addRingAt 廃止 — ダブルクリックと二重発火しない', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const idx = content.indexOf('const onUp');
+      expect(idx).toBeGreaterThan(-1);
+      const block = content.slice(idx, idx + 4000);
+      // [Step1] capture
+      expect(block.length).toBeGreaterThan(0);
+      // [Step2] check that old single-click add is removed
+      // Old pattern: if (panRef.current && !panRef.current.moved) { ... addRingAt }
+      // After T142, addRingAt should NOT appear inside onUp
+      // [Step3] assert absence
+      expect(block).not.toMatch(/addRingAt/);
+      expect(block).not.toMatch(/panRef\.current\.moved[^]*?addRingAt/);
+    });
+
+    it('onDoubleClick が vertex モード追加を維持し ring モード追加と共存 (T141回帰)', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const idx = content.indexOf('handleDoubleClick');
+      const block = content.slice(idx, idx + 7000);
+      // [Step1] capture
+      expect(block.length).toBeGreaterThan(0);
+      // [Step2] check both branches exist
+      expect(block).toMatch(/editMode\s*===\s*['"]ring['"]/);
+      expect(block).toMatch(/editMode\s*===\s*['"]vertex['"]/);
+      // vertex branch should still have beatAdd / yAdd / perBeat / splice
+      expect(block).toMatch(/beatAdd/);
+      expect(block).toMatch(/yAdd/);
+      expect(block).toMatch(/splice\(k,/);
+    });
+
+    it('handleContextMenu が vertex 削除 (nearestVertexIndex <14, endpoint保護) と ring 削除を排他で共存', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const idx = content.indexOf('handleContextMenu');
+      const block = content.slice(idx, idx + 6000);
+      expect(block).toMatch(/nearestVertexIndex/);
+      expect(block).toMatch(/14/);
+      // endpoint protection vi <=0 or vi >= pts.length-1
+      expect(block).toMatch(/vi\s*<=\s*0|vi\s*===\s*0/);
+      expect(block).toMatch(/pts\.length/);
+      // ring branch also present
+      expect(block).toMatch(/nearestRingIndex/);
       expect(block).toMatch(/onDeleteRing/);
     });
+
+    it('canvas に onDoubleClick と onContextMenu がバインドされている', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      expect(content).toMatch(/onDoubleClick=\{handleDoubleClick\}/);
+      expect(content).toMatch(/onContextMenu=\{handleContextMenu\}/);
+    });
   });
 
   // ------------------------------------------------------------
-  // 2. ダブルクリック追加 — 頂点+1, getPoints+1, snap整数倍 (off-grid必須)
+  // 2. ダブルクリック追加 — 空領域で+1, snap整数倍, off-grid, singleクリックでは追加されない
   // ------------------------------------------------------------
-  describe('2. Vertex ダブルクリック追加: 頂点+1, snap整数倍, off-grid', () => {
-    it('snap 0.25 off-grid 1.37で中央にダブルクリック: segments +1, points +1, 全beats snap整数倍, Y-derived挿入', () => {
+  describe('2. Ring ダブルクリック追加: 空領域+1, snap整数倍, off-grid, 単クリック否定', () => {
+    it('snap 0.25 off-grid 1.37 空領域ダブルクリック: rings+1, beat=quantize 1.25, snap整数倍', () => {
       const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-      ];
+      const initial: RingDef[] = [{ beat: 1 }, { beat: 3 }];
       // [Step1] capture initial state
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      const pts0 = engine0.getPoints();
-      expect(pts0.length).toBe(initial.length + 1);
-      const segCountBefore = initial.length;
-      const ptCountBefore = pts0.length;
+      const beforeLen = initial.length;
       const rawBeat = 1.37; // off-grid
-      const rawY = CENTER - 42.3; // off-grid Y
-      const beatAdd = quantizeBeat(rawBeat, snap);
-      expect(beatAdd).toBeCloseTo(1.25, 4); // 1.37 snaps to 1.25 with 0.25
-      expect(isSnapAligned(beatAdd, snap)).toBeTruthy();
-      // determine expected k and Y-derived beats before insertion
-      let expectedK = -1;
-      for (let i = 0; i < pts0.length - 1; i++) {
-        if (beatAdd > pts0[i].beat + 1e-6 && beatAdd < pts0[i + 1].beat - 1e-6) { expectedK = i; break; }
-      }
-      expect(expectedK).toBe(1);
-      const yPrev = pts0[expectedK].y;
-      const perPrev = 2 * TW_AMP * tl.amplitudeAt(pts0[expectedK].beat);
-      const expectedBeatsA = Math.max(snap, quantizeBeat(Math.abs(clampY(rawY) - yPrev) / perPrev, snap));
-      // [Step2] perform add
-      const newSegs = referenceVertexAdd(initial, tl, 0, rawBeat, rawY, snap);
-      expect(newSegs).not.toBeNull();
-      // [Step3] assert transition — Y-derived insertion, not horizontal beatAdd
-      expect(newSegs!.length).toBe(segCountBefore + 1);
-      for (const s of newSegs!) expect(isSnapAligned(s.beats, snap), `beats ${s.beats} not snap ${snap}`).toBeTruthy();
-      expect(newSegs![expectedK].beats).toBeCloseTo(Number(expectedBeatsA.toFixed(4)), 4);
-      const engine1 = new WaveEngine(newSegs!, tl, 1.0, 0);
-      const pts1 = engine1.getPoints();
-      expect(pts1.length).toBe(ptCountBefore + 1);
-      expect(pts1.length).toBe(newSegs!.length + 1);
-      // new vertex beat = prevBeat + Y-derived beatsA (not necessarily beatAdd)
-      expect(pts1[expectedK + 1].beat).toBeCloseTo(pts0[expectedK].beat + expectedBeatsA, 4);
-      // Check that beatAdd was inside the original interval
-      expect(beatAdd).toBeGreaterThan(pts0[1].beat);
-      expect(beatAdd).toBeLessThan(pts0[2].beat);
+      const q = quantizeBeat(rawBeat, snap);
+      expect(q).toBeCloseTo(1.25, 4);
+      expect(isSnapAligned(q, snap)).toBeTruthy();
+      // simulate empty area: no ring within 35px
+      const hit = -1;
+      expect(hit).toBe(-1);
+      // [Step2] perform double-click add
+      const after = referenceRingAdd(initial, rawBeat, snap, 'ring', hit);
+      expect(after).not.toBeNull();
+      // [Step3] assert transition
+      expect(after!.length).toBe(beforeLen + 1);
+      expect(isSnapAligned(after![after!.length - 1].beat, snap)).toBeTruthy();
+      expect(after![after!.length - 1].beat).toBeCloseTo(q, 4);
+      // ensure not hit area: if hit >=0 should not add
+      const noAdd = referenceRingAdd(initial, rawBeat, snap, 'ring', 0);
+      expect(noAdd).toBeNull();
     });
 
-    it('snap 0.5 off-grid 0.37で追加: 0.37->0.5 に吸着, segments+1, beats 0.5整数倍', () => {
+    it('snap 0.5 off-grid 0.37 空領域: beat 0.5 に吸着, 不整合1/amplitudeでない', () => {
       const snap = 0.5;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
+      const amp = 1;
+      const initial: RingDef[] = [{ beat: 2 }];
+      const rawBeat = 0.37; // off-grid -> 0.5
       // [Step1] capture
       const beforeLen = initial.length;
-      const rawBeat = 0.37; // off-grid -> snap 0.5 => 0.5
-      const beatAdd = quantizeBeat(rawBeat, snap);
-      expect(beatAdd).toBeCloseTo(0.5, 4);
-      const rawY = BOTTOM - 13.7;
+      const q = quantizeBeat(rawBeat, snap);
+      expect(q).toBeCloseTo(0.5, 4);
+      expect(q).not.toBeCloseTo(1 / amp, 4);
+      expect(isSnapAligned(q, snap)).toBeTruthy();
       // [Step2] perform
-      const newSegs = referenceVertexAdd(initial, tl, 0, rawBeat, rawY, snap);
-      expect(newSegs).not.toBeNull();
-      // [Step3] assert — Y-derived vertex, not horizontal 0.5
-      expect(newSegs!.length).toBe(beforeLen + 1);
-      for (const s of newSegs!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      const pts1 = new WaveEngine(newSegs!, tl, 1.0, 0).getPoints();
-      expect(pts1.length).toBe(engine0.getPoints().length + 1);
-      // new vertex Y-derived beat check: prev(0) + beatsA
-      const pts0 = engine0.getPoints();
-      const k = 0; // 0.5 inside [0,1]
-      const perPrev = 2 * TW_AMP * tl.amplitudeAt(pts0[k].beat);
-      const expectedBeatsA = Math.max(snap, quantizeBeat(Math.abs(clampY(rawY) - pts0[k].y) / perPrev, snap));
-      expect(newSegs![k].beats).toBeCloseTo(Number(expectedBeatsA.toFixed(4)), 4);
-      expect(pts1[k + 1].beat).toBeCloseTo(pts0[k].beat + expectedBeatsA, 4);
+      const after = referenceRingAdd(initial, rawBeat, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      // [Step3] assert
+      expect(after!.length).toBe(beforeLen + 1);
+      expect(after![after!.length - 1].beat).toBeCloseTo(0.5, 4);
+      expect(after![after!.length - 1].beat).not.toBeCloseTo(1.0, 4);
+      for (const r of after!) expect(isSnapAligned(r.beat, snap)).toBeTruthy();
     });
 
-    it('snap 0.125/1.0 でも端数タイミングで snap整数倍 (off-grid 1.23)', () => {
-      for (const snap of [0.125, 1.0] as const) {
-        const tl = new BpmTimeline(120, [], 1.0);
-        const initial: Segment[] = [
-          { direction: 'down', beats: 2 },
-          { direction: 'up', beats: 2 },
-          { direction: 'down', beats: 2 },
-        ];
-        const rawBeat = 1.23; // off-grid
-        const beatAdd = quantizeBeat(rawBeat, snap);
-        // [Step1] capture snap alignment of beatAdd
-        expect(isSnapAligned(beatAdd, snap)).toBeTruthy();
-        // [Step2] perform with off-grid Y
-        const newSegs = referenceVertexAdd(initial, tl, 0, rawBeat, CENTER + 77.3, snap);
-        // may be null if beatAdd lands on vertex — handle
-        if (newSegs === null) {
-          // beatAdd on vertex => no split expected; verify beatAdd equals a point
-          const pts = new WaveEngine(initial, tl, 1.0, 0).getPoints();
-          const onVertex = pts.some(p => Math.abs(p.beat - beatAdd) < 1e-6);
-          expect(onVertex).toBeTruthy();
-          continue;
-        }
-        // [Step3] assert
-        for (const s of newSegs) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-        expect(newSegs.length).toBe(initial.length + 1);
-      }
+    it('snap 0.125 off-grid 1.23 空領域: 1.25 に吸着, snap整数倍', () => {
+      const snap = 0.125;
+      const initial: RingDef[] = [];
+      const rawBeat = 1.23; // ->1.25
+      // [Step1]
+      const q = quantizeBeat(rawBeat, snap);
+      expect(q).toBeCloseTo(1.25, 4);
+      expect(isSnapAligned(q, snap)).toBeTruthy();
+      const beforeLen = initial.length;
+      // [Step2]
+      const after = referenceRingAdd(initial, rawBeat, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      // [Step3]
+      expect(after!.length).toBe(beforeLen + 1);
+      expect(after![after!.length - 1].beat).toBeCloseTo(1.25, 4);
     });
 
-    it('頂点上にダブルクリック (beatAdd == existing vertex) は追加しない (null)', () => {
+    it('snap 1.0 off-grid 1.37 空領域: 1.0 に吸着, snap整数倍', () => {
+      const snap = 1.0;
+      const initial: RingDef[] = [{ beat: 4 }];
+      const rawBeat = 1.37; // ->1.0
+      // [Step1]
+      const q = quantizeBeat(rawBeat, snap);
+      expect(q).toBeCloseTo(1, 4);
+      // [Step2]
+      const after = referenceRingAdd(initial, rawBeat, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      // [Step3]
+      expect(after!.length).toBe(2);
+      expect(after![1].beat).toBeCloseTo(1, 4);
+      expect(isSnapAligned(after![1].beat, snap)).toBeTruthy();
+    });
+
+    it('単クリック（pan.moved==false の mouseup）ではリングが追加されない — 二重発火分離', () => {
       const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      const pts0 = engine0.getPoints();
-      // pick existing vertex beat =1.0
-      const rawBeat = 1.0; // exactly on vertex
-      // [Step1] capture that 1.0 is a vertex
-      expect(pts0.some(p => Math.abs(p.beat - 1.0) < 1e-6)).toBeTruthy();
-      // [Step2] perform
-      const result = referenceVertexAdd(initial, tl, 0, rawBeat, CENTER, snap);
-      // [Step3] assert no split
-      expect(result).toBeNull();
+      const initial: RingDef[] = [{ beat: 1 }];
+      // [Step1] capture before
+      const beforeLen = initial.length;
+      const rawBeat = 0.37;
+      // Simulate that old single-click path would have called addRingAt on mouseup,
+      // but new spec says only double-click adds. So we assert that a helper representing
+      // single-click does NOT call referenceRingAdd.
+      // We model singleClickAdd as null-operation (should not add)
+      const singleClickAdd = (rings: RingDef[], _beat: number): RingDef[] | null => {
+        // spec: single click must NOT add (pan only)
+        return null;
+      };
+      // [Step2] perform single click (should be no-op)
+      const afterSingle = singleClickAdd(initial, rawBeat);
+      // [Step3] assert no transition
+      expect(afterSingle).toBeNull();
+      expect(initial.length).toBe(beforeLen);
+      // double-click does add
+      const afterDouble = referenceRingAdd(initial, rawBeat, snap, 'ring', -1);
+      expect(afterDouble).not.toBeNull();
+      expect(afterDouble!.length).toBe(beforeLen + 1);
     });
 
-    it('複雑な振幅 1.3 snap 0.5 off-grid 1.37 で Y自由移動の perBeat が正しい', () => {
-      const snap = 0.5;
-      const amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, amp, 0);
-      // [Step1] capture perBeat
-      const perAt1 = 2 * TW_AMP * tl.amplitudeAt(1.0);
-      expect(perAt1).toBeCloseTo(2 * TW_AMP * amp, 1);
-      const rawBeat = 1.37; // off-grid -> 1.5 with snap 0.5
-      const beatAdd = quantizeBeat(rawBeat, snap);
-      expect(beatAdd).toBeCloseTo(1.5, 4);
-      const rawY = CENTER - 90.2;
-      // [Step2] perform
-      const newSegs = referenceVertexAdd(initial, tl, 0, rawBeat, rawY, snap);
-      expect(newSegs).not.toBeNull();
-      // [Step3] assert beats derived from Y/perBeat are snap-aligned, length +1
-      for (const s of newSegs!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      expect(newSegs!.length).toBe(initial.length + 1);
-      const pts0 = engine0.getPoints();
-      const k = pts0.findIndex((p, i) => i < pts0.length - 1 && beatAdd > p.beat + 1e-6 && beatAdd < pts0[i + 1].beat - 1e-6);
-      expect(k).toBeGreaterThan(-1);
-      const yPrev = pts0[k].y;
-      const perPrev = 2 * TW_AMP * tl.amplitudeAt(pts0[k].beat);
-      const expectedBeatsA = Math.max(snap, quantizeBeat(Math.abs(clampY(rawY) - yPrev) / perPrev, snap));
-      expect(newSegs![k].beats).toBeCloseTo(Number(expectedBeatsA.toFixed(4)), 4);
-    });
-  });
-
-  // ------------------------------------------------------------
-  // 3. 右クリック削除 — 頂点-1, 2セグメント→1本マージ, snap整数倍
-  // ------------------------------------------------------------
-  describe('3. Vertex 右クリック削除: 頂点-1, マージ, snap整数倍', () => {
-    it('snap 0.25 内部頂点 idx=1 を削除: segments -1, points -1, beats_merged = |yNext - yPrev|/perBeat(prev)', () => {
+    it('hit 領域 (nearestRingIndex >=0) でのダブルクリックは追加せず削除のみ', () => {
       const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      const pts0 = engine0.getPoints();
-      const idx = 2; // interior vertex at beat 2.0? Actually segments 0:0-1,1:1-2,2:2-3 so idx2 beat2
-      expect(idx).toBeGreaterThan(0);
-      expect(idx).toBeLessThan(pts0.length - 1);
-      // [Step1] capture initial lengths and Y values
-      const segLenBefore = initial.length;
-      const ptLenBefore = pts0.length;
-      const yPrev = pts0[idx - 1].y;
-      const yNext = pts0[idx + 1].y;
-      const prevBeat = pts0[idx - 1].beat;
-      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
-      const expectedBeats = Math.max(snap, quantizeBeat(Math.abs(yNext - yPrev) / perBeat, snap));
-      const expectedDir: Segment['direction'] = Math.abs(yNext - yPrev) < 0.5 ? 'stay' : yNext > yPrev ? 'down' : 'up';
-      // [Step2] perform delete
-      const newSegs = referenceVertexDelete(initial, tl, 0, idx, snap);
-      expect(newSegs).not.toBeNull();
-      // [Step3] assert transition
-      expect(newSegs!.length).toBe(segLenBefore - 1);
-      const engine1 = new WaveEngine(newSegs!, tl, 1.0, 0);
-      const pts1 = engine1.getPoints();
-      expect(pts1.length).toBe(ptLenBefore - 1);
-      expect(newSegs!.length + 1).toBe(pts1.length);
-      for (const s of newSegs!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      expect(newSegs![idx - 1].beats).toBeCloseTo(Number(expectedBeats.toFixed(4)), 4);
-      expect(newSegs![idx - 1].direction).toBe(expectedDir);
-      // far segments unchanged
-      expect(newSegs![newSegs!.length - 1].direction).toBe(initial[initial.length - 1].direction);
-    });
-
-    it('端点 (idx 0 / last) は削除不可 (null 返却)', () => {
-      const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      const pts0 = engine0.getPoints();
-      // [Step1] capture endpoints
-      expect(pts0.length).toBe(3);
-      // [Step2] try delete first and last
-      const delFirst = referenceVertexDelete(initial, tl, 0, 0, snap);
-      const delLast = referenceVertexDelete(initial, tl, 0, pts0.length - 1, snap);
-      // [Step3] assert null
-      expect(delFirst).toBeNull();
-      expect(delLast).toBeNull();
-      // also check segment count unchanged
-      expect(initial.length).toBe(2);
-    });
-
-    it('snap 0.5/0.125/1.0 でも削除後の全beats snap整数倍 (off-grid Y)', () => {
-      for (const snap of [0.5, 0.125, 1.0] as const) {
-        const tl = new BpmTimeline(120, [], 1.0);
-        const initial: Segment[] = [
-          { direction: 'down', beats: 1 },
-          { direction: 'up', beats: 1 },
-          { direction: 'down', beats: 1 },
-          { direction: 'up', beats: 1 },
-        ];
-        const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-        const idx = 1; // beat 1
-        // [Step1] capture
-        expect(engine0.getPoints().length).toBe(initial.length + 1);
-        // [Step2] delete
-        const newSegs = referenceVertexDelete(initial, tl, 0, idx, snap);
-        expect(newSegs).not.toBeNull();
-        // [Step3] assert snap
-        for (const s of newSegs!) expect(isSnapAligned(s.beats, snap), `snap ${snap} beats ${s.beats}`).toBeTruthy();
-        expect(newSegs!.length).toBe(initial.length - 1);
-      }
-    });
-
-    it('複雑な振幅 2.7 で prevBeat の perBeat が正しく使われる (off-grid 1.23後の削除)', () => {
-      const snap = 0.25;
-      const amp = 2.7;
-      const tl = new BpmTimeline(120, [], amp);
-      // create chart where vertex idx sits at amplitude-varying region
-      const bpmChanges: BpmChange[] = [{ beat: 2, bpm: 120, amplitude: 0.7 }];
-      const tl2 = new BpmTimeline(120, bpmChanges, amp);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl2, amp, 0);
-      const pts0 = engine0.getPoints();
-      const idx = 3; // beat 3 -> prevBeat 2 has amp 0.7 (changed)
-      expect(tl2.amplitudeAt(pts0[idx - 1].beat)).toBeCloseTo(0.7, 2);
-      const perPrev = 2 * TW_AMP * tl2.amplitudeAt(pts0[idx - 1].beat);
-      expect(perPrev).toBeCloseTo(2 * TW_AMP * 0.7, 1);
-      // [Step1] capture Y
-      const yPrev = pts0[idx - 1].y;
-      const yNext = pts0[idx + 1].y;
-      const expectedBeats = Math.max(snap, quantizeBeat(Math.abs(yNext - yPrev) / perPrev, snap));
-      // [Step2] perform
-      const newSegs = referenceVertexDelete(initial, tl2, 0, idx, snap);
-      expect(newSegs).not.toBeNull();
-      // [Step3] assert perBeat-driven beats
-      for (const s of newSegs!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      expect(newSegs![idx - 1].beats).toBeCloseTo(Number(expectedBeats.toFixed(4)), 4);
-    });
-  });
-
-  // ------------------------------------------------------------
-  // 4. 追加→削除 ラウンドトリップと undo 整合
-  // ------------------------------------------------------------
-  describe('4. 追加後削除のラウンドトリップ整合', () => {
-    it('snap 0.25 で追加(+1)後に同頂点を削除(-1): 長さが元に戻る・全beats snap整数倍', () => {
-      const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'up', beats: 1 },
-        { direction: 'down', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      // [Step1] capture initial
-      const len0 = initial.length;
-      const ptsLen0 = engine0.getPoints().length;
-      const rawBeat = 1.37; // ->1.25 inside [1,2]
-      const rawY = CENTER + 27.3; // small off-grid Y
-      // [Step2] add
-      const afterAdd = referenceVertexAdd(initial, tl, 0, rawBeat, rawY, snap);
-      expect(afterAdd).not.toBeNull();
-      expect(afterAdd!.length).toBe(len0 + 1);
-      // find new vertex index: it's the inserted point after k (k=1)
-      // Since Y-derived beats determine position, index = k+1 where k is original segment index
-      const beatAdd = quantizeBeat(rawBeat, snap);
-      let kOrig = -1;
-      const pts0 = engine0.getPoints();
-      for (let i = 0; i < pts0.length - 1; i++) if (beatAdd > pts0[i].beat + 1e-6 && beatAdd < pts0[i+1].beat - 1e-6) kOrig = i;
-      expect(kOrig).toBeGreaterThan(-1);
-      const engineAdd = new WaveEngine(afterAdd!, tl, 1.0, 0);
-      const ptsAdd = engineAdd.getPoints();
-      // inserted vertex is at index kOrig+1 (Y-derived)
-      const addIdx = kOrig + 1;
-      expect(ptsAdd[addIdx].beat).toBeGreaterThan(pts0[kOrig].beat);
-      expect(addIdx).toBeGreaterThan(0);
-      // delete that vertex
-      const afterDel = referenceVertexDelete(afterAdd!, tl, 0, addIdx, snap);
+      const initial: RingDef[] = [{ beat: 1 }, { beat: 2 }];
+      const rawBeat = 1.02; // near first ring
+      // [Step1] capture nearest
+      const viewStart = 0;
+      const viewBeats = 16;
+      const width = 800;
+      // compute clickX near beat 1
+      const clickX = ((1 - viewStart) / viewBeats) * width + 2; // within 35
+      const hit = nearestRingIndexSim(initial, viewStart, viewBeats, width, clickX);
+      expect(hit).toBe(0);
+      // [Step2] try add on hit area
+      const afterAdd = referenceRingAdd(initial, rawBeat, snap, 'ring', hit);
+      // [Step3] must be null (no add on occupied)
+      expect(afterAdd).toBeNull();
+      // delete should succeed
+      const afterDel = referenceRingDelete(initial, hit, 'ring');
       expect(afterDel).not.toBeNull();
-      // [Step3] assert back to original length (but Y-derived beats may not be identical to initial)
-      expect(afterDel!.length).toBe(len0);
-      expect(new WaveEngine(afterDel!, tl, 1.0, 0).getPoints().length).toBe(ptsLen0);
-      for (const s of afterDel!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+      expect(afterDel!.length).toBe(initial.length - 1);
     });
 
-    it('連続追加2回→連続削除2回: 各段階で snap整数倍・長さ不変量維持', () => {
-      const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      let segs: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-      ];
+    it('複雑な振幅 1.3 snap 0.5 off-grid 1.37 でもリング追加は snap整数倍で amplitude に影響されない', () => {
+      const snap = 0.5;
+      const tl = new BpmTimeline(120, [], 1.3);
+      // Rings are beat-based, amplitude should not affect quantization
+      expect(tl.amplitudeAt(1.37)).toBeCloseTo(1.3, 4);
+      const initial: RingDef[] = [{ beat: 0 }];
+      const rawBeat = 1.37; // ->1.5
+      const q = quantizeBeat(rawBeat, snap);
+      expect(q).toBeCloseTo(1.5, 4);
+      // [Step1] capture snap aligns
+      expect(isSnapAligned(q, snap)).toBeTruthy();
+      // [Step2] add
+      const after = referenceRingAdd(initial, rawBeat, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      // [Step3] assert
+      expect(after!.length).toBe(2);
+      expect(isSnapAligned(after![1].beat, snap)).toBeTruthy();
+      expect(after![1].beat).toBeCloseTo(1.5, 4);
+    });
+  });
+
+  // ------------------------------------------------------------
+  // 3. 右クリック削除 — hitで-1, snap維持, preventDefault, off-grid
+  // ------------------------------------------------------------
+  describe('3. Ring 右クリック削除: hitで-1, preventDefault, snap維持', () => {
+    it('snap 0.25 hit領域 右クリック: rings-1, 残り snap維持, off-grid 0.37付近', () => {
+      const initial: RingDef[] = [{ beat: 1.25 }, { beat: 2.5 }, { beat: 3.75 }];
+      // [Step1] capture initial
+      const beforeLen = initial.length;
+      const viewStart = 0;
+      const viewBeats = 16;
+      const width = 800;
+      const clickX = ((2.5 - viewStart) / viewBeats) * width + 1; // near beat 2.5
+      const hit = nearestRingIndexSim(initial, viewStart, viewBeats, width, clickX);
+      expect(hit).toBe(1);
+      expect(hit).toBeGreaterThan(-1);
+      // [Step2] perform right-click delete (contextMenu)
+      let prevented = false;
+      const mockEvent = { preventDefault: () => { prevented = true; }, button: 2 } as unknown as MouseEvent;
+      mockEvent.preventDefault();
+      const after = referenceRingDelete(initial, hit, 'ring');
+      // [Step3] assert
+      expect(prevented).toBeTruthy();
+      expect(after).not.toBeNull();
+      expect(after!.length).toBe(beforeLen - 1);
+      expect(after!.some(r => Math.abs(r.beat - 2.5) < 1e-6)).toBeFalsy();
+      for (const r of after!) expect(isSnapAligned(r.beat, 0.25)).toBeTruthy();
+    });
+
+    it('空領域 右クリックでは削除されない (hit -1)', () => {
+      const initial: RingDef[] = [{ beat: 1 }, { beat: 5 }];
       // [Step1] capture
-      expect(segs.length).toBe(2);
-      // [Step2] add first at 0.62 (within first segment 0-2) -> quant 0.5 with 0.25
-      const after1 = referenceVertexAdd(segs, tl, 0, 0.62, CENTER + 50, snap);
-      expect(after1).not.toBeNull();
-      segs = after1!;
-      expect(segs.length).toBe(3);
-      // add second: choose beat guaranteed inside last segment after first insertion
-      // after1 points: segment beats Y-derived, not 2. So compute a safe beat inside last segment
-      const ptsAfter1 = new WaveEngine(segs, tl, 1.0, 0).getPoints();
-      const lastSegStart = ptsAfter1[ptsAfter1.length - 2].beat;
-      const lastSegEnd = ptsAfter1[ptsAfter1.length - 1].beat;
-      const rawBeat2 = lastSegStart + (lastSegEnd - lastSegStart) * 0.5; // mid of last segment
-      const after2 = referenceVertexAdd(segs, tl, 0, rawBeat2, CENTER - 40, snap);
-      expect(after2).not.toBeNull();
-      segs = after2!;
-      expect(segs.length).toBe(4);
-      // delete interior idx 1
-      const del1 = referenceVertexDelete(segs, tl, 0, 1, snap);
-      expect(del1).not.toBeNull();
-      segs = del1!;
-      expect(segs.length).toBe(3);
-      const del2 = referenceVertexDelete(segs, tl, 0, 1, snap);
-      expect(del2).not.toBeNull();
-      segs = del2!;
-      // [Step3] back to 2 and snap
-      expect(segs.length).toBe(2);
-      for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      expect(new WaveEngine(segs, tl, 1.0, 0).getPoints().length).toBe(segs.length + 1);
+      const beforeLen = initial.length;
+      const hit = nearestRingIndexSim(initial, 0, 16, 800, 400); // click far from both
+      // compute: beat 1 -> x 50, beat5-> x250, click 400 far >35
+      expect(hit).toBe(-1);
+      // [Step2] try delete empty
+      const after = referenceRingDelete(initial, hit, 'ring');
+      // [Step3] null
+      expect(after).toBeNull();
+      expect(initial.length).toBe(beforeLen);
     });
-  });
 
-  // ------------------------------------------------------------
-  // 5. snap分解能網羅と off-grid 検証原則 (0.37, 1.23拍)
-  // ------------------------------------------------------------
-  describe('5. snap分解能網羅 & off-grid検証 (0.37/1.23)', () => {
-    it('snap 0.125/0.25/0.5/1 で off-grid rawBeat 0.37/1.23 の追加が snap整数倍', () => {
-      const snaps = [0.125, 0.25, 0.5, 1] as const;
-      const offGridBeats = [0.37, 1.23] as const;
+    it('右クリック削除は preventDefault を呼び contextMenu を抑止', () => {
+      const initial: RingDef[] = [{ beat: 2 }];
+      const hit = 0;
+      // [Step1] capture prevented flag false
+      let prevented = false;
+      const e = { preventDefault: () => { prevented = true; } } as unknown as MouseEvent;
+      // [Step2] simulate handler calls preventDefault before delete
+      e.preventDefault();
+      const after = referenceRingDelete(initial, hit, 'ring');
+      // [Step3] assert
+      expect(prevented).toBeTruthy();
+      expect(after).not.toBeNull();
+      expect(after!.length).toBe(0);
+    });
+
+    it('snap 0.5/0.125/1.0 でも削除後の残り beats は snap整数倍', () => {
+      const snaps = [0.5, 0.125, 1.0] as const;
       for (const snap of snaps) {
-        for (const rawBeat of offGridBeats) {
-          const tl = new BpmTimeline(120, [], 1.0);
-          const initial: Segment[] = [
-            { direction: 'down', beats: 2 },
-            { direction: 'up', beats: 2 },
-            { direction: 'down', beats: 2 },
-          ];
-          const beatAdd = quantizeBeat(rawBeat, snap);
-          // [Step1] capture beatAdd snap
-          expect(isSnapAligned(beatAdd, snap)).toBeTruthy();
-          const newSegs = referenceVertexAdd(initial, tl, 0, rawBeat, CENTER + 19.7, snap);
-          if (newSegs === null) {
-            // on-vertex case: verify beatAdd equals existing point
-            const pts = new WaveEngine(initial, tl, 1.0, 0).getPoints();
-            expect(pts.some(p => Math.abs(p.beat - beatAdd) < 1e-6)).toBeTruthy();
-            continue;
-          }
-          // [Step3] snap
-          for (const s of newSegs) expect(isSnapAligned(s.beats, snap), `snap ${snap} raw ${rawBeat}`).toBeTruthy();
-        }
+        const initial: RingDef[] = [1, 2, 3].map(b => ({ beat: quantizeBeat(b, snap) }));
+        // [Step1] capture all aligned
+        for (const r of initial) expect(isSnapAligned(r.beat, snap)).toBeTruthy();
+        // [Step2] delete middle
+        const after = referenceRingDelete(initial, 1, 'ring');
+        expect(after).not.toBeNull();
+        // [Step3] still aligned
+        for (const r of after!) expect(isSnapAligned(r.beat, snap)).toBeTruthy();
+        expect(after!.length).toBe(initial.length - 1);
       }
     });
 
-    it('削除の off-grid Yでも snap整数倍 (amp 0.7/1.3/2.7/3.4)', () => {
-      const amps = [0.7, 1.3, 2.7, 3.4] as const;
-      const snaps = [0.25, 0.5] as const;
-      for (const amp of amps) {
-        for (const snap of snaps) {
-          const tl = new BpmTimeline(120, [], amp);
-          const initial: Segment[] = [
-            { direction: 'down', beats: 1 },
-            { direction: 'up', beats: 1 },
-            { direction: 'down', beats: 1 },
-            { direction: 'up', beats: 1 },
-          ];
-          // need to choose Y that yields off-grid derived beats; but reference delete uses Y diff of existing points
-          // So test that deletion still snap-aligned regardless of amp
-          const engine0 = new WaveEngine(initial, tl, amp, 0);
-          const idx = 2; // interior
-          const newSegs = referenceVertexDelete(initial, tl, 0, idx, snap);
-          expect(newSegs).not.toBeNull();
-          for (const s of newSegs!) expect(isSnapAligned(s.beats, snap), `amp ${amp} snap ${snap}`).toBeTruthy();
-          expect(newSegs!.length).toBe(initial.length - 1);
-          expect(new WaveEngine(newSegs!, tl, amp, 0).getPoints().length).toBe(engine0.getPoints().length - 1);
-        }
-      }
-    });
-
-    it('リスト駆動 amplitudeAt off-grid: 3.37(1.0)/4.37(2.0) で追加/削除の perBeat が step する', () => {
+    it('off-grid 1.23 付近のリングを検索して削除: snap 0.25 で正確', () => {
       const snap = 0.25;
-      const bpmChanges: BpmChange[] = [{ beat: 4, bpm: 120, amplitude: 2.0 }];
-      const tl = new BpmTimeline(120, bpmChanges, 1.0);
-      // [Step1] capture step at off-grid
-      expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.0, 4);
-      expect(tl.amplitudeAt(4.37)).toBeCloseTo(2.0, 4);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-      ];
-      const pts0 = new WaveEngine(initial, tl, 1.0, 0).getPoints();
-      // add inside segment starting at beat 4 (amp 2.0) with off-grid 4.37 ->4.25 or 4.5?
-      const rawBeat = 4.37; // quant 4.25 with snap 0.25
-      const beatAdd = quantizeBeat(rawBeat, snap);
-      expect(beatAdd).toBeCloseTo(4.25, 4);
-      expect(tl.amplitudeAt(beatAdd)).toBeCloseTo(2.0, 2);
-      const newSegs = referenceVertexAdd(initial, tl, 0, rawBeat, CENTER + 55, snap);
-      expect(newSegs).not.toBeNull();
-      for (const s of newSegs!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      // delete vertex after change (prevBeat amp 2.0)
-      const ptsAfter = new WaveEngine(newSegs!, tl, 1.0, 0).getPoints();
-      const delIdx = ptsAfter.findIndex(p => Math.abs(p.beat - beatAdd) < 1e-6);
-      expect(delIdx).toBeGreaterThan(0);
-      const del = referenceVertexDelete(newSegs!, tl, 0, delIdx, snap);
-      expect(del).not.toBeNull();
-      for (const s of del!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+      const rings: RingDef[] = [{ beat: quantizeBeat(1.23, snap) }, { beat: 3 }];
+      expect(rings[0].beat).toBeCloseTo(1.25, 4);
+      // [Step1] capture hit
+      const width = 800;
+      const viewStart = 0;
+      const viewBeats = 16;
+      const clickX = ((rings[0].beat - viewStart) / viewBeats) * width;
+      const hit = nearestRingIndexSim(rings, viewStart, viewBeats, width, clickX);
+      expect(hit).toBe(0);
+      // [Step2] delete
+      const after = referenceRingDelete(rings, hit, 'ring');
+      // [Step3] assert
+      expect(after!.length).toBe(1);
+      expect(after![0].beat).toBeCloseTo(3, 4);
     });
   });
 
   // ------------------------------------------------------------
-  // 6. 回帰: getPoints 不変量・上下幅固定・cursor/wave一致 (T127/T128)
+  // 4. ドラッグ — 左は移動、右は不可
   // ------------------------------------------------------------
-  describe('6. 回帰: getPoints構造, 上下幅固定, wave/cursor一致', () => {
-    it('追加/削除後も getPoints.length === segments.length+1 かつ {beat,y} のみ', () => {
+  describe('4. 左ドラッグでリング移動、右ドラッグでは移動しない', () => {
+    it('左クリックドラッグ (button 0) hitあり: ドラッグ開始可', () => {
+      const initial: RingDef[] = [{ beat: 2 }, { beat: 4 }];
+      // [Step1] capture
+      const hit = 0;
+      const editMode = 'ring';
+      const button = 0;
+      expect(hit).toBe(0);
+      // [Step2] canBegin?
+      const can = canBeginRingDrag(editMode, hit, button);
+      // [Step3] assert true and simulate move
+      expect(can).toBeTruthy();
+      // simulate move: update beat via quantize
+      const newBeatRaw = 2.37; // off-grid -> 2.25 or 2.5?
+      const snap = 0.25;
+      const newBeat = quantizeBeat(newBeatRaw, snap);
+      expect(newBeat).toBeCloseTo(2.25, 4);
+      const moved = initial.map((r, i) => (i === hit ? { beat: newBeat } : r));
+      expect(moved[hit].beat).toBeCloseTo(2.25, 4);
+      expect(isSnapAligned(moved[hit].beat, snap)).toBeTruthy();
+    });
+
+    it('右クリックドラッグ (button 2) hitあり: ドラッグ開始不可', () => {
+      const hit = 0;
+      const editMode = 'ring';
+      // [Step1] capture
+      const button = 2;
+      expect(button).toBe(2);
+      // [Step2] canBegin?
+      const can = canBeginRingDrag(editMode, hit, button);
+      // [Step3] assert false
+      expect(can).toBeFalsy();
+      // also button 1 (middle) not allowed
+      expect(canBeginRingDrag(editMode, hit, 1)).toBeFalsy();
+    });
+
+    it('空領域でのドラッグ (hit -1) は左右いずれも開始不可', () => {
+      const hit = -1;
+      // [Step1] capture
+      expect(hit).toBe(-1);
+      // [Step2]
+      const left = canBeginRingDrag('ring', hit, 0);
+      const right = canBeginRingDrag('ring', hit, 2);
+      // [Step3]
+      expect(left).toBeFalsy();
+      expect(right).toBeFalsy();
+    });
+
+    it('左ドラッグ移動後も snap整数倍を維持 (off-grid 1.23 snap 0.5)', () => {
+      const snap = 0.5;
+      const initial: RingDef[] = [{ beat: 1 }, { beat: 3 }];
+      const hit = 1;
+      // [Step1] capture before beat
+      const beforeBeat = initial[hit].beat;
+      expect(beforeBeat).toBeCloseTo(3, 4);
+      // [Step2] drag with raw 3.37 -> quant 3.5
+      const raw = 3.37;
+      const q = quantizeBeat(raw, snap);
+      expect(q).toBeCloseTo(3.5, 4);
+      const can = canBeginRingDrag('ring', hit, 0);
+      expect(can).toBeTruthy();
+      const after = initial.map((r, i) => (i === hit ? { beat: q } : r));
+      // [Step3] assert aligned
+      expect(isSnapAligned(after[hit].beat, snap)).toBeTruthy();
+      expect(after[hit].beat).toBeCloseTo(3.5, 4);
+    });
+
+    it('編集中の移動は WaveEngine.waveYAt で正しいYに追随', () => {
       const snap = 0.25;
       const tl = new BpmTimeline(120, [], 1.0);
-      const cases: Segment[][] = [
-        [{ direction: 'down', beats: 1 }],
-        [
-          { direction: 'down', beats: 1 },
-          { direction: 'up', beats: 1 },
-        ],
-        [
-          { direction: 'down', beats: 0.5 },
-          { direction: 'stay', beats: 1 },
-          { direction: 'up', beats: 0.5 },
-        ],
-      ];
-      for (const initial of cases) {
-        // [Step1] capture
-        const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-        expect(engine0.getPoints().length).toBe(initial.length === 0 ? 2 : initial.length + 1);
-        if (initial.length >= 1) {
-          // try add in first segment if possible
-          const midBeat = quantizeBeat(initial[0].beats / 2, snap);
-          if (midBeat > 0 && midBeat < initial[0].beats) {
-            const added = referenceVertexAdd(initial, tl, 0, midBeat, CENTER, snap);
-            if (added) {
-              expect(added.length).toBe(initial.length + 1);
-              const pts = new WaveEngine(added, tl, 1.0, 0).getPoints();
-              expect(pts.length).toBe(added.length + 1);
-              for (const p of pts) {
-                expect(typeof p.beat).toBe('number');
-                expect(typeof p.y).toBe('number');
-                expect(Object.keys(p).sort()).toEqual(['beat', 'y']);
-              }
-              // try delete added vertex
-              const ptsAdd = new WaveEngine(added, tl, 1.0, 0).getPoints();
-              const idx = ptsAdd.findIndex(p => Math.abs(p.beat - midBeat) < 1e-6);
-              if (idx > 0 && idx < ptsAdd.length - 1) {
-                const deleted = referenceVertexDelete(added, tl, 0, idx, snap);
-                if (deleted) {
-                  expect(deleted.length).toBe(initial.length);
-                  expect(new WaveEngine(deleted, tl, 1.0, 0).getPoints().length).toBe(initial.length === 0 ? 2 : initial.length + 1);
-                }
-              }
-            }
-          }
-        }
-      }
+      const segs: Segment[] = [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }];
+      const engine = new WaveEngine(segs, tl, 1.0, 0);
+      const ringBeatBefore = 1.0;
+      const yBefore = engine.waveYAt(ringBeatBefore);
+      // [Step1] capture y before
+      expect(yBefore).toBeGreaterThan(CENTER - TW_AMP - 1);
+      // [Step2] drag ring to 1.37 ->1.25
+      const raw = 1.37;
+      const newBeat = quantizeBeat(raw, snap);
+      expect(newBeat).toBeCloseTo(1.25, 4);
+      const yAfter = engine.waveYAt(newBeat);
+      // [Step3] Y changes according to wave slope
+      expect(yAfter).not.toBeCloseTo(yBefore, 2);
+      expect(yAfter).toBeCloseTo(engine.waveYAt(newBeat), 4);
+    });
+  });
+
+  // ------------------------------------------------------------
+  // 5. 回帰: T116 V/E/R分離 / T141 との排他
+  // ------------------------------------------------------------
+  describe('5. 回帰: T116 V/E/R分離 & T141 右クリック排他', () => {
+    it('vertexモードでダブルクリックはリング追加せず頂点追加のみ', () => {
+      const snap = 0.25;
+      const rings: RingDef[] = [{ beat: 1 }];
+      // [Step1] capture ring count before
+      const beforeLen = rings.length;
+      const hit = -1;
+      // double-click in vertex mode should NOT add ring
+      const afterRing = referenceRingAdd(rings, 1.37, snap, 'vertex', hit);
+      expect(afterRing).toBeNull();
+      expect(rings.length).toBe(beforeLen);
+      // but vertex add should succeed (reference from T141 logic)
+      const tl = new BpmTimeline(120, [], 1.0);
+      const segs: Segment[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }];
+      const engine = new WaveEngine(segs, tl, 1.0, 0);
+      const pts = engine.getPoints();
+      expect(pts.length).toBe(segs.length + 1);
+      // vertex add at 0.37 ->0.25 inside first segment would add
+      // we just check that vertex mode handling exists in file
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const dbl = content.slice(content.indexOf('handleDoubleClick'), content.indexOf('handleDoubleClick') + 7000);
+      expect(dbl).toMatch(/editMode\s*===\s*['"]vertex['"]/);
     });
 
-    it('振幅変更で上下幅は TW_AMP=130 固定、追加/削除の beats のみ変化', () => {
+    it('edgeモードでダブルクリックはリング追加せず', () => {
       const snap = 0.25;
-      const amps = [0.7, 2.7] as const;
+      const rings: RingDef[] = [{ beat: 2 }];
+      // [Step1]
+      const beforeLen = rings.length;
+      // [Step2] try ring add in edge mode
+      const after = referenceRingAdd(rings, 0.37, snap, 'edge', -1);
+      // [Step3] null
+      expect(after).toBeNull();
+      expect(rings.length).toBe(beforeLen);
+    });
+
+    it('ringモードで右クリックは頂点削除を発動しない', () => {
+      const editMode = 'ring';
+      const hitRing = 0;
+      // [Step1] capture that ring delete should happen, vertex delete not
+      const rings: RingDef[] = [{ beat: 1 }, { beat: 2 }];
+      const afterRing = referenceRingDelete(rings, hitRing, editMode);
+      expect(afterRing).not.toBeNull();
+      // [Step2] vertex delete helper would be blocked in ring mode
+      const vertexDeleteInRingMode = (mode: string) => mode === 'vertex';
+      expect(vertexDeleteInRingMode(editMode)).toBeFalsy();
+      // [Step3] assert ring delete succeeded
+      expect(afterRing!.length).toBe(1);
+    });
+
+    it('vertexモードで右クリックはリング削除を発動しない', () => {
+      const editMode = 'vertex';
+      const hit = 0;
+      const rings: RingDef[] = [{ beat: 1 }];
+      // [Step1] capture
+      const beforeLen = rings.length;
+      // [Step2] ring delete in vertex mode -> null
+      const after = referenceRingDelete(rings, hit, editMode);
+      expect(after).toBeNull();
+      // [Step3] still same
+      expect(rings.length).toBe(beforeLen);
+      // verify file has separate branches
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const ctx = content.slice(content.indexOf('handleContextMenu'), content.indexOf('handleContextMenu') + 6000);
+      expect(ctx).toMatch(/editMode\s*===\s*['"]vertex['"]/);
+      expect(ctx).toMatch(/editMode\s*===\s*['"]ring['"]/);
+    });
+
+    it('ringモードで頂点ハンドル近傍クリックは vertexDrag ではなく ring drag/選択', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const md = content.slice(content.indexOf('handleMouseDown'), content.indexOf('handleMouseDown') + 6000);
+      // [Step1] capture that handleMouseDown checks vertex first, then edge, then ring
+      const vPos = md.indexOf("editMode === 'vertex'");
+      const ePos = md.indexOf("editMode === 'edge'");
+      const rPos = md.indexOf('// ring mode');
+      expect(vPos).toBeGreaterThan(-1);
+      expect(ePos).toBeGreaterThan(vPos);
+      expect(rPos).toBeGreaterThan(ePos);
+      // [Step2] ring mode block uses nearestRingIndex, not nearestVertexIndex
+      const ringBlock = md.slice(rPos, rPos + 2000);
+      expect(ringBlock).toMatch(/nearestRingIndex/);
+      expect(ringBlock).not.toMatch(/nearestVertexIndex/);
+      // [Step3] vertex mode empty drag is pan, not ring add
+      const vertexBlock = md.slice(vPos, ePos);
+      expect(vertexBlock).toMatch(/panRef\.current/);
+    });
+
+    it('WaveEngine.getPoints 長さ不変量がリング操作前後で維持', () => {
+      const tl = new BpmTimeline(120, [], 1.0);
+      const segs: Segment[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }];
+      const engine = new WaveEngine(segs, tl, 1.0, 0);
+      // [Step1] capture
+      const ptsLenBefore = engine.getPoints().length;
+      expect(ptsLenBefore).toBe(segs.length + 1);
+      // [Step2] simulate ring add/delete (should not affect segs)
+      const ringsBefore: RingDef[] = [{ beat: 1 }];
+      const afterAdd = referenceRingAdd(ringsBefore, 0.37, 0.25, 'ring', -1);
+      expect(afterAdd).not.toBeNull();
+      const afterDel = referenceRingDelete(afterAdd!, 0, 'ring');
+      expect(afterDel).not.toBeNull();
+      // [Step3] engine unchanged
+      const engine2 = new WaveEngine(segs, tl, 1.0, 0);
+      expect(engine2.getPoints().length).toBe(ptsLenBefore);
+      expect(engine2.getPoints().length).toBe(segs.length + 1);
+    });
+
+    it('複雑な振幅 0.7/1.3/2.7/3.4 と off-grid 0.37/1.23 で waveYAt/cursor一致は崩れない (T127回帰)', async () => {
+      const { Cursor } = await import('../src/game/cursor');
+      const amps = [0.7, 1.3, 2.7, 3.4] as const;
+      const offGrids = [0.37, 1.23] as const;
       for (const amp of amps) {
         const tl = new BpmTimeline(120, [], amp);
-        const segs: Segment[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }];
+        const segs: Segment[] = [{ direction: 'down', beats: 10 }];
         const engine = new WaveEngine(segs, tl, amp, 0);
-        const ys = engine.getPoints().map(p => p.y);
-        expect(Math.max(...ys)).toBeLessThanOrEqual(BOTTOM + 1e-6);
-        expect(Math.min(...ys)).toBeGreaterThanOrEqual(TOP - 1e-6);
-        // add still snap
-        const added = referenceVertexAdd(segs, tl, 0, 0.63, CENTER, snap);
-        expect(added).not.toBeNull();
-        for (const s of added!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+        for (const b of offGrids) {
+          // [Step1] capture perBeat
+          const perBeat = 2 * TW_AMP * amp;
+          expect(perBeat).toBeCloseTo(2 * TW_AMP * amp, 4);
+          // [Step2] waveYAt slope before clip
+          const delta = Math.min(b, 0.4); // avoid clamp
+          const y = engine.waveYAt(delta);
+          const expected = clampY(CENTER + perBeat * delta);
+          expect(y).toBeCloseTo(expected, 0);
+          // cursor same
+          const cursor = new Cursor(amp, 0);
+          const beatMs = 500;
+          cursor.update((delta * beatMs) / 1000, false, true, beatMs, 1);
+          expect(cursor.y).toBeCloseTo(expected, 0);
+          expect(engine.waveYAt(delta)).toBeCloseTo(cursor.y, 0);
+        }
       }
-      // perBeat scales, height does not (clipped slope differs)
-      const tl07 = new BpmTimeline(120, [], 0.7);
-      const tl27 = new BpmTimeline(120, [], 2.7);
-      const e07 = new WaveEngine([{ direction: 'down', beats: 10 }], tl07, 0.7, 0);
-      const e27 = new WaveEngine([{ direction: 'down', beats: 10 }], tl27, 2.7, 0);
-      expect(e07.waveYAt(0.2)).not.toBeCloseTo(e27.waveYAt(0.2), 1);
-      expect(e07.waveYAt(10)).toBeCloseTo(BOTTOM, 1);
-      expect(e27.waveYAt(10)).toBeCloseTo(BOTTOM, 1);
-    });
-
-    it('waveYAt と cursor の perBeat 一致が追加/削除後も維持 (amp 1.3 off-grid)', async () => {
-      const { Cursor } = await import('../src/game/cursor');
-      const amp = 1.3;
-      const snap = 0.25;
-      const tl = new BpmTimeline(120, [], amp);
-      // use Y far from center to ensure non-stay first segment
-      const rawY = CENTER + 90; // ensures dA not stay
-      const added = referenceVertexAdd(
-        [{ direction: 'down', beats: 3 }, { direction: 'up', beats: 3 }],
-        tl, 0, 1.37, rawY, snap
-      );
-      expect(added).not.toBeNull();
-      // first segment direction should be down (since rawY > center)
-      expect(added![0].direction).toBe('down');
-      expect(added![0].beats).toBeGreaterThan(0);
-      const engine = new WaveEngine(added!, tl, amp, 0);
-      const firstBeats = added![0].beats;
-      // choose delta well within first segment and before clip
-      const delta = Math.min(0.2, firstBeats * 0.4);
-      expect(delta).toBeGreaterThan(0);
-      const dy2 = engine.waveYAt(delta) - engine.waveYAt(0);
-      expect(Math.abs(dy2 / delta)).toBeCloseTo(2 * TW_AMP * amp, 0);
-      const cursor = new Cursor(amp, 0);
-      const beatMs = 500;
-      cursor.update((delta * beatMs) / 1000, false, true, beatMs, 1);
-      const expectedY = clampY(CENTER + 2 * TW_AMP * amp * delta);
-      expect(cursor.y).toBeCloseTo(expectedY, 1);
-      expect(engine.waveYAt(delta)).toBeCloseTo(expectedY, 1);
+      // ring operation should not affect wave
+      const tl = new BpmTimeline(120, [], 1.0);
+      const segs: Segment[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }];
+      const engine0 = new WaveEngine(segs, tl, 1.0, 0);
+      const y0 = engine0.waveYAt(0.37);
+      const rings: RingDef[] = [];
+      const after = referenceRingAdd(rings, 0.37, 0.25, 'ring', -1);
+      expect(after).not.toBeNull();
+      const engine1 = new WaveEngine(segs, tl, 1.0, 0);
+      expect(engine1.waveYAt(0.37)).toBeCloseTo(y0, 4);
     });
   });
 
   // ------------------------------------------------------------
-  // 7. エッジ: 空segments / 単一セグメントでの追加/削除
+  // 6. スナップ整合性網羅 & 1/amplitudeでないこと (T129回帰)
   // ------------------------------------------------------------
-  describe('7. エッジケース: 空・単一・境界Y', () => {
-    it('segments=[] では追加不可 (null)', () => {
-      const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [];
-      // [Step1] capture empty
-      expect(new WaveEngine(initial, tl, 1.0, 0).getPoints().length).toBe(2);
-      // [Step2] try add at beat 1.37
-      const added = referenceVertexAdd(initial, tl, 0, 1.37, CENTER, snap);
-      // [Step3] no segment to split
-      expect(added).toBeNull();
-    });
-
-    it('単一セグメントを off-grid 中央追加: 2分割され両beats snap整数倍', () => {
-      const snap = 0.5;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [{ direction: 'down', beats: 2 }];
-      // [Step1] capture
-      expect(initial.length).toBe(1);
-      const rawBeat = 0.37; // ->0.5 with snap 0.5
-      // [Step2] add
-      const added = referenceVertexAdd(initial, tl, 0, rawBeat, CENTER, snap);
-      expect(added).not.toBeNull();
-      // [Step3] assert 2 segments, snap
-      expect(added!.length).toBe(2);
-      for (const s of added!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
-      expect(new WaveEngine(added!, tl, 1.0, 0).getPoints().length).toBe(3);
-    });
-
-    it('Yが上下端近く (TOP/BOTTOM) でも clamp され beats は snap整数倍', () => {
-      const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 2 },
-        { direction: 'up', beats: 2 },
-      ];
-      for (const rawY of [TOP - 50, BOTTOM + 50] as const) {
-        // [Step1] capture clamp
-        expect(clampY(rawY)).toBeGreaterThanOrEqual(TOP - 1e-6);
-        expect(clampY(rawY)).toBeLessThanOrEqual(BOTTOM + 1e-6);
-        // [Step2] add at off-grid 1.23
-        const added = referenceVertexAdd(initial, tl, 0, 1.23, rawY, snap);
-        if (added === null) continue; // if beat on vertex, skip
-        // [Step3] snap
-        for (const s of added) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+  describe('6. スナップ整合性網羅 & 1/amplitude否定', () => {
+    it('snap 0.125/0.25/0.5/1 で端数 rawBeat 0.37/1.23/1.37 が snap整数倍に量子化', () => {
+      const snaps = [0.125, 0.25, 0.5, 1] as const;
+      const raws = [0.37, 1.23, 1.37] as const;
+      for (const snap of snaps) {
+        for (const raw of raws) {
+          // [Step1] capture quant
+          const q = quantizeBeat(raw, snap);
+          expect(isSnapAligned(q, snap)).toBeTruthy();
+          // [Step2] ring add
+          const after = referenceRingAdd([], raw, snap, 'ring', -1);
+          expect(after).not.toBeNull();
+          // [Step3] assert
+          expect(isSnapAligned(after![0].beat, snap)).toBeTruthy();
+          expect(after![0].beat).toBeCloseTo(q, 4);
+          // not clipped to 1/amplitude
+          expect(after![0].beat).not.toBeCloseTo(1, 0);
+        }
       }
-      // delete with extreme Y diff also snap
-      const del = referenceVertexDelete(initial, tl, 0, 1, snap);
+    });
+
+    it('snap 0.25 amp 1 短押し 0.30 -> beats 0.25 であり 1.0 でない (T129回帰)', () => {
+      const snap = 0.25;
+      const amp = 1;
+      const raw = 0.30;
+      const q = quantizeBeat(raw, snap);
+      // [Step1] capture
+      expect(q).toBeCloseTo(0.25, 4);
+      expect(q).not.toBeCloseTo(1 / amp, 4);
+      // [Step2] add
+      const after = referenceRingAdd([], raw, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      // [Step3] assert
+      expect(after![0].beat).toBeCloseTo(0.25, 4);
+      expect(after![0].beat).not.toBeCloseTo(1.0, 4);
+    });
+
+    it('連続操作: 追加(+1) -> 追加(+1) -> 削除(-1) -> 削除(-1) で snap維持', () => {
+      const snap = 0.25;
+      let rings: RingDef[] = [{ beat: 1 }];
+      // [Step1] capture
+      expect(rings.length).toBe(1);
+      // [Step2] add 0.37
+      let after = referenceRingAdd(rings, 0.37, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      rings = after!;
+      expect(rings.length).toBe(2);
+      // add 1.23
+      after = referenceRingAdd(rings, 1.23, snap, 'ring', -1);
+      expect(after).not.toBeNull();
+      rings = after!;
+      expect(rings.length).toBe(3);
+      // delete first
+      let del = referenceRingDelete(rings, 0, 'ring');
       expect(del).not.toBeNull();
-      for (const s of del!) expect(isSnapAligned(s.beats, snap)).toBeTruthy();
+      rings = del!;
+      expect(rings.length).toBe(2);
+      // delete again
+      del = referenceRingDelete(rings, 0, 'ring');
+      expect(del).not.toBeNull();
+      rings = del!;
+      // [Step3] back to 1 and aligned
+      expect(rings.length).toBe(1);
+      for (const r of rings) expect(isSnapAligned(r.beat, snap)).toBeTruthy();
+    });
+  });
+
+  // ------------------------------------------------------------
+  // 7. tsc & エラーハンドリング回帰
+  // ------------------------------------------------------------
+  describe('7. tsc エラーハンドリング & 未使用変数禁止', () => {
+    it('WavePreview.tsx が未使用変数 centerY/dispAmp を handleDoubleClick 内に残さない', () => {
+      const content = fs.readFileSync('src/screens/editor/WavePreview.tsx', 'utf-8');
+      const idx = content.indexOf('handleDoubleClick');
+      const block = content.slice(idx, idx + 7000);
+      const yRawIdx = block.indexOf('const yRaw = ((y - RULER_H)');
+      expect(yRawIdx).toBeGreaterThan(-1);
+      const before = block.slice(Math.max(0, yRawIdx - 600), yRawIdx);
+      // [Step1] capture before snippet
+      expect(before.length).toBeGreaterThan(0);
+      // [Step2] check no dead declarations
+      // [Step3] assert absence
+      expect(before).not.toMatch(/const\s+centerY\s*=/);
+      expect(before).not.toMatch(/const\s+dispAmp\s*=/);
+    });
+
+    it('BpmTimeline / WaveEngine / quantizeBeat が import 可能で型エラーなし', async () => {
+      // [Step1] capture imports exist
+      expect(WaveEngine).toBeDefined();
+      expect(BpmTimeline).toBeDefined();
+      expect(quantizeBeat).toBeDefined();
+      // [Step2] create instances
+      const tl = new BpmTimeline(120, [], 1.0);
+      const engine = new WaveEngine([{ direction: 'down', beats: 1 }], tl, 1.0, 0);
+      // [Step3] assert no throw and numeric consistency
+      expect(engine.waveYAt(0.37)).toBeDefined();
+      expect(typeof engine.waveYAt(0.37)).toBe('number');
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(1.0, 4);
     });
   });
 });

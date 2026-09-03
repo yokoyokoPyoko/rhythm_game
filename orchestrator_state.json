@@ -874,9 +874,15 @@
       "finished": 1788407370.0159862
     },
     "T142": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788407370.0178642
+      "started": 1788415272.7876883,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f9a9d146cffeY5cF7Z9gqwKqbS",
+        "coder": null
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

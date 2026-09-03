@@ -555,17 +555,7 @@ export default function WavePreview({
         dragRef.current = null
         return
       }
-      if (panRef.current && !panRef.current.moved) {
-        const canvas = canvasRef.current
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect()
-          const beat = xToBeatLocal(e.clientX - rect.left, rect.width)
-          // Ring mode only: click on empty area adds ring; other modes do not
-          if (editMode === 'ring') {
-            addRingAt(beat)
-          }
-        }
-      }
+
       panRef.current = null
     }
     window.addEventListener('mousemove', onMove)
@@ -741,7 +731,9 @@ export default function WavePreview({
     const hit = nearestRingIndex(e.clientX)
     if (hit >= 0) {
       onSelectRing?.(hit)
-      dragRef.current = { index: hit }
+      if (e.button === 0) {
+        dragRef.current = { index: hit }
+      }
       e.preventDefault()
       return
     }
@@ -763,7 +755,12 @@ export default function WavePreview({
 
     if (editMode === 'ring') {
       const hit = nearestRingIndex(e.clientX)
-      if (hit >= 0) onDeleteRing?.(hit)
+      if (hit < 0) {
+        const beat = quantizeBeat(xToBeatLocal(e.clientX - rect.left, rect.width), safeSnap)
+        addRingAt(beat)
+        // Clear panRef so the subsequent mouseup does not add a duplicate ring
+        panRef.current = null
+      }
       return
     }
 
@@ -809,6 +806,11 @@ export default function WavePreview({
 
   const handleContextMenu = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     e.preventDefault()
+    if (editMode === 'ring') {
+      const hit = nearestRingIndex(e.clientX)
+      if (hit >= 0) onDeleteRing?.(hit)
+      return
+    }
     if (editMode !== 'vertex' || !onSegmentsChange) return
 
     const vi = nearestVertexIndex(e.clientX, e.clientY)
@@ -893,7 +895,7 @@ export default function WavePreview({
       <p className="editor-hint" data-testid="wave-preview-hint">
         {editMode === 'vertex' && '頂点モード: ダブルクリックで追加、右クリックで削除、ドラッグで微調整。空白ドラッグでパン、ホイールでズーム'}
         {editMode === 'edge' && '辺モード: 辺をドラッグで左右上下に移動・選択。空白ドラッグでパン、ホイールでズーム'}
-        {editMode === 'ring' && 'リングモード: クリックで追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'ring' && 'リングモード: ダブルクリックで追加・右クリックで削除・ドラッグで移動。空白ドラッグでパン、ホイールでズーム'}
       </p>
     </div>
   )
