@@ -90,6 +90,7 @@ export default function WavePreview({
   })
   const dragRef = useRef<{ index: number } | null>(null)
   const vertexDragRef = useRef<{ index: number } | null>(null)
+  const edgeDragRef = useRef<{ index: number; startBeat: number; startPrevBeat: number; startNextBeat: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
@@ -522,6 +523,84 @@ export default function WavePreview({
         onSegmentsChange(candidateSegs)
         return
       }
+      if (edgeDragRef.current && onSegmentsChange) {
+        const x = e.clientX - rect.left
+        const rectH = rect.height
+        const fieldH = rectH - RULER_H
+        const drag = edgeDragRef.current
+        const idx = drag.index
+
+        // Horizontal delta in beats (quantized to safeSnap)
+        const beatRaw = xToBeatLocal(x, rect.width)
+        const dxBeat = beatRaw - drag.startBeat
+        const dxSnap = quantizeBeat(dxBeat, safeSnap)
+
+        // Vertical delta in field pixels, then converted to TW_AMP px
+        const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
+        const yNow = TW_CENTER_Y + yRaw * TW_AMP
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+        const pts = engineTmp.getPoints()
+        if (segments.length === 0) return
+
+        const dyRaw = yNow - pts[idx].y
+        const dy = Math.max(TW_CENTER_Y - TW_AMP - pts[idx].y, Math.min(TW_CENTER_Y + TW_AMP - pts[idx].y, dyRaw))
+
+        // New translated positions for both edge endpoints
+        const beatI = pts[idx].beat + dxSnap
+        const beatI1 = pts[idx + 1].beat + dxSnap
+        const clampBeat = Math.max(0, beatI)
+        let yI = pts[idx].y + dy
+        let yI1 = pts[idx + 1].y + dy
+        yI = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yI))
+        yI1 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yI1))
+
+        // per-beat pixel displacement (T131 list-driven) at each start beat
+        const perBeat = (b: number) => 2 * TW_AMP * timeline.amplitudeAt(b)
+
+        // Helper to compute beats/dir for a segment between two points
+        const segmentFor = (fromBeat: number, fromY: number, toY: number): Segment => {
+          const delta = toY - fromY
+          if (Math.abs(delta) < 0.5) return { direction: 'stay', beats: safeSnap }
+          const rawBeat = Math.max(safeSnap, Math.abs(delta) / perBeat(fromBeat))
+          const beats = Math.max(safeSnap, quantizeBeat(rawBeat, safeSnap))
+          const dir: 'up' | 'down' | 'stay' = delta < 0 ? 'up' : 'down'
+          return { direction: dir, beats }
+        }
+
+        const candidateSegs = segments.map((s, i) => {
+          // seg i-1: p_{i-1} -> p_i'
+          if (i === idx - 1 && i >= 0) {
+            const pPrev = pts[idx - 1]
+            return segmentFor(pPrev.beat, pPrev.y, yI)
+          }
+          // seg i: edge itself — translated by parallel shift; beat length preserved
+          if (i === idx) {
+            const origLen = pts[idx + 1].beat - pts[idx].beat
+            const dyPx = Math.abs(yI1 - yI)
+            // Horizontal priority (dx dominant): edge keeps its translated horizontal span
+            const dxDominant = Math.abs(dxSnap) > Math.abs(dyPx / perBeat(clampBeat))
+            let beatsI: number
+            if (dxDominant) {
+              beatsI = Math.max(safeSnap, quantizeBeat(origLen, safeSnap))
+            } else {
+              beatsI = Math.max(safeSnap, quantizeBeat(dyPx / perBeat(clampBeat), safeSnap))
+            }
+            const dir: 'up' | 'down' | 'stay' = dyPx < 0.5 ? 'stay' : yI1 < yI ? 'up' : 'down'
+            return { direction: dir, beats: beatsI }
+          }
+          // seg i+1: p_{i+1}' -> p_{i+2}
+          if (i === idx + 1 && i + 1 < pts.length) {
+            const pAfter = pts[idx + 2]
+            if (!pAfter) return s
+            return segmentFor(beatI1, yI1, pAfter.y)
+          }
+          return s
+        })
+
+        onSegmentsChange(candidateSegs)
+        return
+      }
       if (dragRef.current) {
         const x = e.clientX - rect.left
         const beat = xToBeatLocal(x, rect.width)
@@ -543,6 +622,10 @@ export default function WavePreview({
     const onUp = (e: MouseEvent) => {
       if (vertexDragRef.current) {
         vertexDragRef.current = null
+        return
+      }
+      if (edgeDragRef.current) {
+        edgeDragRef.current = null
         return
       }
       if (dragRef.current) {
@@ -703,6 +786,18 @@ export default function WavePreview({
       const eHit = nearestEdgeIndex(e.clientX, e.clientY)
       if (eHit >= 0) {
         onSelectSegment?.(eHit)
+        // T140: begin edge drag — record translation baseline for the segment
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+        const pts = engineTmp.getPoints()
+        const startPrevBeat = eHit > 0 ? pts[eHit - 1].beat : 0
+        const startNextBeat = eHit + 1 < pts.length ? pts[eHit + 1].beat : pts[pts.length - 1]?.beat ?? 0
+        edgeDragRef.current = {
+          index: eHit,
+          startBeat: pts[eHit].beat,
+          startPrevBeat,
+          startNextBeat,
+        }
         e.preventDefault()
         return
       }
@@ -745,7 +840,7 @@ export default function WavePreview({
   }
 
   const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (dragRef.current || vertexDragRef.current || panRef.current) return
+    if (dragRef.current || vertexDragRef.current || edgeDragRef.current || panRef.current) return
     // Hover interlink: detect nearest ring/edge/vertex under cursor and notify parent for list highlight
     const ringHit = nearestRingIndex(e.clientX)
     if (ringHit >= 0) {
@@ -802,7 +897,7 @@ export default function WavePreview({
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
         {editMode === 'vertex' && '頂点モード: 頂点をドラッグで位置・高さを微調整。空白ドラッグでパン、ホイールでズーム'}
-        {editMode === 'edge' && '辺モード: 辺をクリックで一括選択・プロパティ変更。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'edge' && '辺モード: 辺をドラッグで左右上下に移動・選択。空白ドラッグでパン、ホイールでズーム'}
         {editMode === 'ring' && 'リングモード: クリックで追加・ドラッグで移動・ダブルクリックで削除。空白ドラッグでパン、ホイールでズーム'}
       </p>
     </div>
