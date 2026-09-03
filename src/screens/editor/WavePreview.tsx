@@ -5,6 +5,13 @@ import { calculateVertexDrag, calculateEdgeDrag } from '../../game/editorDrag'
 import { TW_CENTER_Y, TW_AMP, WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
+export function computeVertexDrag(input: any) {
+  return calculateVertexDrag(input)
+}
+export function computeEdgeDrag(input: any) {
+  return calculateEdgeDrag(input)
+}
+
 const RULER_H = 22
 const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
