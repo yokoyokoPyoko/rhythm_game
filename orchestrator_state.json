@@ -891,7 +891,7 @@
     },
     "T143": {
       "attempts": 3,
-      "status": "running",
+      "status": "passed",
       "started": 1788430387.07826,
       "cycles": 1,
       "sessions": {
@@ -902,7 +902,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "qa",
-      "last_postmortem_at": 1788431283.880351
+      "last_postmortem_at": 1788431283.880351,
+      "finished": 1788431923.9454699
+    },
+    "T144": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788431923.94785
     }
   },
   "consecutive_no_action": 0
