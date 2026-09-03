@@ -6303,3 +6303,6 @@ src/screens/editor/WavePreview.tsx(791,13): error TS6133: 'dispAmp' is declared 
 2026-09-03 12:49:23,439 [INFO] Persisted session ses_f9a9d8c15ffeJWFA9nCnZhq95O for task=T141, role=reviewer
 2026-09-03 12:49:23,441 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: All task T141 requirements for vertex double-click addition and right-click deletion in WavePreview.tsx are fully implemented, type-safe, and adhere strictly to project conventions.
 2026-09-03 12:49:23,441 [INFO] [T141] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-09-03 12:49:23,480 [INFO] [T141] Building docs/ dist for GitHub Pages...
+2026-09-03 12:49:27,755 [INFO] [T141] Pushing latest build to GitHub...
+2026-09-03 12:49:30,015 [INFO] [T141] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
