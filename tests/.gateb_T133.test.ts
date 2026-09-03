@@ -445,21 +445,19 @@ describe('T133-4: 操作 Space判定・誤差・±10ms・保存/キャンセル 
 describe('T133-5: 回帰なし (T132/T102-103/T129/T127-128)', () => {
   beforeEach(() => setManualOffset(0));
 
-  it('T132: Step1 capture editor source → Step2 verify positionRef - getManualOffsetMs in record guards → Step3 numeric quantize correction', () => {
+  it('T132→T136/T138: Step1 capture editor source → Step2 verify positionRef raw (no -getManualOffsetMs) in record guards → Step3 numeric raw quantization', () => {
     const src = readFile('src/screens/EditorScreen.tsx');
-    // Step1-2: must have corrected pos
-    expect(src).toContain('positionRef.current - getManualOffsetMs()');
+    // T136/T138: recording uses raw positionRef (green bar = Play songNow). No subtraction.
+    expect(src).not.toContain('positionRef.current - getManualOffsetMs()');
     const guardCount = (src.match(/modeRef\.current === 'record'/g) || []).length;
     expect(guardCount, 'must have ≥3 record guards').toBeGreaterThanOrEqual(3);
-    // Step3: numeric: corrected beat differs from uncorrected
+    // Step3: numeric: raw beat is used as-is (lead does not shift recording)
     const tl = new BpmTimeline(120, [], 1.0);
     const snap = 0.25;
     const tapPos = 600; // 1.2 beats at 500ms/beat
-    const corrected = quantizeBeat(tl.msToBeat(tapPos - 80), snap);
-    const uncorr = quantizeBeat(tl.msToBeat(tapPos), snap);
-    expect(corrected).not.toBe(uncorr);
-    expect(isSnapAligned(corrected, snap)).toBe(true);
-    // Continuous trajectory uses uncorrected (raw pos)
+    const rawBeat = quantizeBeat(tl.msToBeat(tapPos), snap);
+    expect(isSnapAligned(rawBeat, snap)).toBe(true);
+    // Continuous trajectory uses raw pos (not manual-corrected)
     expect(src).toContain('timeline.msToBeat(pos)');
   });
 

@@ -327,18 +327,19 @@ describe('T138-2: Editor録音 beat B=msToBeat(greenPos) が Play songNow==beatT
     const snap = 0.25;
     setManualOffset(-80);
     const fromMs = 1000;
-    const ctxNow = 10.2;
+    const ctxNow = 10.25;
     const startCtx = 10.0;
     const startMs = fromMs;
     const rawPos = computeGreenPosRaw(startMs, ctxNow, startCtx);
-    expect(rawPos).toBeCloseTo(1200, 6); // 1000+200
+    expect(rawPos).toBeCloseTo(1250, 6); // 1000+250
     const B = computeRecordBeat(tl, rawPos, snap);
     const hit = tl.beatToMs(B);
     // Play would judge at hit = B beat
     expect(tl.msToBeat(hit)).toBeCloseTo(B, 4);
-    // Buggy with lead -80 would be 1200 - (-80)=1280? No, buggy subtracts lead (-80) => 1200 - (-80)=1280 bigger
+    // Buggy with lead -80 would be 1250 - (-80)=1330; both 1250 (2.5) and 1330 (2.75) land in
+    // different snap buckets at snap=0.25, so the recorded beat must differ from raw B.
     const buggyPos = computeGreenPosBuggy(startMs, ctxNow, startCtx, 0, -80);
-    expect(buggyPos).toBeCloseTo(1280, 6);
+    expect(buggyPos).toBeCloseTo(1330, 6);
     expect(computeRecordBeat(tl, buggyPos, snap)).not.toBeCloseTo(B, 4);
     setManualOffset(0);
   });
@@ -467,9 +468,10 @@ describe('T138-4: 回帰なし T135(音楽同期)/T102/T103/T129/T133/T137', () 
 
   it('Step1 T135 Editor playFrom uses getLeadMs(audioOffset)/1000 → Step2 inspect → Step3 preserved', () => {
     const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).toMatch(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
-    // Or via getLeadMs wrapper
+    // T138 centralizes the music lead via getLeadMs (audioOffset + manualOffset).
+    // playFrom must use the centralized helper (not a duplicate inline expression).
     const hasGetLead = src.includes('getLeadMs(audioOffset)');
+    expect(hasGetLead).toBeTruthy();
     expect(hasGetLead || src.includes('(audioOffset + getManualOffsetMs())')).toBeTruthy();
     // Ensure getLeadMs imported
     expect(src).toMatch(/import.*getLeadMs.*from.*clock/);
@@ -655,7 +657,11 @@ describe('T138-6: tsc & getLeadMs 一元化 & Game/Editor leadMs 重複解消', 
   it('Step1 capture no duplicate offsetSec in Editor tick → Step2 verify tick not using audioOffset+manual → Step3 only playFrom uses it', () => {
     const src = readFile('src/screens/EditorScreen.tsx');
     const tickIdx = src.indexOf('const tick = ()');
-    const tickSlice = src.slice(tickIdx, tickIdx + 5000);
+    // Bound the slice to the tick function body only (the tail of the function ends at
+    // the requestAnimationFrame(tick) line). Covering 5000 chars bleeds into playFrom,
+    // which legitimately contains getLeadMs. The tick itself must be leadMs-free.
+    const tickBodyEnd = src.indexOf('return () => cancelAnimationFrame(raf)');
+    const tickSlice = src.slice(tickIdx, tickBodyEnd);
     expect(tickSlice).not.toContain('(audioOffset + getManualOffsetMs())');
     expect(tickSlice).not.toContain('getLeadMs');
     // playFrom should be the sole place

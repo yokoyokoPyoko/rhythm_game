@@ -256,13 +256,14 @@ describe('T135-2: EditorScreen playFrom offsetSec includes manualOffsetMs (3-ste
     expect(getManualOffsetMs()).toBe(80);
 
     const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src, 'EditorScreen.tsx playFrom must use (audioOffset + getManualOffsetMs()) / 1000').toMatch(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)\s*\/\s*1000/);
-    const hasFixed = /\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/.test(src);
+    // T138: lead centralized in clock via getLeadMs(audioOffset) = audioOffset + manualOffsetMs
+    expect(src, 'EditorScreen.tsx playFrom must use getLeadMs(audioOffset) / 1000').toMatch(/getLeadMs\(audioOffset\)\s*\/\s*1000/);
+    const hasFixed = /getLeadMs\(audioOffset\)/.test(src);
     expect(hasFixed).toBe(true);
     const playFromIdx = src.indexOf('const playFrom');
     expect(playFromIdx).toBeGreaterThan(-1);
     const slice = src.slice(playFromIdx, playFromIdx + 2000);
-    expect(slice).toMatch(/getManualOffsetMs\(\)/);
+    expect(slice).toMatch(/getLeadMs\(audioOffset\)/);
     // Numeric shift: (100+80)/1000=0.18 vs 0.1
     const fixedAfter = computeEditorPlayFromParams(10.0, 0, audioOffset, 80).offsetSec;
     expect(fixedAfter).toBeCloseTo(0.18, 6);
@@ -291,17 +292,17 @@ describe('T135-2: EditorScreen playFrom offsetSec includes manualOffsetMs (3-ste
     expect(after.offsetSec).not.toBeCloseTo(before.offsetSec, 6);
   });
 
-  it('EditorScreen imports getManualOffsetMs and uses it in playFrom', () => {
+  it('EditorScreen imports getLeadMs and uses it in playFrom (T138 centralized lead)', () => {
     const src = readFile('src/screens/EditorScreen.tsx');
-    expect(src).toMatch(/import.*getManualOffsetMs.*from.*clock/);
+    expect(src).toMatch(/import.*getLeadMs.*from.*clock/);
     // Ensure at least one occurrence inside playFrom
     const idx = src.indexOf('const playFrom');
     expect(idx).toBeGreaterThan(-1);
-    const slice = src.slice(idx, idx + 1000);
-    expect(slice).toMatch(/getManualOffsetMs/);
-    // Fixed pattern count
-    const fixedCount = (src.match(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
-    expect(fixedCount, 'EditorScreen should have exactly one fixed offsetSec line').toBe(1);
+    const slice = src.slice(idx, idx + 2000);
+    expect(slice).toMatch(/getLeadMs\(audioOffset\)/);
+    // Fixed pattern: centralized via getLeadMs (not duplicated inline)
+    const inlineCount = (src.match(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
+    expect(inlineCount, 'EditorScreen should not duplicate inline lead (uses getLeadMs)').toBe(0);
   });
 
   it('EditorScreen playFrom mock: manualOffset change shifts source.start args (3-step with MockAudioContext)', () => {
@@ -556,12 +557,13 @@ describe('T135-5: 変更不要ファイル回帰 (clock, CalibrationModal, songN
     const gameSrc = readFile('src/screens/GameScreen.tsx');
     const editorSrc = readFile('src/screens/EditorScreen.tsx');
     const gameFixed = (gameSrc.match(/\(audioOffsetMs\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
-    const editorFixed = (editorSrc.match(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/g) || []).length;
+    // T138: editor lead centralized via getLeadMs (single occurrence)
+    const editorFixed = (editorSrc.match(/getLeadMs\(audioOffset\)/g) || []).length;
     expect(gameFixed).toBe(1);
     expect(editorFixed).toBe(1);
     // Ensure not double-added: should not have + getManualOffsetMs twice in same line
     expect(gameSrc).not.toMatch(/getManualOffsetMs\(\).*getManualOffsetMs\(\)/);
-    expect(editorSrc).not.toMatch(/getManualOffsetMs\(\).*getManualOffsetMs\(\)/);
+    expect(editorSrc).not.toMatch(/\(audioOffset\s*\+\s*getManualOffsetMs\(\)\)/);
   });
 });
 

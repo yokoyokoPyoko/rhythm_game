@@ -421,14 +421,16 @@ describe('T137-4: 回帰なし T102/T103/T129/T133/T136', () => {
     expect(readFile('src/screens/EditorScreen.tsx')).toContain('CalibrationModal');
   });
 
-  it('Step1 capture T136 green bar tick still subtracts leadMs (raw-leadMs) → Step2 check tick slice → Step3 leadMs subtraction retained', () => {
+  it('Step1 capture T138 green bar tick uses raw (no leadMs) → Step2 check tick slice → Step3 leadMs subtraction removed (raw == Play songNow)', () => {
     const src = readFile('src/screens/EditorScreen.tsx');
     const tickIdx = src.indexOf('const tick = ()');
     expect(tickIdx).toBeGreaterThan(-1);
     const tickSlice = src.slice(tickIdx, tickIdx + 4000);
-    expect(tickSlice).toContain('leadMs');
-    expect(tickSlice).toMatch(/audioOffsetRef\.current\s*\+\s*getManualOffsetMs\(\)/);
-    expect(tickSlice).toMatch(/startMsRef\.current\s*\+\s*\(ctx\.currentTime\s*-\s*startCtxTimeRef\.current\)\s*\*\s*1000\s*-\s*leadMs/);
+    // T138 案A: green bar uses raw time (unlike T136 raw-leadMs) so recording aligns with Play judgement.
+    expect(tickSlice).toMatch(/const\s+rawPos\s*=\s*startMsRef\.current\s*\+\s*\(ctx\.currentTime\s*-\s*startCtxTimeRef\.current\)\s*\*\s*1000/);
+    expect(tickSlice).toMatch(/const\s+pos\s*=\s*Math\.max\(0,\s*rawPos\)/);
+    expect(tickSlice).not.toMatch(/startMsRef\.current\s*\+\s*\(ctx\.currentTime\s*-\s*startCtxTimeRef\.current\)\s*\*\s*1000\s*-\s*leadMs/);
+    expect(tickSlice).not.toContain('getLeadMs');
   });
 
   it('Step1 capture GameScreen unchanged → Step2 verify not containing T137 editor metronome signature → Step3 GameScreen still simple', () => {

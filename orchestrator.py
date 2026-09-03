@@ -1575,7 +1575,13 @@ Output JSON only:
         ctx.setdefault("prohibited_rules", []).append(data["prohibited_rule"])
     if data.get("fix_hint"):
         ctx.setdefault("fix_hints", []).append(data["fix_hint"])
+    ctx["last_retry_from"] = data.get("retry_from", "coder")
     save_task_context(task.id, ctx)
+    # Persist for --resume across restarts
+    if state is not None and task.id in state.get("tasks", {}):
+        state["tasks"][task.id]["last_retry_from"] = data.get("retry_from", "coder")
+        state["tasks"][task.id]["last_postmortem_at"] = time.time()
+        save_state(state)
 
     return {
         "approach": data.get("approach", ""),
@@ -1661,7 +1667,12 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
     # QA-Gen writes a fresh task-specific acceptance test. --force-qa-gen keeps this behavior by
     # forcing regeneration regardless. A manually written test can still be preserved per-task via the
     # golden restore path if it is missing here.
-    if need_test and not getattr(args, "force_qa_gen", False):
+    # --resume: keep existing dynamic test and skip cleanup to resume from last role.
+    if getattr(args, "resume", False):
+        if test_file.exists():
+            log.info("[%s] --resume: Keeping existing tests/%s (skip clean) to resume from last role.", task.id, test_filename)
+        # do not unlink; fall through to fast-path handling
+    elif need_test and not getattr(args, "force_qa_gen", False):
         if test_file.exists():
             try:
                 test_file.unlink()
@@ -1679,6 +1690,37 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         log.info("[%s] tests/%s already exists → skipping QA-Gen (use --force-qa-gen to regenerate); will validate via Red check.", task.id, test_filename)
         need_test = False
         need_coder = False  # will be set True inside the loop if the existing test genuinely fails on unimplemented code
+
+    # --resume strict resumption: if Postmortem JSON exists, honor its retry_from to decide next role
+    if getattr(args, "resume", False):
+        try:
+            ctx_r = load_task_context(task.id)
+            last_retry = state.get("tasks", {}).get(task.id, {}).get("last_retry_from") or ctx_r.get("last_retry_from")
+            if last_retry:
+                log.info("[%s] --resume: last Postmortem retry_from=%s → strict resume (json-driven)", task.id, last_retry)
+                if last_retry == "qa":
+                    need_test = True and not is_code_review_only
+                    need_coder = False
+                    log.info("[%s] --resume: next role = QA-Gen (regenerate test, keep Coder output if any)", task.id)
+                elif last_retry == "reviewer":
+                    need_test = False
+                    need_coder = False
+                    log.info("[%s] --resume: next role = Gate C Reviewer only (skip QA/Coder, re-run review)", task.id)
+                    # Gate C reviewer-only will be driven by need_test=False/need_coder=False → Gate A/B/C path
+                else:  # coder
+                    need_test = False
+                    need_coder = True
+                    log.info("[%s] --resume: next role = Coder (regenerate implementation)", task.id)
+                # keep existing dynamic test when retry_from is not qa (Coder/Reviewer reuse it)
+                if last_retry in ("coder", "reviewer") and test_file.exists():
+                    need_test = False
+            else:
+                log.info("[%s] --resume: no last_retry_from found (first run or Postmortem JSON parse failed) → keeping test file, resuming from current stage (need_test=%s need_coder=%s)", task.id, need_test, need_coder)
+                # keep file already handled above; do not force QA regen
+                if test_file.exists():
+                    need_test = False
+        except Exception as exc:
+            log.warning("[%s] --resume: failed to read last_retry_from (%s), falling back to file-keep resume", task.id, exc)
 
     def mark_stage(stage: int) -> None:
         nonlocal best_stage, no_progress_streak
@@ -2047,6 +2089,7 @@ def main() -> None:
     parser.add_argument("--test-runner", choices=["vitest", "playwright"], default="vitest", help="Test runner to use for the dynamic TDD tests (default: vitest)")
     parser.add_argument("--code-review-only", "--no-video", "--no-gui", dest="code_review_only", action="store_true", help="動画録画(Gate B)をスキップし、git diff と仕様書のAIコード直接審査(Gate C)で進行する")
     parser.add_argument("--skip-red-check", action="store_true", help="TDD Red check（実装前にテストが失敗することを検証）をスキップし、直接 Green 実装へ進む。既存コードでテストがパスしてしまう false-positive 時の緊急回避用")
+    parser.add_argument("--resume", action="store_true", help="直近の running タスクから再開する。tests/dynamic.test.ts の削除をスキップし、最後の Postmortem の retry_from (coder/qa/reviewer) に基づき次ロールから厳密再開する。中断後の緊急再開用")
     parser.add_argument("--debug-mode", action="store_true", help="Enable practical mode (automatic logging for debugging)")
     args = parser.parse_args()
 
@@ -2136,6 +2179,29 @@ def main() -> None:
     all_tasks = topo_sort(load_tasks())
     tasks_by_id = {t.id: t for t in all_tasks}
     state = load_state()
+
+    # --resume: auto-select most recent running task and keep its state
+    if getattr(args, "resume", False):
+        running = [(tid, s) for tid, s in state.get("tasks", {}).items() if s.get("status") == "running"]
+        if not running:
+            log.error("--resume: no running task found in orchestrator_state.json")
+            sys.exit(1)
+        # pick most recently started
+        resume_tid = max(running, key=lambda kv: kv[1].get("started", 0))[0]
+        if args.only and args.only != resume_tid:
+            log.warning("--resume --only %s conflicts with auto-resume %s; using --only=%s", args.only, resume_tid, args.only)
+        elif args.range:
+            log.warning("--resume with --range is ambiguous; --resume takes precedence for task selection, ignoring range")
+            # keep resume_tid as single target
+            args.range = None
+            args.only = resume_tid
+            log.info("--resume: auto-selected %s (most recent running)", resume_tid)
+        elif not args.only:
+            args.only = resume_tid
+            log.info("--resume: auto-selected %s (most recent running, %d running candidates)", resume_tid, len(running))
+        else:
+            log.info("--resume: resuming %s", args.only)
+        # also imply keep-dynamic-test behavior handled in exec_task
 
     if args.only:
         target_tasks = [t for t in all_tasks if t.id == args.only]
