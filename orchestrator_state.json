@@ -890,15 +890,18 @@
       "finished": 1788421714.3775973
     },
     "T143": {
-      "attempts": 2,
+      "attempts": 3,
       "status": "running",
       "started": 1788430387.07826,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_f993dd76fffe216RKpqpup1SjO",
-        "coder": "ses_f993c75ebffeNxSlU9S7sCwnSd"
+        "qa": "ses_f9930333fffe90OrNtAxHhgO9o",
+        "coder": "ses_f992f126dffeYq3HX7uOTqKDw0",
+        "postmortem": "ses_f993abafbffewHL8xmmV643KQ0"
       },
-      "gate_b_golden": false
+      "gate_b_golden": false,
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788431283.880351
     }
   },
   "consecutive_no_action": 0
