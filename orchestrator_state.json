@@ -890,9 +890,13 @@
       "finished": 1788421714.3775973
     },
     "T143": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788429566.8732915
+      "started": 1788430387.07826,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f994a62a1ffea109xsx8IlRaGO"
+      }
     }
   },
   "consecutive_no_action": 0
