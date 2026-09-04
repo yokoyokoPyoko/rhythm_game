@@ -17,6 +17,12 @@ const ACCENT_COLOR = '#6366f1'
 const SUB_COLOR = '#22d3ee'
 const STAY_COLOR = '#fbbf24'
 const SELECT_COLOR = '#ededed'
+// T154: Y-snapping zones (matching editorDrag.ts)
+const ZONE_MID_START = 256.7
+const ZONE_MID_END = 343.3
+const TOP_Y = TW_CENTER_Y - TW_AMP
+const CENTER_Y = TW_CENTER_Y
+const BOTTOM_Y = TW_CENTER_Y + TW_AMP
 // T131: the preview is list-driven by bpm_changes[].amplitude. It renders with a
 // fixed base amplitude (matching the editor) so editing the main #amplitude input
 // does not immediately change the wave.
@@ -99,6 +105,8 @@ export default function WavePreview({
   const dragRef = useRef<{ index: number } | null>(null)
   const vertexDragRef = useRef<{ index: number } | null>(null)
   const edgeDragRef = useRef<{ index: number; startBeat: number; startPrevBeat: number; startNextBeat: number; startY: number } | null>(null)
+  // T154: vertex creation drag (empty mousedown → drag → mouseup commits new vertex)
+  const vertexCreateRef = useRef<{ anchorSeg: number; anchorBeat: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
@@ -484,6 +492,42 @@ export default function WavePreview({
         setDragPreview(result)
         return
       }
+      if (vertexCreateRef.current && onSegmentsChange) {
+        const x = e.clientX - rect.left
+        const fieldH = rect.height - RULER_H
+        const beat = xToBeatLocal(x, rect.width)
+        const centerY = RULER_H + fieldH / 2
+        const maxAmp = (fieldH - 24) / 2
+        const minAmp = Math.max(8, 0.2 * rect.height)
+        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+        const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
+        const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, mapYInverse(e.clientY - rect.top)))
+
+        const k = vertexCreateRef.current.anchorSeg
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+        const pts = engineTmp.getPoints()
+        if (k < 0 || k >= pts.length - 1) return
+
+        const prevBeat = k > 0 ? pts[k - 1].beat : 0
+        const nextBeat = k + 2 < pts.length ? pts[k + 2].beat : pts[pts.length - 1]?.beat ?? pts[k + 1].beat
+        const beatAdd = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, quantizeBeat(beat, safeSnap)))
+
+        const snappedY = yPrime < ZONE_MID_START ? TOP_Y : yPrime < ZONE_MID_END ? CENTER_Y : BOTTOM_Y
+        const yPrev = pts[k].y
+        const yNext = pts[k + 1].y
+
+        const beatsA = Math.max(safeSnap, quantizeBeat(beatAdd - pts[k].beat, safeSnap))
+        const beatsB = Math.max(safeSnap, quantizeBeat(pts[k + 1].beat - beatAdd, safeSnap))
+        const dirA = Math.abs(snappedY - yPrev) < 0.5 ? ('stay' as const) : snappedY < yPrev ? ('up' as const) : ('down' as const)
+        const dirB = Math.abs(yNext - snappedY) < 0.5 ? ('stay' as const) : yNext < snappedY ? ('up' as const) : ('down' as const)
+
+        const preview = [...segments]
+        preview.splice(k, 1, { direction: dirA, beats: beatsA }, { direction: dirB, beats: beatsB })
+        dragPreviewRef.current = preview
+        setDragPreview(preview)
+        return
+      }
       if (edgeDragRef.current) {
         const x = e.clientX - rect.left
         const fieldH = rect.height - RULER_H
@@ -537,6 +581,14 @@ export default function WavePreview({
         const preview = dragPreviewRef.current
         if (preview && onSegmentsChange) onSegmentsChange(preview)
         vertexDragRef.current = null
+        dragPreviewRef.current = null
+        setDragPreview(null)
+        return
+      }
+      if (vertexCreateRef.current) {
+        const preview = dragPreviewRef.current
+        if (preview && onSegmentsChange) onSegmentsChange(preview)
+        vertexCreateRef.current = null
         dragPreviewRef.current = null
         setDragPreview(null)
         return
@@ -682,13 +734,18 @@ export default function WavePreview({
         e.preventDefault()
         return
       }
-      // vertex mode: empty drag = pan (no ring creation)
-      panRef.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        startBeat: geoRef.current.viewStart,
-        viewBeats: geoRef.current.viewBeats,
-        moved: false,
+      // T154: vertex mode empty drag = vertex creation (preview → commit on mouseup)
+      {
+        const x = e.clientX - rect.left
+        const clickBeat = xToBeatLocal(x, rect.width)
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+        const pts = engineTmp.getPoints()
+        let k = 0
+        for (let i = 0; i < pts.length - 1; i++) {
+          if (clickBeat >= pts[i].beat - 1e-6) k = i
+        }
+        vertexCreateRef.current = { anchorSeg: k, anchorBeat: clickBeat }
       }
       e.preventDefault()
       return
@@ -825,7 +882,7 @@ export default function WavePreview({
       if (nearestDist < 35) onDeleteRing?.(hit)
       return
     }
-    if ((editMode !== 'vertex' && editMode !== 'edge') || !onSegmentsChange) return
+    if ((editMode !== 'vertex' && editMode !== 'edge') || !onSegmentsChange || vertexCreateRef.current) return
 
     const canvas2 = canvasRef.current
     if (!canvas2) return
@@ -876,7 +933,7 @@ export default function WavePreview({
   }
 
   const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (dragRef.current || vertexDragRef.current || edgeDragRef.current || panRef.current) return
+    if (dragRef.current || vertexDragRef.current || vertexCreateRef.current || edgeDragRef.current || panRef.current) return
     // Hover interlink: detect nearest ring/edge/vertex under cursor and notify parent for list highlight
     if (editMode === 'ring') {
       const ringHit = nearestRingIndex(e.clientX)
