@@ -893,5 +893,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T156",
+    "desc": "右ドラッグ範囲選択・左ドラッグ移動（モード対応・左右上下）。要求: どの編集モードでも、右クリック+ドラッグで範囲選択をして、それを移動させる。操作確定：右ドラッグ＝範囲選択、左ドラッグ＝移動。対象（モード対応）: vertex→頂点集合、edge→辺集合（両端点内包またはポリライン交差）、ring→リング集合（beat範囲内。Yは選択フィルタのみ）。移動は左右上下：vertexは各頂点に (dxBeat, 吸着Y)、edgeは各辺を (dxBeat, dy) 平行移動、ringは beat += quantize(dxBeat) のみ実効（Yは waveYAt 従属のため選択フィルタのみ）。現状との衝突: 右ボタンは単発右クリック削除（ring :864-882、vertex/edge :883-930）に使用。mousedown:727-750 が e.button 無視で右でも vertexCreateRef を立てるため空所右ドラッグで頂点が作られる報告あり。選択状態は単一（selectedRing/selectedSegment）のみ。修正: WavePreview.tsx: mousedown(button===2) で rubberRef={x0,y0,beat0} 開始。mousemove は破線矩形の描画のみ（rubberRect ローカルstate、renderCanvas に追加）。移動<4pxなら既存の削除処理へ委譲、以上なら範囲確定。mouseup まで onSegmentsChange/onMoveRing を呼ばない。EditorScreen.tsx: selectedRings: number[]／selectedSegments: number[] を新設（既存単一は先頭要素として互換維持）。右ペイン青枠・プレビューハイライト（T151/T152）を includes 化。移動：選択集合がある状態の選択物上左掴み→既存 dragPreview パターンでプレビューのみ→mouseup で commitSegments/commitRings を各1回（T155履歴と整合）。Y吸着3等分・X優先・2/3セグメントのみ・境界留め・safeSnap 量子化はT149/T150維持。隣接衝突時は低index順にclamp。Delete/Backspace は集合一括削除、Esc は選択解除。editable 編集中は除外。完了条件: (1) 右ドラッグで矩形表示→確定で集合が青枠化され、左ドラッグ移動はプレビューのみ→確定1回であること (2) 右単発クリックは従来通り削除のみで選択が残らないこと (3) off-grid（0.37/1.23）＋複雑ampで数値整合、tsc --noEmit、T116/T141/T142/T146/T150/T151/T152/T155の回帰なし。",
+    "depends_on": [
+      "T155"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
