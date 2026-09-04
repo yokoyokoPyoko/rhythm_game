@@ -811,9 +811,8 @@ export default function WavePreview({
       if (viDist >= 14) vi = -1
     } else if (editMode === 'edge') {
       const ei = nearestEdgeIndex(e.clientX, e.clientY)
-      if (ei >= 0) {
+      if (ei >= 0 && ei < segments.length - 1) {
         vi = ei + 1
-        if (vi >= pts.length - 1) vi = segments.length - 1
       }
     }
 
