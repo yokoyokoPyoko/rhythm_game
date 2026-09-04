@@ -237,8 +237,8 @@ export default function WavePreview({
       const p0 = points[i]
       const p1 = points[i + 1]
       const seg = renderSegs[i]
-      const isSelectedEdge = i === selectedSegment
-      const isHoveredEdge = i === hoveredSegment
+      const isSelectedEdge = editMode !== 'ring' && i === selectedSegment
+      const isHoveredEdge = editMode !== 'ring' && i === hoveredSegment
       const isHighlighted = isSelectedEdge || isHoveredEdge
       const color =
         seg && seg.direction === 'down'
@@ -375,8 +375,8 @@ export default function WavePreview({
     rings.forEach((r, i) => {
       const rx = beatToX(r.beat)
       if (rx < -40 || rx > cssW + 40) return
-      const isSelected = i === selectedRing
-      const isHovered = i === hoveredRing
+      const isSelected = editMode === 'ring' && i === selectedRing
+      const isHovered = editMode === 'ring' && i === hoveredRing
       const isHighlighted = isSelected || isHovered
       const ry = mapY(engine.waveYAt(r.beat))
       const isHold = r.type === 'hold'
@@ -878,16 +878,17 @@ export default function WavePreview({
   const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     if (dragRef.current || vertexDragRef.current || edgeDragRef.current || panRef.current) return
     // Hover interlink: detect nearest ring/edge/vertex under cursor and notify parent for list highlight
-    const ringHit = nearestRingIndex(e.clientX)
-    if (ringHit >= 0) {
-      onHoverRing?.(ringHit)
-      onHoverSegment?.(null)
-      return
+    if (editMode === 'ring') {
+      const ringHit = nearestRingIndex(e.clientX)
+      if (ringHit >= 0) {
+        onHoverRing?.(ringHit)
+        onHoverSegment?.(null)
+        return
+      }
     }
     if (editMode === 'vertex') {
       const vHit = nearestVertexIndex(e.clientX, e.clientY)
       if (vHit >= 0) {
-        // vertex idx maps to adjacent segment; highlight that segment
         const segIdx = vHit === 0 ? 0 : vHit - 1
         if (segIdx >= 0 && segIdx < segments.length) {
           onHoverSegment?.(segIdx)
@@ -896,14 +897,6 @@ export default function WavePreview({
         }
       }
     } else if (editMode === 'edge') {
-      const eHit = nearestEdgeIndex(e.clientX, e.clientY)
-      if (eHit >= 0) {
-        onHoverSegment?.(eHit)
-        onHoverRing?.(null)
-        return
-      }
-    } else {
-      // ring mode: no segment hover
       const eHit = nearestEdgeIndex(e.clientX, e.clientY)
       if (eHit >= 0) {
         onHoverSegment?.(eHit)
