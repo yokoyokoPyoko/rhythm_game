@@ -924,6 +924,10 @@ button:focus-visible {
   border-color: rgba(237, 237, 237, 0.4);
 }
 
+.segment-list-item-edge-active {
+  border-color: var(--accent);
+}
+
 .segment-index {
   font-size: 0.75rem;
   color: var(--text-muted);
