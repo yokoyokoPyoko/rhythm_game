@@ -509,9 +509,7 @@ export default function WavePreview({
         const pts = engineTmp.getPoints()
         if (k < 0 || k >= pts.length - 1) return
 
-        const prevBeat = k > 0 ? pts[k - 1].beat : 0
-        const nextBeat = k + 2 < pts.length ? pts[k + 2].beat : pts[pts.length - 1]?.beat ?? pts[k + 1].beat
-        const beatAdd = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, quantizeBeat(beat, safeSnap)))
+        const beatAdd = Math.max(pts[k].beat + safeSnap, Math.min(pts[k + 1].beat - safeSnap, quantizeBeat(beat, safeSnap)))
 
         const snappedY = yPrime < ZONE_MID_START ? TOP_Y : yPrime < ZONE_MID_END ? CENTER_Y : BOTTOM_Y
         const yPrev = pts[k].y
