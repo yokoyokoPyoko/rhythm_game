@@ -8,380 +8,252 @@ import { Cursor } from '../src/game/cursor';
 
 vi.useFakeTimers();
 
+const CENTER = TW_CENTER_Y;
 const TOP = TW_CENTER_Y - TW_AMP;
 const BOTTOM = TW_CENTER_Y + TW_AMP;
-const CENTER = TW_CENTER_Y;
 
 function isSnapAligned(beats: number, snap: number): boolean {
   const rem = ((beats % snap) + snap) % snap;
   return rem < 1e-6 || Math.abs(rem - snap) < 1e-6;
 }
 
-describe('T152 編集モード対応ハイライトのみ表示（モード別分離） — Vitest node (WavePreview source + WaveEngine/Cursor numeric)', () => {
-  beforeEach(() => {
-    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-  });
-  afterEach(() => {
-    vi.clearAllTimers();
-  });
+/** Locate exact base .segment-list-item rule (not -selected/-hovered etc) */
+function findBaseSegmentItemIndex(css: string): number {
+  // Search for `.segment-list-item {` with word boundary after `item` (space or {)
+  // Must not match `.segment-list-item-selected` etc.
+  const re = /\.segment-list-item\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(css)) !== null) {
+    const after = css.slice(m.index, m.index + 80);
+    // ensure the char after `.segment-list-item` is whitespace or `{`, not `-`
+    // The regex already excludes `-` because it requires whitespace/`{`, but double check
+    if (/\.segment-list-item\s*\{/.test(after)) return m.index;
+  }
+  return -1;
+}
+
+function extractBlock(css: string, selector: string, len = 300): string {
+  const idx = css.indexOf(selector);
+  if (idx === -1) return '';
+  return css.slice(idx, idx + len);
+}
+
+describe('T153 セグメントリスト青枠のCSS順序修正（T151残存バグ） — Vitest node', () => {
+  beforeEach(() => vi.setSystemTime(new Date('2026-01-01T00:00:00Z')));
+  afterEach(() => vi.clearAllTimers());
 
   // ----------------------------------------------------------------
-  // 1. Edge highlight must be mode-gated: editMode !== 'ring' && i===selectedSegment / hoveredSegment
-  // 3-step: [capture src] -> [isolate renderCanvas block] -> [assert gated isSelectedEdge/isHoveredEdge]
+  // 1. index.css must define selection/hover/edge-active with correct border-colors
+  // 3-step: [capture css] -> [locate each selector] -> [assert border-color values]
   // ----------------------------------------------------------------
-  describe('1. Edge stroke+halo is mode-gated (ring mode shows no edge highlight)', () => {
-    it('WavePreview renderCanvas computes isSelectedEdge/isHoveredEdge gated by editMode !== ring', () => {
+  describe('1. index.css definitions: selected / hovered / edge-active border-color', () => {
+    it('defines .segment-list-item-selected with var(--accent) and .segment-list-item-hovered with rgba(237,237,237,0.4)', () => {
       // [Step 1] Capture Initial State
-      const p = path.join(process.cwd(), 'src/screens/editor/WavePreview.tsx');
-      const src = fs.readFileSync(p, 'utf-8');
-      const renderIdx = src.indexOf('const renderCanvas');
-      expect(renderIdx, 'renderCanvas must be defined in WavePreview.tsx').toBeGreaterThan(-1);
-
-      // isolate renderCanvas block until next useEffect that observes canvas or its return
-      const nextBlockIdx = src.indexOf('useEffect(() => {', renderIdx + 20);
-      const renderBlock = nextBlockIdx !== -1 ? src.slice(renderIdx, nextBlockIdx) : src.slice(renderIdx, renderIdx + 12000);
-
-      // verify we are inside the correct function (contains SAMPLE_STEP and isSelectedEdge)
-      expect(renderBlock, 'renderCanvas block must contain edge highlight logic').toMatch(/isSelectedEdge/);
-      expect(renderBlock, 'renderCanvas block must contain isHoveredEdge').toMatch(/isHoveredEdge/);
-
-      // [Step 2] Locate edge highlight definitions — specific, not generic indexOf('ring')
-      // Use precise patterns that bind editMode guard to the edge highlight variables
-      const edgeSelectedPattern = /const\s+isSelectedEdge\s*=\s*editMode\s*!==\s*['"]ring['"]\s*&&\s*i\s*===\s*selectedSegment/;
-      const edgeHoveredPattern = /const\s+isHoveredEdge\s*=\s*editMode\s*!==\s*['"]ring['"]\s*&&\s*i\s*===\s*hoveredSegment/;
-
-      // [Step 3] Assert Resulting Transition: gated logic present (strict Red->Green)
-      // This FAILS on pre-fix code where isSelectedEdge = i === selectedSegment (no editMode guard)
-      expect(renderBlock, 'isSelectedEdge must be gated by editMode !== ring && i===selectedSegment').toMatch(edgeSelectedPattern);
-      expect(renderBlock, 'isHoveredEdge must be gated by editMode !== ring && i===hoveredSegment').toMatch(edgeHoveredPattern);
-
-      // Must still compute isHighlighted from gated values and use SELECT_COLOR
-      expect(renderBlock, 'must compute isHighlighted from gated edge values').toMatch(/isHighlighted\s*=\s*isSelectedEdge\s*\|\|\s*isHoveredEdge/);
-      expect(renderBlock, 'selected edge must use SELECT_COLOR').toMatch(/isSelectedEdge\s*\?\s*SELECT_COLOR/);
-
-      // Verify old un-gated pattern is absent (prevents false-pass)
-      const ungatedSelected = /const\s+isSelectedEdge\s*=\s*i\s*===\s*selectedSegment\s*[^&]/;
-      // allow gated version only: if ungated appears without editMode guard, it's stale
-      const hasUngated = ungatedSelected.test(renderBlock) && !edgeSelectedPattern.test(renderBlock);
-      expect(hasUngated, 'legacy ungated isSelectedEdge = i === selectedSegment must be absent').toBe(false);
-    });
-
-    it('edge highlight gated logic yields correct runtime truth table across modes (complex off-grid verification)', () => {
-      // [Step 1] Capture initial gated evaluator (mirrors fixed source logic)
-      const gatedSelected = (editMode: string, i: number, sel: number | null) => editMode !== 'ring' && i === sel;
-      const gatedHovered = (editMode: string, i: number, hov: number | null) => editMode !== 'ring' && i === hov;
-
-      // [Step 2] Perform mode transitions with off-grid-like segment indices and snap diversity
-      const modes: Array<'vertex' | 'edge' | 'ring'> = ['vertex', 'edge', 'ring'];
-      const snaps = [0.125, 0.25, 0.5, 1] as const;
-      for (const snap of snaps) {
-        for (const mode of modes) {
-          for (const selIdx of [0, 1, 2]) {
-            const i = selIdx; // hover/selected on same index
-            const selected = selIdx;
-            const hovered = selIdx;
-            // [Step 3] Assert resulting transition
-            if (mode === 'ring') {
-              expect(gatedSelected(mode, i, selected), `ring mode: edge selected must be false snap=${snap} i=${i}`).toBe(false);
-              expect(gatedHovered(mode, i, hovered), `ring mode: edge hovered must be false snap=${snap} i=${i}`).toBe(false);
-            } else {
-              expect(gatedSelected(mode, i, selected), `${mode} mode: edge selected must be true when i===sel`).toBe(true);
-              expect(gatedHovered(mode, i, hovered), `${mode} mode: edge hovered must be true when i===hov`).toBe(true);
-              // off-index must be false
-              expect(gatedSelected(mode, (i + 1) % 5, selected)).toBe(false);
-            }
-          }
-        }
-      }
-
-      // cross-check with WaveEngine numeric: edge count invariant still holds under all amps
-      const amps = [0.7, 1.3, 2.7, 3.4] as const;
-      const offGridBeats = [0.37, 1.23] as const;
-      for (const amp of amps) {
-        for (const ob of offGridBeats) {
-          const tl = new BpmTimeline(120, [], amp);
-          const segs = [
-            { direction: 'down' as const, beats: quantizeBeat(1.5 + ob * 0.2, 0.25) || 0.25 },
-            { direction: 'up' as const, beats: quantizeBeat(1.0 + ob * 0.1, 0.25) || 0.25 },
-            { direction: 'stay' as const, beats: 1 },
-          ];
-          const eng = new WaveEngine(segs, tl, amp, 0);
-          expect(eng.getPoints().length).toBe(segs.length + 1);
-          for (const s of segs) expect(isSnapAligned(s.beats, 0.25)).toBe(true);
-        }
-      }
-    });
-  });
-
-  // ----------------------------------------------------------------
-  // 2. Ring highlight must be mode-gated: editMode==='ring' && i===selectedRing / hoveredRing
-  // ----------------------------------------------------------------
-  describe('2. Ring highlight is mode-gated (vertex/edge shows no ring halo)', () => {
-    it('WavePreview rings.forEach computes isSelected/isHovered gated by editMode===ring', () => {
-      // [Step 1] Capture
-      const p = path.join(process.cwd(), 'src/screens/editor/WavePreview.tsx');
-      const src = fs.readFileSync(p, 'utf-8');
-      const ringsIdx = src.indexOf('rings.forEach');
-      expect(ringsIdx, 'rings.forEach must exist').toBeGreaterThan(-1);
-
-      // Isolate ring rendering block: from rings.forEach to next closing of that forEach (look ahead 3000 chars)
-      const ringBlock = src.slice(ringsIdx, ringsIdx + 4000);
-
-      // [Step 2] Locate ring highlight definitions with precise editMode guard
-      const ringSelectedPattern = /const\s+isSelected\s*=\s*editMode\s*===\s*['"]ring['"]\s*&&\s*i\s*===\s*selectedRing/;
-      const ringHoveredPattern = /const\s+isHovered\s*=\s*editMode\s*===\s*['"]ring['"]\s*&&\s*i\s*===\s*hoveredRing/;
-
-      // [Step 3] Assert gated — FAILS on legacy `i===selectedRing` without guard
-      expect(ringBlock, 'isSelected must be gated by editMode===ring && i===selectedRing').toMatch(ringSelectedPattern);
-      expect(ringBlock, 'isHovered must be gated by editMode===ring && i===hoveredRing').toMatch(ringHoveredPattern);
-      expect(ringBlock, 'ring isHighlighted must be isSelected||isHovered').toMatch(/isHighlighted\s*=\s*isSelected\s*\|\|\s*isHovered/);
-
-      // Ensure legacy ungated not present as sole definition
-      const hasGatedSelected = ringSelectedPattern.test(ringBlock);
-      const hasLegacyRing = /const\s+isSelected\s*=\s*i\s*===\s*selectedRing/.test(ringBlock) && !hasGatedSelected;
-      expect(hasLegacyRing, 'legacy ungated isSelected = i===selectedRing must be absent').toBe(false);
-    });
-
-    it('ring gated logic yields correct runtime truth table (ring-only mode isolation, off-grid beats)', () => {
-      // [Step 1] Captured gated evaluator mirrors fixed source
-      const gatedRingSelected = (editMode: string, i: number, sel: number | null) => editMode === 'ring' && i === sel;
-      const gatedRingHovered = (editMode: string, i: number, hov: number | null) => editMode === 'ring' && i === hov;
-
-      // [Step 2] Transition across modes with fractional ring beats to ensure not grid-only
-      const modes: Array<'vertex' | 'edge' | 'ring'> = ['vertex', 'edge', 'ring'];
-      const offRingBeats = [0.37, 1.23, 4.37, 8.63];
-      for (const beat of offRingBeats) {
-        for (const mode of modes) {
-          const i = 0;
-          const sel: number | null = 0;
-          // [Step 3] Assert
-          if (mode === 'ring') {
-            expect(gatedRingSelected(mode, i, sel)).toBe(true);
-            expect(gatedRingHovered(mode, i, 0)).toBe(true);
-          } else {
-            expect(gatedRingSelected(mode, i, sel), `mode=${mode} beat=${beat} ring selected must be suppressed`).toBe(false);
-            expect(gatedRingHovered(mode, i, 0), `mode=${mode} beat=${beat} ring hovered must be suppressed`).toBe(false);
-          }
-        }
-      }
-      void offRingBeats;
-
-      // Numeric regression: ring Y follows WaveEngine even when suppressed highlight
-      const amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs = [{ direction: 'down' as const, beats: 2 }, { direction: 'up' as const, beats: 2 }];
-      const eng = new WaveEngine(segs, tl, amp, 0);
-      const yAtOff = eng.waveYAt(1.23);
-      expect(Number.isFinite(yAtOff)).toBe(true);
-      expect(yAtOff).toBeGreaterThanOrEqual(TOP - 1e-6);
-      expect(yAtOff).toBeLessThanOrEqual(BOTTOM + 1e-6);
-    });
-  });
-
-  // ----------------------------------------------------------------
-  // 3. handleMouseMove priority: unconditional ring priority removed, ring only when editMode==='ring'
-  // ----------------------------------------------------------------
-  describe('3. handleMouseMove is mode-gated (ring hover does not crush edge/vertex when not in ring mode)', () => {
-    it('handleMouseMove ringHit logic is guarded by editMode===ring, vertex/edge branches only fire in their mode and null out other hover', () => {
-      // [Step 1] Capture
-      const p = path.join(process.cwd(), 'src/screens/editor/WavePreview.tsx');
-      const src = fs.readFileSync(p, 'utf-8');
-      const mmIdx = src.indexOf('const handleMouseMove');
-      expect(mmIdx, 'handleMouseMove must be defined').toBeGreaterThan(-1);
-      const nextIdx = src.indexOf('const handleMouseLeave', mmIdx);
-      const mmBlock = nextIdx !== -1 ? src.slice(mmIdx, nextIdx) : src.slice(mmIdx, mmIdx + 6000);
-
-      // Must contain nearestRingIndex and nearestVertexIndex / nearestEdgeIndex
-      expect(mmBlock, 'handleMouseMove must reference nearestRingIndex').toMatch(/nearestRingIndex/);
-      expect(mmBlock, 'must reference nearestVertexIndex').toMatch(/nearestVertexIndex/);
-      expect(mmBlock, 'must reference nearestEdgeIndex').toMatch(/nearestEdgeIndex/);
-
-      // [Step 2] Locate ring guard — FAILS if ringHit is checked unconditionally before editMode branches
-      // Fixed pattern: ringHit handling is inside `if (editMode === 'ring') { ... ringHit ... }` or `if (editMode==='ring' && ringHit>=0)`
-      const ringGuardedPatternA = /if\s*\(\s*editMode\s*===\s*['"]ring['"]\s*\)\s*\{[^}]*nearestRingIndex|if\s*\(\s*editMode\s*===\s*['"]ring['"]\s*&&[^)]*ringHit/;
-      const ringGuardedPatternB = /editMode\s*===\s*['"]ring['"]\s*&&\s*ringHit|ringHit[\s\S]*?editMode\s*===\s*['"]ring['"]/;
-      const ringGuarded = ringGuardedPatternA.test(mmBlock) || ringGuardedPatternB.test(mmBlock);
-      // More robust: check that before vertex branch, ringHit is not returned unconditionally.
-      // Fixed code should have explicit `if (editMode === 'ring') { const ringHit = ... if(ringHit>=0) ... return }`
-      const hasRingInsideGuard = /editMode\s*===\s*['"]ring['"][\s\S]{0,300}nearestRingIndex/.test(mmBlock);
-      expect(hasRingInsideGuard, 'ringHit / nearestRingIndex must be inside an editMode===ring guard (not unconditional)').toBe(true);
-      void ringGuarded;
-
-      // Also verify that the old unconditional pattern `const ringHit = nearestRingIndex(...)\n  if (ringHit >=0) { onHoverRing?.(ringHit) ... return }` without guard is absent
-      // We detect presence of unconditional by checking if first ringHit handling appears before any editMode ring guard
-      const firstRingHitPos = mmBlock.indexOf('nearestRingIndex');
-      const firstRingGuardPos = mmBlock.indexOf("editMode === 'ring'");
-      // Allow both orders but guard must enclose or precede ringHit handling within ~300 chars
-      if (firstRingHitPos !== -1 && firstRingGuardPos !== -1) {
-        // In fixed code, guard appears at or before ringHit within 500 chars
-        const guardBeforeRing = Math.abs(firstRingGuardPos - firstRingHitPos) < 500;
-        expect(guardBeforeRing, 'editMode ring guard must be close to nearestRingIndex (not unconditional top-level)').toBe(true);
-      }
-
-      // [Step 3] Vertex/edge branches must be mode-specific and null out opposite hover
-      expect(mmBlock, "vertex branch must be `if (editMode === 'vertex')`").toMatch(/if\s*\(\s*editMode\s*===\s*['"]vertex['"]/);
-      expect(mmBlock, "edge branch must be `} else if (editMode === 'edge')` or `if (editMode === 'edge')`").toMatch(/editMode\s*===\s*['"]edge['"]/);
-      // Each branch should call onHoverSegment?. and onHoverRing?.(null) to clear other, and vice versa for ring
-      // tolerant to optional chaining `?.`
-      expect(mmBlock, 'vertex branch must clear ring hover via onHoverRing?.(null)').toMatch(/onHoverRing(\?\.)?\s*\(\s*null\s*\)/);
-      expect(mmBlock, 'edge branch must clear ring hover').toMatch(/onHoverSegment(\?\.)?\s*\(/);
-      expect(mmBlock, 'must clear hover with null when no hit').toMatch(/onHoverRing(\?\.)?\s*\(\s*null\s*\)[\s\S]*onHoverSegment(\?\.)?\s*\(\s*null\s*\)|onHoverSegment(\?\.)?\s*\(\s*null\s*\)[\s\S]*onHoverRing(\?\.)?\s*\(\s*null\s*\)/);
-
-      // Verify that drag/pan early return is still first line (regression)
-      expect(mmBlock, 'handleMouseMove must early-return when dragging/panning').toMatch(/if\s*\(\s*dragRef\.current/);
-    });
-
-    it('handleMouseMove mode dispatch truth table (edge hover not crushed by ring when not in ring mode)', () => {
-      // [Step 1] Capture expected dispatch evaluator (mirrors fixed logic)
-      function dispatch(editMode: 'vertex' | 'edge' | 'ring', ringHit: number, vertexHit: number, edgeHit: number): { hoverRing: number | null; hoverSeg: number | null } {
-        if (editMode === 'ring') {
-          if (ringHit >= 0) return { hoverRing: ringHit, hoverSeg: null };
-          // ring mode no segment hover per spec (or edge fallback but Ring mode has no edge highlight)
-          if (edgeHit >= 0) return { hoverRing: null, hoverSeg: edgeHit };
-          return { hoverRing: null, hoverSeg: null };
-        }
-        if (editMode === 'vertex') {
-          if (vertexHit >= 0) {
-            const segIdx = vertexHit === 0 ? 0 : vertexHit - 1;
-            return { hoverRing: null, hoverSeg: segIdx };
-          }
-          return { hoverRing: null, hoverSeg: null };
-        }
-        if (editMode === 'edge') {
-          if (edgeHit >= 0) return { hoverRing: null, hoverSeg: edgeHit };
-          return { hoverRing: null, hoverSeg: null };
-        }
-        return { hoverRing: null, hoverSeg: null };
-      }
-
-      // [Step 2] Simulate: edge is hit, ring also hit at same X (would crush in old code). In vertex/edge mode ring must be ignored.
-      const cases: Array<{ mode: 'vertex' | 'edge' | 'ring'; ringHit: number; vertexHit: number; edgeHit: number; expRing: number | null; expSeg: number | null; label: string }> = [
-        { mode: 'vertex', ringHit: 0, vertexHit: -1, edgeHit: 1, expRing: null, expSeg: null, label: 'vertex mode: no vertex hit, edge hit ignored, ring ignored -> null/null' },
-        { mode: 'vertex', ringHit: 0, vertexHit: 2, edgeHit: 1, expRing: null, expSeg: 1, label: 'vertex mode: vertexHit maps to seg, ring 0 ignored' },
-        { mode: 'edge', ringHit: 0, vertexHit: -1, edgeHit: 1, expRing: null, expSeg: 1, label: 'edge mode: ring 0 must not crush edge 1' },
-        { mode: 'edge', ringHit: 0, vertexHit: 2, edgeHit: -1, expRing: null, expSeg: null, label: 'edge mode: ring ignored, no edge -> null' },
-        { mode: 'ring', ringHit: 0, vertexHit: -1, edgeHit: 1, expRing: 0, expSeg: null, label: 'ring mode: ring 0 wins over edge 1' },
-        { mode: 'ring', ringHit: -1, vertexHit: -1, edgeHit: 1, expRing: null, expSeg: 1, label: 'ring mode: no ring, edge fallback still allowed (ring mode segment hover)' },
-      ];
-      for (const c of cases) {
-        const res = dispatch(c.mode, c.ringHit, c.vertexHit, c.edgeHit);
-        expect(res.hoverRing, `${c.label} hoverRing`).toBe(c.expRing);
-        expect(res.hoverSeg, `${c.label} hoverSeg`).toBe(c.expSeg);
-      }
-
-      // off-grid beat implication: ensure hover logic still works with fractional beats (no additional assertion, regression numeric)
-      const tl = new BpmTimeline(120, [], 1.3);
-      const segs = [{ direction: 'down' as const, beats: quantizeBeat(1.37, 0.25) }, { direction: 'up' as const, beats: quantizeBeat(2.23, 0.25) }];
-      const eng = new WaveEngine(segs, tl, 1.3, 0);
-      expect(eng.getPoints().length).toBe(3);
-      expect(eng.waveYAt(0.37)).toBeGreaterThanOrEqual(TOP - 1e-6);
-      expect(eng.waveYAt(1.23)).toBeLessThanOrEqual(BOTTOM + 1e-6);
-    });
-  });
-
-  // ----------------------------------------------------------------
-  // 4. Regression: T116 V/E/R separation, T118 mutual highlight linkage, T146 class-only (no scroll), T151 vertex select
-  // ----------------------------------------------------------------
-  describe('4. Regression guards (T116 / T118 / T146 / T151 / WaveEngine-Cursor slope)', () => {
-    it('T116: handleMouseDown has distinct vertex / edge / ring branches with editMode guards and pan fallback', () => {
-      const src = fs.readFileSync(path.join(process.cwd(), 'src/screens/editor/WavePreview.tsx'), 'utf-8');
-      const hdIdx = src.indexOf('const handleMouseDown');
-      expect(hdIdx).toBeGreaterThan(-1);
-      const nextIdx = src.indexOf('const handleDoubleClick', hdIdx);
-      const hdBlock = nextIdx !== -1 ? src.slice(hdIdx, nextIdx) : src.slice(hdIdx, hdIdx + 10000);
-      expect(hdBlock).toMatch(/editMode\s*===\s*['"]vertex['"]/);
-      expect(hdBlock).toMatch(/editMode\s*===\s*['"]edge['"]/);
-      // ring mode isolated: nearestRingIndex and dragRef with button 0 check
-      expect(hdBlock).toMatch(/nearestRingIndex/);
-      expect(hdBlock).toMatch(/dragRef\.current/);
-      expect(hdBlock).toMatch(/e\.button\s*===\s*0/);
-      // vertex branch must call onSelectSegment with mapping vHit===0?0:vHit-1 and optional chaining tolerant
-      expect(hdBlock).toMatch(/onSelectSegment(\?\.)?\s*\(\s*vHit\s*===\s*0\s*\?\s*0\s*:\s*vHit\s*-\s*1\s*\)/);
-      // edge branch must call onSelectSegment(eHit) with optional chaining
-      expect(hdBlock).toMatch(/onSelectSegment(\?\.)?\s*\(\s*eHit\s*\)/);
-    });
-
-    it('T118: hover callbacks use optional chaining and null clearing (mutual highlight linkage)', () => {
-      const src = fs.readFileSync(path.join(process.cwd(), 'src/screens/editor/WavePreview.tsx'), 'utf-8');
-      const mmIdx = src.indexOf('const handleMouseMove');
-      const mlIdx = src.indexOf('const handleMouseLeave', mmIdx);
-      const block = src.slice(mmIdx, mlIdx !== -1 ? mlIdx + 1000 : mmIdx + 6000);
-      // must use ?. for safety per codebase convention
-      expect(block).toMatch(/onHoverRing(\?\.)?\(/);
-      expect(block).toMatch(/onHoverSegment(\?\.)?\(/);
-      expect(block).toMatch(/onHoverRing(\?\.)?\s*\(\s*null\s*\)/);
-      expect(block).toMatch(/onHoverSegment(\?\.)?\s*\(\s*null\s*\)/);
-      // handleMouseLeave also clears both
-      const leaveBlock = src.slice(src.indexOf('const handleMouseLeave'), src.indexOf('const handleMouseLeave') + 800);
-      expect(leaveBlock).toMatch(/onHoverRing(\?\.)?\s*\(\s*null\s*\)/);
-      expect(leaveBlock).toMatch(/onHoverSegment(\?\.)?\s*\(\s*null\s*\)/);
-      // EditorScreen must still set hoveredRing/hoveredSegment state and pass to SegmentEditor
-      const editorSrc = fs.readFileSync(path.join(process.cwd(), 'src/screens/EditorScreen.tsx'), 'utf-8');
-      expect(editorSrc).toMatch(/hoveredSegment/);
-      expect(editorSrc).toMatch(/hoveredRing/);
-      expect(editorSrc).toMatch(/setHoveredRing/);
-      expect(editorSrc).toMatch(/setHoveredSegment/);
-    });
-
-    it('T146: handleSelectRing/Segment uses class-only highlight (no scrollIntoView / focus side-effect)', () => {
-      const src = fs.readFileSync(path.join(process.cwd(), 'src/screens/EditorScreen.tsx'), 'utf-8');
-      // locate handleSelectRing and handleSelectSegment
-      const selRingIdx = src.indexOf('const handleSelectRing');
-      const selSegIdx = src.indexOf('const handleSelectSegment');
-      expect(selRingIdx).toBeGreaterThan(-1);
-      expect(selSegIdx).toBeGreaterThan(-1);
-      const ringBlock = src.slice(selRingIdx, selRingIdx + 2000);
-      const segBlock = src.slice(selSegIdx, selSegIdx + 2000);
-      // must NOT contain scrollIntoView or el.focus()
-      expect(ringBlock, 'handleSelectRing must not call scrollIntoView (T146)').not.toMatch(/scrollIntoView/);
-      expect(ringBlock, 'handleSelectRing must not call el.focus()').not.toMatch(/\.focus\s*\(/);
-      expect(segBlock, 'handleSelectSegment must not call scrollIntoView').not.toMatch(/scrollIntoView/);
-      expect(segBlock, 'handleSelectSegment must not call el.focus()').not.toMatch(/\.focus\s*\(/);
-      // must still set state and open details
-      expect(ringBlock).toMatch(/setSelectedRing/);
-      expect(ringBlock).toMatch(/setRingDetailsOpen/);
-      expect(segBlock).toMatch(/setSelectedSegment/);
-      expect(segBlock).toMatch(/setSegmentDetailsOpen/);
-      // CSS class must still exist for visual highlight
       const css = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+      expect(css.length).toBeGreaterThan(0);
+
+      // [Step 2] Locate selectors — specific, not generic indexOf
+      const selectedIdx = css.indexOf('.segment-list-item-selected');
+      const hoveredIdx = css.indexOf('.segment-list-item-hovered');
+      const edgeActiveIdx = css.indexOf('.segment-list-item-edge-active');
+      expect(selectedIdx, '.segment-list-item-selected must be defined').toBeGreaterThan(-1);
+      expect(hoveredIdx, '.segment-list-item-hovered must be defined').toBeGreaterThan(-1);
+      // edge-active is required per spec (3ルール)
+      expect(edgeActiveIdx, '.segment-list-item-edge-active must be defined (3rd rule)').toBeGreaterThan(-1);
+
+      // [Step 3] Assert resulting computed values: correct border-color declarations
+      const selectedBlock = extractBlock(css, '.segment-list-item-selected');
+      const hoveredBlock = extractBlock(css, '.segment-list-item-hovered');
+      const edgeActiveBlock = extractBlock(css, '.segment-list-item-edge-active');
+
+      expect(selectedBlock).toMatch(/border-color\s*:\s*var\(--accent\)/);
+      expect(hoveredBlock).toMatch(/border-color\s*:\s*rgba\(\s*237\s*,\s*237\s*,\s*237\s*,\s*0\.4\s*\)/);
+      // edge-active should also use accent (same as selected) — spec says color unchanged
+      expect(edgeActiveBlock).toMatch(/border-color\s*:\s*var\(--accent\)/);
+
+      // Ring regression: base→selected order must still be correct
       expect(css).toMatch(/\.ring-list-item-selected/);
-      expect(css).toMatch(/\.segment-list-item-selected/);
-      expect(css).toMatch(/\.segment-list-item-hovered/);
     });
 
-    it('T151: vertex handles drawn only in vertex mode and depend on selected/hovered segment', () => {
-      const src = fs.readFileSync(path.join(process.cwd(), 'src/screens/editor/WavePreview.tsx'), 'utf-8');
-      // vertex handles guard
-      expect(src, 'vertex handles must be gated by editMode===vertex').toMatch(/if\s*\(\s*editMode\s*===\s*['"]vertex['"]/);
-      // must check isSelectedVertex / isHoveredVertex derived from selectedSegment/hoveredSegment
-      expect(src).toMatch(/isSelectedVertex/);
-      expect(src).toMatch(/isHoveredVertex/);
-      expect(src).toMatch(/selectedSegment/);
-      expect(src).toMatch(/hoveredSegment/);
-      // SegmentEditor must apply selected/hovered classes
-      const segSrc = fs.readFileSync(path.join(process.cwd(), 'src/screens/editor/SegmentEditor.tsx'), 'utf-8');
-      expect(segSrc).toMatch(/segment-list-item-selected/);
-      expect(segSrc).toMatch(/segment-list-item-hovered/);
-      expect(segSrc).toMatch(/selectedIndex\s*===\s*i/);
-      expect(segSrc).toMatch(/hoveredIndex\s*===\s*i/);
+    it('SegmentEditor.tsx applies selected/hovered/edge-active classes via selectedIndex/hoveredIndex/editMode', () => {
+      // [Step 1] Capture source
+      const src = fs.readFileSync(path.join(process.cwd(), 'src/screens/editor/SegmentEditor.tsx'), 'utf-8');
+
+      // [Step 2] Locate class assignment at line ~84 — specific pattern, not generic 'selected'
+      // Use precise regex that binds selectedIndex === i to segment-list-item-selected
+      expect(src).toMatch(/selectedIndex\s*===\s*i\s*\?\s*['"]\s*segment-list-item-selected['"]/);
+      expect(src).toMatch(/hoveredIndex\s*===\s*i\s*\?\s*['"]\s*segment-list-item-hovered['"]/);
+      expect(src).toMatch(/editMode\s*===\s*['"]edge['"]\s*&&\s*selectedIndex\s*===\s*i\s*\?\s*['"]\s*segment-list-item-edge-active['"]/);
+
+      // [Step 3] Assert data-testid and data-focus-id linkage for selection
+      expect(src).toMatch(/data-testid=\{`segment-list-item-\$\{i\}`\}/);
+      expect(src).toMatch(/data-focus-id=\{`segment-\$\{i\}`\}/);
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // 2. CORE BUG: CSS order — selected/hovered/edge-active must be AFTER base .segment-list-item
+  //    OR have increased specificity (.segment-list .segment-list-item-selected)
+  //    3-step: [capture css positions] -> [compute order vs base] -> [assert not overridden]
+  // ----------------------------------------------------------------
+  describe('2. CSS cascade order: selected/hovered/edge-active must win over base border (Red->Green core)', () => {
+    it('order: .segment-list-item-selected / hovered / edge-active appear AFTER base .segment-list-item or use higher specificity', () => {
+      // [Step 1] Capture Initial State: read css and locate base vs variant positions
+      const css = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+      const baseIdx = findBaseSegmentItemIndex(css);
+      expect(baseIdx, 'base .segment-list-item { must exist with border: 1px solid var(--border)').toBeGreaterThan(-1);
+
+      // Verify base block actually contains the border shorthand that overrides
+      const baseBlock = extractBlock(css, '.segment-list-item {', 400);
+      // use more robust: slice from baseIdx
+      const baseSlice = css.slice(baseIdx, baseIdx + 400);
+      expect(baseSlice).toMatch(/border\s*:\s*1px solid var\(--border\)/);
+
+      const selectedIdx = css.indexOf('.segment-list-item-selected');
+      const hoveredIdx = css.indexOf('.segment-list-item-hovered');
+      const edgeActiveIdx = css.indexOf('.segment-list-item-edge-active');
+
+      // [Step 2] Compute order / specificity — tolerate higher-specificity alternative
+      const hasHighSpecSelected = css.includes('.segment-list .segment-list-item-selected');
+      const hasHighSpecHovered = css.includes('.segment-list .segment-list-item-hovered');
+      const hasHighSpecEdge = css.includes('.segment-list .segment-list-item-edge-active');
+
+      const selectedAfter = selectedIdx > baseIdx;
+      const hoveredAfter = hoveredIdx > baseIdx;
+      const edgeAfter = edgeActiveIdx > baseIdx;
+
+      // [Step 3] Assert resulting transition: variants must be AFTER base OR high specificity
+      // This FAILS on current bug where 890 < 916 and no high specificity
+      expect(hasHighSpecSelected || selectedAfter, '.segment-list-item-selected must be AFTER base .segment-list-item or have higher specificity .segment-list .segment-list-item-selected').toBe(true);
+      expect(hasHighSpecHovered || hoveredAfter, '.segment-list-item-hovered must be AFTER base or higher specificity').toBe(true);
+      expect(hasHighSpecEdge || edgeAfter, '.segment-list-item-edge-active must be AFTER base or higher specificity').toBe(true);
+
+      // Ensure ring order is correct as reference (base -> selected) — regression guard
+      const ringBaseIdx = css.indexOf('.ring-list-item {');
+      const ringSelectedIdx = css.indexOf('.ring-list-item-selected');
+      // fallback search if exact not found (use base without modifier)
+      const ringBaseSearch = css.search(/\.ring-list-item\s*\{/);
+      const effectiveRingBase = ringBaseSearch !== -1 ? ringBaseSearch : ringBaseIdx;
+      expect(effectiveRingBase).toBeGreaterThan(-1);
+      expect(ringSelectedIdx).toBeGreaterThan(-1);
+      expect(ringSelectedIdx, 'ring selected must be AFTER ring base (reference correct order)').toBeGreaterThan(effectiveRingBase);
     });
 
-    it('WaveEngine-Cursor slope consistency across complex amps 0.7/1.3/2.7/3.4 and off-grid 0.37/1.23 (T127/T128 regression)', () => {
+    it('selected and hovered blocks are not immediately overwritten by a later .segment-list-item rule', () => {
+      // [Step 1] Capture full CSS
+      const css = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+      const baseIdx = findBaseSegmentItemIndex(css);
+      expect(baseIdx).toBeGreaterThan(-1);
+
+      // Find the LAST occurrence of base .segment-list-item { — if multiple, the last one matters for cascade
+      const baseRe = /\.segment-list-item\s*\{/g;
+      let lastBase = -1;
+      let mm: RegExpExecArray | null;
+      while ((mm = baseRe.exec(css)) !== null) {
+        // ensure not -selected/-hovered
+        const ch = css[mm.index + '.segment-list-item'.length];
+        if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t' || ch === '{') lastBase = mm.index;
+      }
+      expect(lastBase).toBeGreaterThan(-1);
+
+      const selIdx = css.indexOf('.segment-list-item-selected');
+      const hovIdx = css.indexOf('.segment-list-item-hovered');
+      const edgeIdx = css.indexOf('.segment-list-item-edge-active');
+
+      // [Step 2] Perform interaction: locate selected/high-spec
+      const highSel = css.includes('.segment-list .segment-list-item-selected');
+      const highHov = css.includes('.segment-list .segment-list-item-hovered');
+      const highEdge = css.includes('.segment-list .segment-list-item-edge-active');
+
+      // [Step 3] Assert variants are after the LAST base occurrence (or high spec)
+      expect(highSel || selIdx > lastBase, 'selected must be after LAST base occurrence or high specificity').toBe(true);
+      expect(highHov || hovIdx > lastBase, 'hovered must be after LAST base occurrence or high specificity').toBe(true);
+      if (edgeIdx !== -1) {
+        expect(highEdge || edgeIdx > lastBase, 'edge-active must be after LAST base occurrence or high specificity').toBe(true);
+      }
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // 3. 3-step state-transition: list row click would gain selected class and be visibly blue
+  // ----------------------------------------------------------------
+  describe('3. End-to-end: selectedIndex state transition yields selected class (visualizable as blue border)', () => {
+    it('simulates [null] -> [click index 1] -> [selected class appears] with class generation mirroring SegmentEditor.tsx:84', () => {
+      // [Step 1] Capture Initial State: no selection -> no blue border
+      const src = fs.readFileSync(path.join(process.cwd(), 'src/screens/editor/SegmentEditor.tsx'), 'utf-8');
+      expect(src).toMatch(/segment-list-item-selected/);
+
+      function classFor(i: number, selectedIndex: number | null, hoveredIndex: number | null, editMode: string | undefined): string {
+        return `segment-list-item${selectedIndex === i ? ' segment-list-item-selected' : ''}${hoveredIndex === i ? ' segment-list-item-hovered' : ''}${editMode === 'edge' && selectedIndex === i ? ' segment-list-item-edge-active' : ''}`;
+      }
+
+      // Before click: null selection -> no item has selected
+      expect(classFor(0, null, null, 'edge')).not.toMatch(/segment-list-item-selected/);
+      expect(classFor(1, null, null, 'edge')).not.toMatch(/segment-list-item-selected/);
+      expect(classFor(2, null, null, 'edge')).not.toMatch(/segment-list-item-selected/);
+
+      // [Step 2] Perform User Interaction: click row 1 -> set selectedIndex=1
+      const selectedIndex: number | null = 1;
+      const hoveredIndex: number | null = null;
+
+      // [Step 3] Assert Resulting Transition: only row 1 has selected blue border, others do not
+      expect(classFor(1, selectedIndex, hoveredIndex, 'edge')).toMatch(/segment-list-item-selected/);
+      expect(classFor(0, selectedIndex, hoveredIndex, 'edge')).not.toMatch(/segment-list-item-selected/);
+      expect(classFor(2, selectedIndex, hoveredIndex, 'edge')).not.toMatch(/segment-list-item-selected/);
+      // edge-active only when editMode==='edge' and selected
+      expect(classFor(1, selectedIndex, hoveredIndex, 'edge')).toMatch(/segment-list-item-edge-active/);
+      expect(classFor(1, selectedIndex, hoveredIndex, 'vertex')).not.toMatch(/segment-list-item-edge-active/);
+
+      // CSS must now actually make that class visible (not overridden)
+      const css = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+      const baseIdx = findBaseSegmentItemIndex(css);
+      const selIdx = css.indexOf('.segment-list-item-selected');
+      const highSpec = css.includes('.segment-list .segment-list-item-selected');
+      expect(highSpec || selIdx > baseIdx, 'CSS order must allow selected border-color to be visible').toBe(true);
+      expect(extractBlock(css, '.segment-list-item-selected')).toMatch(/var\(--accent\)/);
+    });
+
+    it('hovered class appears independently and also wins over base (off-grid irrelevant but verifies second variant)', () => {
+      // [Step 1] Capture initial hover null
+      function classFor(i: number, hovered: number | null): string {
+        return `segment-list-item${hovered === i ? ' segment-list-item-hovered' : ''}`;
+      }
+      expect(classFor(0, null)).not.toMatch(/segment-list-item-hovered/);
+      // [Step 2] Hover row 2
+      const hov = 2;
+      // [Step 3] Row 2 has hovered class, color not overridden
+      expect(classFor(2, hov)).toMatch(/segment-list-item-hovered/);
+      expect(classFor(1, hov)).not.toMatch(/segment-list-item-hovered/);
+      const css = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+      const baseIdx = findBaseSegmentItemIndex(css);
+      const hovIdx = css.indexOf('.segment-list-item-hovered');
+      const highSpec = css.includes('.segment-list .segment-list-item-hovered');
+      expect(highSpec || hovIdx > baseIdx).toBe(true);
+      expect(extractBlock(css, '.segment-list-item-hovered')).toMatch(/rgba\(\s*237/);
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // 4. WaveEngine + Cursor numeric consistency (off-grid, complex amplitudes) — regression guard
+  // ----------------------------------------------------------------
+  describe('4. WaveEngine-Cursor numeric consistency across complex amplitudes 0.7/1.3/2.7/3.4 and off-grid 0.37/1.23', () => {
+    it('waveYAt slope matches Cursor speed (2*TW_AMP*amplitude) and getPoints length invariant', () => {
       // [Step 1] Capture amps and off-grid beats
       const amps = [0.7, 1.3, 2.7, 3.4] as const;
-      const offBeats = [0.37, 1.23, 0.63, 2.37] as const;
+      const offGridBeats = [0.37, 1.23, 0.63, 2.37] as const;
       for (const amp of amps) {
-        // unclamped displacement per beat must match cursor
+        // [Step 2] Build engine with small beats to avoid clamp
         const tl = new BpmTimeline(120, [], amp);
         const smallBeats = Math.min(0.37, (1 / amp) * 0.4);
-        const segsSmall: Array<{ direction: 'down' | 'up' | 'stay'; beats: number }> = [{ direction: 'down', beats: smallBeats }];
+        const segsSmall: Array<{ direction: 'up' | 'down' | 'stay'; beats: number }> = [{ direction: 'down', beats: quantizeBeat(smallBeats, 0.125) || 0.125 }];
         const engSmall = new WaveEngine(segsSmall, tl, amp, 0);
         const pts = engSmall.getPoints();
+        expect(pts.length).toBe(segsSmall.length + 1);
         const disp = pts[1].y - pts[0].y;
-        const expectedDisp = 2 * TW_AMP * amp * smallBeats;
+        const expectedDisp = 2 * TW_AMP * amp * segsSmall[0].beats;
         expect(Math.abs(disp - expectedDisp), `amp=${amp} wave disp mismatch`).toBeLessThan(1e-6);
 
-        // [Step 2] Cursor per-beat vs wave per-beat
+        // Cursor per-beat vs wave per-beat
         const beatMs = 500;
         const dt = beatMs / 1000;
         const cur = new Cursor(amp, 0);
@@ -390,12 +262,11 @@ describe('T152 編集モード対応ハイライトのみ表示（モード別�
         cur.update(dt, false, true, beatMs);
         const curDisp = cur.y - startY;
         const expectedCur = 2 * TW_AMP * amp;
-        // clamped if would exceed bottom
         const clamped = Math.min(BOTTOM - startY, expectedCur);
-        expect(Math.abs(curDisp - clamped), `amp=${amp} cursor disp mismatch`).toBeLessThan(1e-3);
+        expect(Math.abs(curDisp - clamped), `amp=${amp} cursor disp`).toBeLessThan(1e-3);
 
         // [Step 3] Off-grid waveYAt interpolation via dY clamp (T128)
-        for (const ob of offBeats) {
+        for (const ob of offGridBeats) {
           const segs: Array<{ direction: 'down' | 'up' | 'stay'; beats: number }> = [{ direction: 'down', beats: 3 }, { direction: 'up', beats: 3 }];
           const eng = new WaveEngine(segs, tl, amp, 0);
           const p0 = eng.getPoints()[0];
@@ -406,14 +277,21 @@ describe('T152 編集モード対応ハイライトのみ表示（モード別�
           const expectedY = Math.max(TOP, Math.min(BOTTOM, rawY));
           expect(Math.abs(eng.waveYAt(safeBeat) - expectedY), `amp=${amp} ob=${ob} waveYAt`).toBeLessThan(1e-6);
         }
-      }
 
-      // getPoints length invariant across all
-      const tl2 = new BpmTimeline(120, [], 1.3);
-      const segs2 = [{ direction: 'down' as const, beats: 1 }, { direction: 'up' as const, beats: 1 }, { direction: 'stay' as const, beats: 1 }];
-      const eng2 = new WaveEngine(segs2, tl2, 1.3, 0);
-      expect(eng2.getPoints().length).toBe(segs2.length + 1);
-      for (const s of segs2) expect(isSnapAligned(s.beats, 1)).toBe(true);
+        // Snap alignment for quantize correctness
+        for (const snap of [0.125, 0.25, 0.5] as const) {
+          for (const ob of offGridBeats) {
+            const tl2 = new BpmTimeline(120, [], amp);
+            const segs2 = [
+              { direction: 'up' as const, beats: quantizeBeat(1 + ob * 0.3, snap) || snap },
+              { direction: 'down' as const, beats: quantizeBeat(1.5, snap) || snap },
+            ];
+            const eng2 = new WaveEngine(segs2, tl2, amp, 0);
+            expect(eng2.getPoints().length).toBe(segs2.length + 1);
+            for (const s of segs2) expect(isSnapAligned(s.beats, snap)).toBe(true);
+          }
+        }
+      }
     });
   });
 });

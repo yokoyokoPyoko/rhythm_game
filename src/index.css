@@ -887,14 +887,6 @@ button:focus-visible {
   border-color: var(--accent);
 }
 
-.segment-list-item-selected {
-  border-color: var(--accent);
-}
-
-.segment-list-item-hovered {
-  border-color: rgba(237, 237, 237, 0.4);
-}
-
 .segment-editor-head {
   display: flex;
   align-items: center;
@@ -922,6 +914,14 @@ button:focus-visible {
   background-color: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.segment-list-item-selected {
+  border-color: var(--accent);
+}
+
+.segment-list-item-hovered {
+  border-color: rgba(237, 237, 237, 0.4);
 }
 
 .segment-index {
