@@ -7,10 +7,6 @@ function dir(d: number): 'up' | 'down' | 'stay' {
   return Math.abs(d) < 0.5 ? 'stay' : d < 0 ? 'up' : 'down';
 }
 
-function perBeat(bpmTimeline: BpmTimeline, beat: number): number {
-  return 2 * TW_AMP * bpmTimeline.amplitudeAt(beat);
-}
-
 function clampY(y: number): number {
   return Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, y));
 }
@@ -41,31 +37,29 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   if (idx === 0 && segments.length > 0) {
     const nextPt = pts[1];
     const nextBeat = nextPt?.beat ?? pts[0].beat + safeSnap;
-    let clampedBeat = Math.max(safeSnap, Math.min(nextBeat - safeSnap, targetBeat));
-    clampedBeat = quantizeBeat(clampedBeat, safeSnap);
-    const clampedTargetY = clampY(targetY);
-    const prevY = pts[0].y;
-    const pb = perBeat(bpmTimeline, 0);
-    const dy0 = Math.abs(clampedTargetY - prevY);
-    const segBeats = Math.max(safeSnap, quantizeBeat(dy0 / pb, safeSnap));
-    const d = dir(clampedTargetY - prevY);
-    return segments.map((s, i) => (i === 0 ? { ...s, beats: segBeats, direction: d } : s));
+    const clampedBeat = Math.max(safeSnap, Math.min(nextBeat - safeSnap, quantizeBeat(targetBeat, safeSnap)));
+    // beats = horizontal distance, direction = from Y
+    const beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
+    if (beats < safeSnap) return null;
+    const yPrev = clampY(targetY);
+    const d = dir(yPrev - pts[0].y);
+    return segments.map((s, i) => (i === 0 ? { ...s, beats, direction: d } : s));
   }
 
   // Endpoint: last vertex — adjust only last segment
   if (idx === pts.length - 1 && segments.length > 0) {
     const prevPt = pts[idx - 1];
     const prevBeat = prevPt?.beat ?? 0;
-    const yPrev = prevPt?.y ?? TW_CENTER_Y;
-    const pb = perBeat(bpmTimeline, prevBeat);
+    const clampedBeat = Math.max(prevBeat + safeSnap, quantizeBeat(targetBeat, safeSnap));
+    // beats = horizontal distance, direction = from Y
+    const beats = quantizeBeat(clampedBeat - prevBeat, safeSnap);
+    if (beats < safeSnap) return null;
     const clampedTargetY = clampY(targetY);
-    const dyLast = Math.abs(clampedTargetY - yPrev);
-    const segBeats = Math.max(safeSnap, quantizeBeat(dyLast / pb, safeSnap));
-    const dLastDir = dir(clampedTargetY - yPrev);
-    return segments.map((s, i) => (i === idx - 1 ? { ...s, beats: segBeats, direction: dLastDir } : s));
+    const d = dir(clampedTargetY - prevPt.y);
+    return segments.map((s, i) => (i === idx - 1 ? { ...s, beats, direction: d } : s));
   }
 
-  // Interior vertex — adjust 2 adjacent segments
+  // Interior vertex — adjust 2 adjacent segments (2 segments only)
   const prevPt = pts[idx - 1];
   const nextPt = pts[idx + 1];
   const prevBeat = prevPt.beat;
@@ -73,31 +67,41 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   const yPrev = prevPt.y;
   const yNext = nextPt.y;
 
+  // T149: beats from X (horizontal) position, direction from Y only
   let beatPrime = quantizeBeat(targetBeat, safeSnap);
   beatPrime = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beatPrime));
-  beatPrime = quantizeBeat(beatPrime, safeSnap);
+
+  let beatsPrev = quantizeBeat(beatPrime - prevBeat, safeSnap);
+  let beatsNext = quantizeBeat(nextBeat - beatPrime, safeSnap);
+
+  if (beatsPrev < safeSnap || beatsNext < safeSnap) return null;
 
   const clampedTargetY = clampY(targetY);
-  const pbPrev = perBeat(bpmTimeline, prevBeat);
-  const pbNext = perBeat(bpmTimeline, beatPrime);
-
-  const dyPrev = Math.abs(clampedTargetY - yPrev);
-  const dyNext = Math.abs(yNext - clampedTargetY);
-
-  const beatsPrev = Math.max(safeSnap, quantizeBeat(dyPrev / pbPrev, safeSnap));
-  const beatsNext = Math.max(safeSnap, quantizeBeat(dyNext / pbNext, safeSnap));
+  const dirPrev = dir(clampedTargetY - yPrev);
+  const dirNext = dir(yNext - clampedTargetY);
 
   const candidateSegs = segments.map((s, i) => {
-    if (i === idx - 1) return { ...s, direction: dir(clampedTargetY - yPrev), beats: beatsPrev };
-    if (i === idx) return { ...s, direction: dir(yNext - clampedTargetY), beats: beatsNext };
+    if (i === idx - 1) return { ...s, direction: dirPrev, beats: beatsPrev };
+    if (i === idx) return { ...s, direction: dirNext, beats: beatsNext };
     return s;
   });
 
+  // Validate: the vertex at beatPrime should match our clamped target
   const candidateEngine = new WaveEngine(candidateSegs, bpmTimeline, baseAmp, startPosition);
-  const achievedY = candidateEngine.waveYAt(beatPrime);
-  const tol = 0.5 * pbNext * safeSnap + 1.0;
-  void achievedY;
-  void tol;
+  const pts2 = candidateEngine.getPoints();
+  const achievedBeat = pts2[idx]?.beat;
+  if (Math.abs(achievedBeat - beatPrime) > safeSnap * 0.51) {
+    // The beat didn't land where expected — re-derive beats from actual points
+    const actualPrevBeat = pts2[idx - 1]?.beat ?? prevBeat;
+    const actualNextBeat = pts2[idx + 1]?.beat ?? nextBeat;
+    beatsPrev = quantizeBeat(beatPrime - actualPrevBeat, safeSnap);
+    beatsNext = quantizeBeat(actualNextBeat - beatPrime, safeSnap);
+    if (beatsPrev < safeSnap || beatsNext < safeSnap) return null;
+    for (let i = 0; i < candidateSegs.length; i++) {
+      if (i === idx - 1) candidateSegs[i] = { ...candidateSegs[i], beats: beatsPrev };
+      if (i === idx) candidateSegs[i] = { ...candidateSegs[i], beats: beatsNext };
+    }
+  }
 
   return candidateSegs;
 }
@@ -131,36 +135,29 @@ export function calculateEdgeDrag(input: EdgeDragInput): Segment[] | null {
   const pStart = pts[idx];
   const pEnd = pts[idx + 1];
 
+  // T149: parallel move — shift both endpoints by dxBeat
+  const origLen = pEnd.beat - pStart.beat;
   const newBeatStart = pStart.beat + dxBeat;
   const newBeatEnd = pEnd.beat + dxBeat;
   const newYStart = clampY(pStart.y + dy);
   const newYEnd = clampY(pEnd.y + dy);
 
-  const pp = perBeat(bpmTimeline, newBeatStart);
-  const dyEdge = Math.abs(newYEnd - newYStart);
-  const dyBeats = dyEdge / pp;
-  const dxQuantized = Math.abs(dxBeat);
-
-  const edgeBeats = Math.max(safeSnap, quantizeBeat(dxQuantized, safeSnap), quantizeBeat(dyBeats, safeSnap));
+  // Edge segment: preserve original duration, direction from Y delta
   const d = newYEnd - newYStart;
-  const dirEdge = Math.abs(d) < 0.5 ? 'stay' : d < 0 ? 'up' : 'down';
+  const dirEdge = dir(d);
+  const edgeBeats = Math.max(safeSnap, quantizeBeat(origLen, safeSnap));
 
-  const segmentFor = (fromBeat: number, fromY: number, toBeat: number, toY: number): Segment => {
-    const dBeats = toBeat - fromBeat;
-    const dY = toY - fromY;
-    if (Math.abs(dY) < 0.5) return { direction: 'stay', beats: Math.max(safeSnap, quantizeBeat(Math.abs(dBeats), safeSnap)) };
-    const p = perBeat(bpmTimeline, fromBeat);
-    const beats = Math.max(safeSnap, quantizeBeat(Math.abs(dBeats), safeSnap), quantizeBeat(Math.abs(dY) / p, safeSnap));
-    return {
-      direction: dY < 0 ? 'up' : 'down',
-      beats: quantizeBeat(beats, safeSnap),
-    };
-  };
-
+  // Left adjacent segment (i = idx - 1): from prev point to newBeatStart
+  // Right adjacent segment (i = idx + 1): from newBeatEnd to next point
   return segments.map((s, i) => {
     if (i === idx - 1 && i >= 0) {
       const pPrev = pts[idx - 1];
-      return segmentFor(pPrev.beat, pPrev.y, newBeatStart, newYStart);
+      const segBeats = newBeatStart - pPrev.beat;
+      if (segBeats < safeSnap - 1e-6) return s; // too compressed, keep original
+      const quantized = Math.max(safeSnap, quantizeBeat(segBeats, safeSnap));
+      const dY = newYStart - pPrev.y;
+      const segDir = dir(dY);
+      return { direction: segDir, beats: quantized };
     }
     if (i === idx) {
       return {
@@ -170,7 +167,13 @@ export function calculateEdgeDrag(input: EdgeDragInput): Segment[] | null {
     }
     if (i === idx + 1 && i + 1 < pts.length) {
       const pAfter = pts[idx + 2];
-      return pAfter ? segmentFor(newBeatEnd, newYEnd, pAfter.beat, pAfter.y) : s;
+      if (!pAfter) return s;
+      const segBeats = pAfter.beat - newBeatEnd;
+      if (segBeats < safeSnap - 1e-6) return s; // too compressed, keep original
+      const quantized = Math.max(safeSnap, quantizeBeat(segBeats, safeSnap));
+      const dY = pAfter.y - newYEnd;
+      const segDir = dir(dY);
+      return { direction: segDir, beats: quantized };
     }
     return s;
   });

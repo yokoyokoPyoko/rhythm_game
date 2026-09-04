@@ -438,8 +438,12 @@ export default function WavePreview({
         const x = e.clientX - rect.left
         const fieldH = rect.height - RULER_H
         const beat = quantizeBeat(xToBeatLocal(x, rect.width), safeSnap)
-        const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
-        const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + yRaw * TW_AMP))
+        const centerY = RULER_H + fieldH / 2
+        const maxAmp = (fieldH - 24) / 2
+        const minAmp = Math.max(8, 0.2 * rect.height)
+        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+        const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
+        const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, mapYInverse(e.clientY - rect.top)))
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
 
         if (segments.length === 0) return
@@ -461,10 +465,14 @@ export default function WavePreview({
         const fieldH = rect.height - RULER_H
         const drag = edgeDragRef.current
         const dxBeat = quantizeBeat(xToBeatLocal(x, rect.width) - drag.startBeat, safeSnap)
-        const yRaw = ((e.clientY - rect.top - RULER_H) / fieldH - 0.5) * 2
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-        const newYMouse = TW_CENTER_Y + yRaw * TW_AMP
+        const centerY = RULER_H + fieldH / 2
+        const maxAmp = (fieldH - 24) / 2
+        const minAmp = Math.max(8, 0.2 * rect.height)
+        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+        const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
+        const newYMouse = mapYInverse(e.clientY - rect.top)
         const dy = Math.max(TW_CENTER_Y - TW_AMP - drag.startY, Math.min(TW_CENTER_Y + TW_AMP - drag.startY, newYMouse - drag.startY))
+        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
 
         const result = calculateEdgeDrag({
           segments,
@@ -740,21 +748,22 @@ export default function WavePreview({
       if (k < 0 || k >= segments.length) return
 
       const fieldH = rect.height - RULER_H
-      const yRaw = ((y - RULER_H) / fieldH - 0.5) * 2
-      const yAdd = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + yRaw * TW_AMP))
+      const centerY = RULER_H + fieldH / 2
+      const maxAmpV = (fieldH - 24) / 2
+      const minAmpV = Math.max(8, 0.2 * rect.height)
+      const dispAmpV = Math.min(maxAmpV, Math.max(TW_AMP, minAmpV))
+      const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmpV) * TW_AMP
+      const yAdd = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, mapYInverse(y)))
 
       const yPrev = pts[k].y
       const yNext = pts[k + 1].y
-      const perBeatA = 2 * TW_AMP * timeline.amplitudeAt(pts[k].beat)
-      const perBeatB = 2 * TW_AMP * timeline.amplitudeAt(beatAdd)
 
-      const dA = yAdd - yPrev
-      const beatsA = Math.max(safeSnap, quantizeBeat(Math.abs(dA) / perBeatA, safeSnap))
-      const dirA = Math.abs(dA) < 0.5 ? ('stay' as const) : dA < 0 ? ('up' as const) : ('down' as const)
-
-      const dB = yNext - yAdd
-      const beatsB = Math.max(safeSnap, quantizeBeat(Math.abs(dB) / perBeatB, safeSnap))
-      const dirB = Math.abs(dB) < 0.5 ? ('stay' as const) : dB < 0 ? ('up' as const) : ('down' as const)
+      // T149: beats from horizontal position (preserve original time span)
+      const beatsA = Math.max(safeSnap, quantizeBeat(beatAdd - pts[k].beat, safeSnap))
+      const beatsB = Math.max(safeSnap, quantizeBeat(pts[k + 1].beat - beatAdd, safeSnap))
+      // direction from Y only
+      const dirA = Math.abs(yAdd - yPrev) < 0.5 ? ('stay' as const) : yAdd < yPrev ? ('up' as const) : ('down' as const)
+      const dirB = Math.abs(yNext - yAdd) < 0.5 ? ('stay' as const) : yNext < yAdd ? ('up' as const) : ('down' as const)
 
       const newSegments = [...segments]
       newSegments.splice(k, 1, { direction: dirA, beats: beatsA }, { direction: dirB, beats: beatsB })
