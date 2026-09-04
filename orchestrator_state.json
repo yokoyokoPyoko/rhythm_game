@@ -1032,7 +1032,7 @@
     },
     "T152": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1788501338.2563643,
       "cycles": 1,
       "sessions": {
@@ -1040,7 +1040,13 @@
         "coder": "ses_f95022975ffe5ZUKVWaAVI9DJ4",
         "reviewer": "ses_f95011453ffel30ZxU3T7gU2H7"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788501515.3128302
+    },
+    "T153": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788507357.1532505
     }
   },
   "consecutive_no_action": 0

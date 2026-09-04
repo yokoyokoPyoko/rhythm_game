@@ -866,5 +866,32 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T153",
+    "desc": "セグメントリスト青枠のCSS順序修正（T151残存バグ）。バグ: セグメントリスト行が青くハイライトされない。SegmentEditor.tsx:84 のクラス切替えと index.css:890-896 の定義自体は存在するが、選択ルール .segment-list-item-selected:890 がベース .segment-list-item:916 より前にあり、詳細度同点のため後のベース border: 1px solid var(--border) が勝って青枠が上書きされる。リング側はベース→選択の順で正しい。修正: src/index.css のみ。選択・ホバー系3ルール（selected/hovered/edge-active）をベース .segment-list-item 定義より後ろへ移動、または詳細度上げ（.segment-list .segment-list-item-selected）。色自体は現行のまま（selected=var(--accent)、hovered=rgba(237,237,237,0.4)）。完了条件: (1) リスト行クリックで該当行が青枠で視認できること（プレビュー隣接辺の連動はT151のまま）(2) tsc --noEmit。",
+    "depends_on": [
+      "T152"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T154",
+    "desc": "Vertex空ドラッグで頂点作成（辺と同様のプレビュー→確定）。要求: 点の編集を辺の編集と同じ様に、ドラッグ中にプレビューをして、ドラッグしたら頂点を作成する。空ドラッグで頂点作成 を採用。現状: vertex空ドラッグはpan（WavePreview.tsx:685-694）。辺はドラッグ中 dragPreview のみ・mouseupで1回コミット（T150）。修正: src/screens/editor/WavePreview.tsx のみ。vertex空 mousedown で作成ドラッグ開始（アンカーbeat＝押下点の所属セグメント k を記録）。pan開始はやめる（panはホイール／スクロールスライダー継続）。mousemove は onSegmentsChange せず dragPreviewRef/setDragPreview のみ。Yは3等分吸着、beatsはX優先（T149方式）でプレビュー波形を描画。mouseup で1回だけ onSegmentsChange(preview)（＝頂点作成確定）。既存頂点掴み移動は従来通り維持。完了条件（オフグリッド必須）: (1) mousemove 中は onSegmentsChange が呼ばれず、mouseup で1回だけ呼ばれること (2) 空ドラッグ確定で頂点数+1、getPoints().length が+1、全 beats が safeSnap 整数倍であること (3) tsc --noEmit。",
+    "depends_on": [
+      "T153"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T155",
+    "desc": "Ctrl+Z（元に戻す）追加（波形＋リング）。要求: Ctrl+Z（元に戻す）を追加。対象は 波形＋リング（segmentsとrings両方）を採用。現状: 履歴機構なし。setSegments/setRings が各所から直接呼ばれる。修正: src/screens/EditorScreen.tsx のみ。historyRef = {past: [{segments,rings}][], future: []}（上限50）。コミット確定時のみpush（ドラッグmouseup、dblclick追加、右クリック削除、SegmentEditor編集、リングadd/move/delete、録音finish、import/clear）。プレビュー・tick中はpushしない。onKeyDown に Ctrl/Cmd+Z（undo）、Ctrl+Shift+Z／Ctrl+Y（redo）を追加。Delete ハンドラ（:708）付近に配置し、editable（input/select/textarea編集中）は除外。undo後は選択indexを範囲内に補正。完了条件: (1) 作成→削除→Undoで復元、Redoで再適用できること (2) プレビュー中Undoで履歴が汚染されないこと (3) tsc --noEmit。",
+    "depends_on": [
+      "T154"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
