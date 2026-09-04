@@ -848,5 +848,23 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T151",
+    "desc": "セグメント選択時のハイライト表示（点/辺＋リスト青枠）。バグ: (1) Vertexモードで頂点をクリックしても selectedSegment に反映されず、右ペイン行もプレビューもハイライトされない（WavePreview.tsx: handleMouseDown のvertex分岐は vertexDragRef を立てるだけで onSelectSegment を呼ばない。edge分岐は onSelectSegment(eHit) を呼ぶため非対称）。(2) リスト側のセグメント行は SegmentEditor.tsx:84 で segment-list-item-selected クラスを付与するが、src/index.css に対応CSS定義が無く（.ring-list-item-selected のみ定義）、クラスが切り替わっても見た目が変わらない。修正: WavePreview.tsx のみ＋index.css 1ルール追加。vertexモード handleMouseDown で vHit>=0 のとき onSelectSegment(vHit===0?0:vHit-1) を追加（現行マッピング維持）。index.css に .segment-list-item-selected { border-color: var(--accent); } を追加（リング同系の青枠）。segment-list-item-hovered も同様に追加（border-color: rgba(237,237,237,0.4)）。完了条件: (1) Vertexモードで頂点をクリックすると右ペインの該当行が青枠でハイライトされ、プレビューの隣接辺・頂点も連動して光ること (2) リスト行クリックでも segment-list-item-selected の青枠が視認できること (3) tsc --noEmit。",
+    "depends_on": [
+      "T150"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T152",
+    "desc": "編集モード対応ハイライトのみ表示（モード別分離）。要求: 編集モードによってハイライトは編集モードに対応するもののみ表示する。現状: WavePreview.tsx:240-242 の辺ハイライト（isSelectedEdge/isHoveredEdge）と :378-380 のリングハイライト、handleMouseMove:880-885 の無条件リング優先は editMode を見ていない。全モードで辺・リングが白く光り、ringモード以外でもリングホバーが辺ホバーを潰す。修正: WavePreview.tsx のみ。辺ストローク＋ハロー：isSelectedEdge = editMode!=='ring' && i===selectedSegment、hoverも同様。ringモードでは辺ハイライトを出さない（通常色のまま）。頂点ハンドル：現行通りvertexモードのみ描画（変更なし）。リング：isSelected/isHovered = editMode==='ring' && ... に限定。vertex/edgeモードでは通常色表示・ハイライト抑制。handleMouseMove の無条件リング優先を editMode==='ring' 時のみに限定。vertex/edgeモードでは自モードのhitのみ判定し他モードの onHover には null を送る。完了条件: (1) 各モードで対応物のみがハイライトされ、他モードのものは通常色のままであること（ringモードで辺が光らない等）(2) ringモード以外で辺上にホバーしてもリングホバーに潰されないこと (3) 回帰: T116（V/E/R分離）/T118（相互ハイライト）/T146（クラス青枠）/T151。tsc --noEmit。",
+    "depends_on": [
+      "T151"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
