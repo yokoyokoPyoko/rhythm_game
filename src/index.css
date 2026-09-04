@@ -887,6 +887,14 @@ button:focus-visible {
   border-color: var(--accent);
 }
 
+.segment-list-item-selected {
+  border-color: var(--accent);
+}
+
+.segment-list-item-hovered {
+  border-color: rgba(237, 237, 237, 0.4);
+}
+
 .segment-editor-head {
   display: flex;
   align-items: center;

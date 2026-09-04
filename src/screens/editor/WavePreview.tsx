@@ -677,6 +677,7 @@ export default function WavePreview({
     if (editMode === 'vertex') {
       const vHit = nearestVertexIndex(e.clientX, e.clientY)
       if (vHit >= 0) {
+        onSelectSegment?.(vHit === 0 ? 0 : vHit - 1)
         vertexDragRef.current = { index: vHit }
         e.preventDefault()
         return
