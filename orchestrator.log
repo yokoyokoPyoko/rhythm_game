@@ -7036,3 +7036,6 @@ src/screens/editor/WavePreview.tsx(791,13): error TS6133: 'dispAmp' is declared 
 2026-09-04 21:14:25,895 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-04 21:15:04,330 [INFO] Orchestrator range execution: 1 tasks (from=T156, to=T156, budget=600m)
 2026-09-04 21:15:04,330 [INFO] [T156] --only mode: skipping dependency checks.
+2026-09-05 08:05:51,813 [INFO] --resume: resuming T156
+2026-09-05 08:06:27,692 [INFO] Orchestrator range execution: 1 tasks (from=T156, to=T156, budget=600m)
+2026-09-05 08:06:27,692 [INFO] [T156] --only mode: skipping dependency checks.

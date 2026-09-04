@@ -51,6 +51,8 @@ export interface WavePreviewProps {
   snap?: number
   selectedRing?: number | null
   selectedSegment?: number | null
+  selectedRings?: number[]
+  selectedSegments?: number[]
   hoveredRing?: number | null
   hoveredSegment?: number | null
   positionMs?: number
@@ -62,6 +64,10 @@ export interface WavePreviewProps {
   onMoveRing?: (index: number, beat: number) => void
   onSelectRing?: (index: number | null) => void
   onSelectSegment?: (index: number | null) => void
+  onSelectRings?: (indices: number[]) => void
+  onSelectSegments?: (indices: number[]) => void
+  onMultiMoveRings?: (moves: { index: number; beat: number }[]) => void
+  onMultiMoveSegments?: (next: Segment[]) => void
   onHoverRing?: (index: number | null) => void
   onHoverSegment?: (index: number | null) => void
   onDeleteRing?: (index: number) => void
@@ -79,6 +85,8 @@ export default function WavePreview({
   snap = 0.25,
   selectedRing = null,
   selectedSegment = null,
+  selectedRings = [],
+  selectedSegments = [],
   hoveredRing = null,
   hoveredSegment = null,
   positionMs,
@@ -90,6 +98,10 @@ export default function WavePreview({
   onMoveRing,
   onSelectRing,
   onSelectSegment,
+  onSelectRings,
+  onSelectSegments,
+  onMultiMoveRings,
+  onMultiMoveSegments,
   onHoverRing,
   onHoverSegment,
   onDeleteRing,
@@ -108,6 +120,14 @@ export default function WavePreview({
   // T154: vertex creation drag (empty mousedown → drag → mouseup commits new vertex)
   const vertexCreateRef = useRef<{ anchorSeg: number; anchorBeat: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; startBeat: number; viewBeats: number; moved: boolean } | null>(null)
+  // T156: rubber band selection (right-drag)
+  const rubberRef = useRef<{ startBeat: number; startX: number; startY: number; mode: EditMode } | null>(null)
+  const rubberDraggedRef = useRef(false)
+  const [rubberRect, setRubberRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  // T156: multi-item drag (left-drag on selected items)
+  const multiDragRef = useRef<{ startBeat: number; startY: number; origRingBeats?: number[]; origSegIndices?: number[] } | null>(null)
+  const [multiDragSegments, setMultiDragSegments] = useState<Segment[] | null>(null)
+  const [ringDragOffset, setRingDragOffset] = useState(0)
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
 
@@ -139,6 +159,96 @@ export default function WavePreview({
   }, [])
 
   const safeSnap = snap > 0 ? snap : 0.25
+
+  // T156: coordinate helpers (defined before renderCanvas)
+  const geo = geoRef.current
+  const beatToXLocal = (b: number, w: number) => ((b - geo.viewStart) / geo.viewBeats) * w
+  const xToBeatLocal = (x: number, width: number): number => {
+    const g = geoRef.current
+    return g.viewStart + (x / width) * g.viewBeats
+  }
+
+  // T156: compute multi-drag preview segments from original segments + selectedIndices + offset
+  const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number, dy: number, canvasH: number): Segment[] => {
+    if (selSegIdxs.length === 0) return null as unknown as Segment[]
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const engine = new WaveEngine(origSegs, timeline, EDITOR_BASE_AMP, startPosition)
+    const pts = engine.getPoints()
+    const fieldH = canvasH - RULER_H
+    const centerY = RULER_H + fieldH / 2
+    const maxAmp = (fieldH - 24) / 2
+    const minAmp = Math.max(8, 0.2 * canvasH)
+    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+    const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
+    const perBeat = 2 * TW_AMP * (timeline.amplitudeAt(0) || EDITOR_BASE_AMP)
+    const result = [...origSegs]
+    const selectedSet = new Set(selSegIdxs)
+    for (let i = 0; i < pts.length; i++) {
+      if (!selectedSet.has(i)) continue
+      const prevPt = pts[i - 1]
+      const nextPt = pts[i + 1]
+      if (!prevPt && !nextPt) continue
+      if (i > 0 && i < pts.length) {
+        const segIdx = i - 1
+        if (segIdx >= 0 && segIdx < result.length) {
+          const newBeats = Math.max(safeSnap, quantizeBeat(result[segIdx].beats + dxBeat, safeSnap))
+          result[segIdx] = { ...result[segIdx], beats: newBeats }
+        }
+      }
+    }
+    return result
+  }
+
+  // T156: find items inside a rubber band rectangle
+  const findItemsInRect = (
+    x0: number, y0: number, x1: number, y1: number,
+    rectW: number, rectH: number,
+  ): { rings: number[]; segs: number[] } => {
+    const minX = Math.min(x0, x1)
+    const maxX = Math.max(x0, x1)
+    const minY = Math.min(y0, y1)
+    const maxY = Math.max(y0, y1)
+    const minBX = minX / rectW * geo.viewBeats + geo.viewStart
+    const maxBX = maxX / rectW * geo.viewBeats + geo.viewStart
+    const foundRings: number[] = []
+    const foundSegs: number[] = []
+    if (editMode === 'ring') {
+      rings.forEach((r, i) => {
+        const rx = beatToXLocal(r.beat, rectW)
+        if (rx >= minX - 35 && rx <= maxX + 35) foundRings.push(i)
+      })
+    } else {
+      const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+      const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+      const fieldH = rectH - RULER_H
+      const centerY = RULER_H + fieldH / 2
+      const maxAmp = (fieldH - 24) / 2
+      const minAmpV = Math.max(8, 0.2 * rectH)
+      const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmpV))
+      const mapYLocal = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
+      const SAMPLE_STEP = 0.25
+      for (let i = 0; i < segments.length; i++) {
+        const segStart = segments.slice(0, i).reduce((s, seg) => s + seg.beats, 0)
+        const segEnd = segStart + segments[i].beats
+        if (segEnd < minBX || segStart > maxBX) continue
+        if (editMode === 'vertex') {
+          const vPt = engine.getPoints()[i]
+          if (!vPt) continue
+          const vx = beatToXLocal(vPt.beat, rectW)
+          const vy = mapYLocal(vPt.y)
+          if (vx >= minX - 14 && vx <= maxX + 14 && vy >= minY - 14 && vy <= maxY + 14) foundSegs.push(i)
+        } else {
+          let hit = false
+          for (let b = Math.max(segStart, minBX); b <= Math.min(segEnd, maxBX) + 1e-9 && !hit; b += SAMPLE_STEP) {
+            const bx = beatToXLocal(Math.min(b, segEnd), rectW)
+            const by = mapYLocal(engine.waveYAt(Math.min(b, segEnd)))
+            if (bx >= minX - 16 && bx <= maxX + 16 && by >= minY - 16 && by <= maxY + 16) { hit = true; foundSegs.push(i) }
+          }
+        }
+      }
+    }
+    return { rings: foundRings, segs: foundSegs }
+  }
 
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current
@@ -245,7 +355,7 @@ export default function WavePreview({
       const p0 = points[i]
       const p1 = points[i + 1]
       const seg = renderSegs[i]
-      const isSelectedEdge = editMode !== 'ring' && i === selectedSegment
+      const isSelectedEdge = editMode !== 'ring' && (selectedSegments.includes(i) || i === selectedSegment)
       const isHoveredEdge = editMode !== 'ring' && i === hoveredSegment
       const isHighlighted = isSelectedEdge || isHoveredEdge
       const color =
@@ -318,7 +428,7 @@ export default function WavePreview({
         const vy = mapY(p.y)
         const isStart = p.beat === 0
         const isHoveredVertex = hoveredSegment != null && (hoveredSegment === idx || hoveredSegment === idx - 1)
-        const isSelectedVertex = selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1)
+        const isSelectedVertex = (selectedSegments.includes(idx) || selectedSegments.includes(idx - 1)) || (selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1))
         const isHighlightedV = isSelectedVertex || isHoveredVertex
         ctx.fillStyle = isHighlightedV ? SELECT_COLOR : isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
         ctx.beginPath()
@@ -381,9 +491,11 @@ export default function WavePreview({
     // Rings (X axis = beat position). During a vertex/edge drag, ring Y is derived
     // from the preview wave (dragPreview ?? segments) so rings follow the drag.
     rings.forEach((r, i) => {
-      const rx = beatToX(r.beat)
+      // T156: apply ringDragOffset to selected rings during multi-drag
+      const beatOff = selectedRings.includes(i) ? ringDragOffset : 0
+      const rx = beatToX(r.beat + beatOff)
       if (rx < -40 || rx > cssW + 40) return
-      const isSelected = editMode === 'ring' && i === selectedRing
+      const isSelected = editMode === 'ring' && (selectedRings.includes(i) || i === selectedRing)
       const isHovered = editMode === 'ring' && i === hoveredRing
       const isHighlighted = isSelected || isHovered
       const ry = mapY(engine.waveYAt(r.beat))
@@ -426,7 +538,22 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, dragPreview, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, hoveredRing, hoveredSegment, positionMs, view, recording, editMode])
+
+    // T156: rubber band selection rectangle (dashed)
+    if (rubberRect) {
+      ctx.strokeStyle = 'rgba(99,102,241,0.9)'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.rect(rubberRect.x, rubberRect.y, rubberRect.w, rubberRect.h)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(99,102,241,0.1)'
+      ctx.beginPath()
+      ctx.rect(rubberRect.x, rubberRect.y, rubberRect.w, rubberRect.h)
+      ctx.fill()
+    }
+  }, [segments, dragPreview, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -442,16 +569,39 @@ export default function WavePreview({
     renderCanvas()
   }, [renderCanvas])
 
-  const xToBeatLocal = (x: number, width: number): number => {
-    const g = geoRef.current
-    return g.viewStart + (x / width) * g.viewBeats
-  }
-
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
+      // T156: rubber band selection (right-drag) — draw rect only, no state change
+      if (rubberRef.current) {
+        const x = Math.min(rubberRef.current.startX, e.clientX - rect.left)
+        const y = Math.min(rubberRef.current.startY, e.clientY - rect.top)
+        const w = Math.abs(e.clientX - rect.left - rubberRef.current.startX)
+        const h = Math.abs(e.clientY - rect.top - rubberRef.current.startY)
+        setRubberRect({ x, y, w, h })
+        return
+      }
+      // T156: multi-selection drag (left-drag on selected items) — preview only
+      if (multiDragRef.current) {
+        const x = e.clientX - rect.left
+        const dxBeat = quantizeBeat(xToBeatLocal(x, rect.width) - multiDragRef.current.startBeat, safeSnap)
+        const fieldH = rect.height - RULER_H
+        const centerY = RULER_H + fieldH / 2
+        const maxAmp = (fieldH - 24) / 2
+        const minAmp = Math.max(8, 0.2 * rect.height)
+        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+        const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
+        const dy = mapYInverse(e.clientY - rect.top) - multiDragRef.current.startY
+        if (editMode === 'ring') {
+          setRingDragOffset(dxBeat)
+        } else if (multiDragRef.current.origSegIndices) {
+          const preview = computeMultiDragSegs(segments, multiDragRef.current.origSegIndices, dxBeat, dy, rect.height)
+          setMultiDragSegments(preview)
+        }
+        return
+      }
       if (vertexDragRef.current) {
         const x = e.clientX - rect.left
         const fieldH = rect.height - RULER_H
@@ -573,7 +723,50 @@ export default function WavePreview({
         })
       }
     }
-    const onUp = (_e: MouseEvent) => {
+    const onUp = (e: MouseEvent) => {
+      const canvas = canvasRef.current
+      const rect = canvas?.getBoundingClientRect()
+      // T156: rubber band selection commit on right-button mouseup.
+      // If the drag moved >= 4px, populate multi-selection; otherwise delegate to
+      // the single-delete path (right-click remove).
+      if (rubberRef.current) {
+        const r = rubberRef.current
+        rubberRef.current = null
+        const moved = Math.hypot((e.clientX - rect!.left) - r.startX, (e.clientY - rect!.top) - r.startY)
+        setRubberRect(null)
+        if (rect && moved >= 4) {
+          rubberDraggedRef.current = true
+          const found = findItemsInRect(r.startX, r.startY, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
+          if (editMode === 'ring') {
+            if (found.rings.length === 1) onSelectRing?.(found.rings[0])
+            else if (found.rings.length > 1) onSelectRings?.(found.rings)
+            else onSelectRing?.(null)
+          } else {
+            const segs = found.segs
+            if (segs.length === 1) onSelectSegment?.(segs[0])
+            else if (segs.length > 1) onSelectSegments?.(segs)
+            else onSelectSegment?.(null)
+          }
+        }
+        return
+      }
+      // T156: multi-selection move commit — single commit per mouseup
+      if (multiDragRef.current) {
+        const md = multiDragRef.current
+        multiDragRef.current = null
+        if (editMode === 'ring') {
+          if (ringDragOffset !== 0) {
+            const selected = selectedRings.length > 0 ? selectedRings : selectedRing != null ? [selectedRing] : []
+            const moves = selected.map((i) => ({ index: i, beat: rings[i] ? Math.max(0, Math.round((rings[i].beat + ringDragOffset) / safeSnap) * safeSnap) : 0 }))
+            onMultiMoveRings?.(moves)
+          }
+          setRingDragOffset(0)
+        } else {
+          if (multiDragSegments) onMultiMoveSegments?.(multiDragSegments)
+          setMultiDragSegments(null)
+        }
+        return
+      }
       if (vertexDragRef.current) {
         // T150: commit the local preview exactly once on mouseup.
         const preview = dragPreviewRef.current
@@ -612,7 +805,7 @@ export default function WavePreview({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap])
+  }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, rings, findItemsInRect])
 
   const nearestRingIndex = (clientX: number): number => {
     const canvas = canvasRef.current
@@ -714,16 +907,59 @@ export default function WavePreview({
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     const clickY = e.clientY - rect.top
+    const isRight = e.button === 2
 
     // Click on the top ruler strip seeks playback instead of placing a ring.
     if (onSeek && clickY < RULER_H) {
+      if (isRight) { e.preventDefault(); return }
       const x = e.clientX - rect.left
       const beat = xToBeatLocal(x, rect.width)
       onSeek(Math.max(0, beat))
       return
     }
 
-    // Mode-specific hit testing — complete separation per T116
+    // T156: right-button always starts rubber band selection (all modes).
+    // Right single-click (< 4px drag) delegates to delete via onUp commit path.
+    if (isRight) {
+      rubberRef.current = {
+        startBeat: xToBeatLocal(e.clientX - rect.left, rect.width),
+        startX: e.clientX - rect.left,
+        startY: clickY,
+        mode: editMode,
+      }
+      // clear any existing rubber rect (fresh start)
+      setRubberRect({ x: e.clientX - rect.left, y: clickY, w: 0, h: 0 })
+      e.preventDefault()
+      return
+    }
+
+    // Left-button multi-drag: if clicking on a selected item, move the whole
+    // selection (preview only → commit on mouseup).
+    const selectedSet = editMode === 'ring'
+      ? new Set(selectedRings.length ? selectedRings : selectedRing != null ? [selectedRing] : [])
+      : new Set(selectedSegments.length ? selectedSegments : selectedSegment != null ? [selectedSegment] : [])
+    if (e.button === 0) {
+      let onSel = false
+      if (editMode === 'ring') {
+        onSel = nearestRingIndex(e.clientX) >= 0 && selectedRings.includes(nearestRingIndex(e.clientX))
+      } else if (editMode === 'vertex') {
+        const vHit = nearestVertexIndex(e.clientX, e.clientY)
+        onSel = vHit >= 0 && (selectedSegments.includes(vHit === 0 ? 0 : vHit - 1) || (selectedSegment === (vHit === 0 ? 0 : vHit - 1)))
+      } else if (editMode === 'edge') {
+        const eHit = nearestEdgeIndex(e.clientX, e.clientY)
+        onSel = eHit >= 0 && (selectedSegments.includes(eHit) || selectedSegment === eHit)
+      }
+      if (onSel && selectedSet.size > 0) {
+        multiDragRef.current = { startBeat: xToBeatLocal(e.clientX - rect.left, rect.width), startY: clickY }
+        if (editMode !== 'ring') {
+          multiDragRef.current.origSegIndices = selectedSegments.length ? selectedSegments : (selectedSegment != null ? [selectedSegment] : [])
+        }
+        e.preventDefault()
+        return
+      }
+    }
+
+    // Mode-specific hit testing — complete separation per T116 (left button only)
     if (editMode === 'vertex') {
       const vHit = nearestVertexIndex(e.clientX, e.clientY)
       if (vHit >= 0) {
@@ -792,7 +1028,7 @@ export default function WavePreview({
       e.preventDefault()
       return
     }
-    // empty area: begin a potential pan (any button)
+    // empty area: begin a potential pan (left button)
     panRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -863,6 +1099,12 @@ export default function WavePreview({
 
   const handleContextMenu = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     e.preventDefault()
+    // T156: single right-click = delete; right-drag (rubber selection) is handled
+    // in onUp and must not also delete, so suppress here after a drag.
+    if (rubberDraggedRef.current) {
+      rubberDraggedRef.current = false
+      return
+    }
     if (editMode === 'ring') {
       // Inline nearestRingIndex with 35px threshold
       const canvas = canvasRef.current
@@ -931,7 +1173,7 @@ export default function WavePreview({
   }
 
   const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (dragRef.current || vertexDragRef.current || vertexCreateRef.current || edgeDragRef.current || panRef.current) return
+    if (dragRef.current || vertexDragRef.current || vertexCreateRef.current || edgeDragRef.current || panRef.current || rubberRef.current || multiDragRef.current) return
     // Hover interlink: detect nearest ring/edge/vertex under cursor and notify parent for list highlight
     if (editMode === 'ring') {
       const ringHit = nearestRingIndex(e.clientX)
