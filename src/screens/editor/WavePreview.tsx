@@ -983,7 +983,7 @@ export default function WavePreview({
         onMouseLeave={handleMouseLeave}
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
-        {editMode === 'vertex' && '頂点モード: ダブルクリックで追加、右クリックで削除、ドラッグで微調整。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'vertex' && '頂点モード: 右クリックで削除、空ドラッグで頂点作成（プレビュー→確定）。ホイールでズーム'}
         {editMode === 'edge' && '辺モード: 辺をドラッグで左右上下に移動・選択。空白ドラッグでパン、ホイールでズーム'}
         {editMode === 'ring' && 'リングモード: ダブルクリックで追加・右クリックで削除・ドラッグで移動。空白ドラッグでパン、ホイールでズーム'}
       </p>
