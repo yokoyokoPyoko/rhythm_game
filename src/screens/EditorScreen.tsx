@@ -169,11 +169,65 @@ export default function EditorScreen() {
   const keysRef = useRef({ up: false, down: false, space: false })
   const spacePressBeatRef = useRef(0)
 
+  // T155: undo/redo history (segments + rings)
+  const historyRef = useRef<{ past: { segments: Segment[]; rings: RingDef[] }[]; future: { segments: Segment[]; rings: RingDef[] }[] }>({ past: [], future: [] })
+  const segmentsRef = useRef(segments)
+  const ringsRef = useRef(rings)
+  useEffect(() => { segmentsRef.current = segments }, [segments])
+  useEffect(() => { ringsRef.current = rings }, [rings])
+
+  const pushHistory = useCallback(() => {
+    const snap = { segments: segmentsRef.current, rings: ringsRef.current }
+    historyRef.current.past.push(snap)
+    if (historyRef.current.past.length > 50) historyRef.current.past.shift()
+    historyRef.current.future = []
+  }, [])
+
+  const commitSegments = useCallback((newSegs: Segment[]) => {
+    pushHistory()
+    setSegments(newSegs)
+  }, [pushHistory])
+
+  const commitRings = useCallback((newRings: RingDef[] | ((prev: RingDef[]) => RingDef[])) => {
+    pushHistory()
+    setRings(newRings)
+  }, [pushHistory])
+
+  const undoRef = useRef<() => void>(() => {})
+  const redoRef = useRef<() => void>(() => {})
+
   const notify = useCallback((msg: string) => {
     setToastMsg(msg)
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToastMsg(null), 2500)
   }, [])
+
+  const doUndo = useCallback(() => {
+    const { past, future } = historyRef.current
+    if (past.length === 0) return
+    const current = { segments: segmentsRef.current, rings: ringsRef.current }
+    future.push(current)
+    const prev = past.pop()!
+    setSegments(prev.segments)
+    setRings(prev.rings)
+    setSelectedSegment((cur) => cur != null && cur >= prev.segments.length ? null : cur)
+    setSelectedRing((cur) => cur != null && cur >= prev.rings.length ? null : cur)
+  }, [])
+
+  const doRedo = useCallback(() => {
+    const { past, future } = historyRef.current
+    if (future.length === 0) return
+    const current = { segments: segmentsRef.current, rings: ringsRef.current }
+    past.push(current)
+    const next = future.pop()!
+    setSegments(next.segments)
+    setRings(next.rings)
+    setSelectedSegment((cur) => cur != null && cur >= next.segments.length ? null : cur)
+    setSelectedRing((cur) => cur != null && cur >= next.rings.length ? null : cur)
+  }, [])
+
+  useEffect(() => { undoRef.current = doUndo }, [doUndo])
+  useEffect(() => { redoRef.current = doRedo }, [doRedo])
 
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const musicGainRef = useRef<GainNode | undefined>(undefined)
@@ -337,7 +391,7 @@ export default function EditorScreen() {
         final: [...keptBefore, ...newSegs, ...keptAfter],
       }
 
-      setSegments([...keptBefore, ...newSegs, ...keptAfter])
+      commitSegments([...keptBefore, ...newSegs, ...keptAfter])
       notify(`波形を記録 (${newSegs.length}セグメント)`)
     }
     setRecLive(null)
@@ -620,7 +674,7 @@ export default function EditorScreen() {
       stop()
     }
     facade.loadInitialSegments = (segs: typeof segments) => {
-      setSegments(segs)
+      commitSegments(segs)
     }
     w.__editorState = facade
   })
@@ -713,6 +767,18 @@ export default function EditorScreen() {
         return
       }
 
+      // T155: Undo/Redo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undoRef.current()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) {
+        e.preventDefault()
+        redoRef.current()
+        return
+      }
+
       if (!isPlayingRef.current) return
 
       if (modeRef.current === 'record') {
@@ -768,7 +834,7 @@ export default function EditorScreen() {
           const rawDuration = snapped - startBeat
           const duration = Number(quantizeBeat(rawDuration, snap).toFixed(2))
           let added = false
-          setRings((prev) => {
+          commitRings((prev) => {
             if (prev.some((r) => Math.abs(r.beat - startBeat) < 0.001)) return prev
             added = true
             if (duration > 0.3) {
@@ -792,7 +858,7 @@ export default function EditorScreen() {
   }, [snap, timeline, selectedRing, segments, notify, playFrom, stop, startRecording, finishRecording])
 
   const removeRing = (index: number) => {
-    setRings((prev) => prev.filter((_, i) => i !== index))
+    commitRings((prev) => prev.filter((_, i) => i !== index))
     setSelectedRing((cur) => (cur === index ? null : cur))
   }
 
@@ -820,7 +886,7 @@ export default function EditorScreen() {
     (beat: number): number | undefined => {
       const snapped = quantizeBeat(beat, snap)
       let index = -1
-      setRings((prev) => {
+      commitRings((prev) => {
         if (prev.some((r) => Math.abs(r.beat - snapped) < 0.001)) {
           index = prev.findIndex((r) => Math.abs(r.beat - snapped) < 0.001)
           return prev
@@ -831,19 +897,19 @@ export default function EditorScreen() {
       notify(`リング追加 @beat ${snapped.toFixed(2)}`)
       return index >= 0 ? index : undefined
     },
-    [snap, notify]
+    [snap, notify, commitRings]
   )
 
   const moveRing = useCallback((index: number, beat: number) => {
     const snapped = Math.round(beat / snap) * snap
-    setRings((prev) =>
+    commitRings((prev) =>
       prev.map((r, i) => (i === index ? { ...r, beat: snapped } : r))
     )
-  }, [snap])
+  }, [snap, commitRings])
 
   const setRingBeat = (index: number, beat: number) => {
     const v = Number.isFinite(beat) && beat >= 0 ? beat : 0
-    setRings((prev) =>
+    commitRings((prev) =>
       prev.map((r, i) => (i === index ? { ...r, beat: v } : r))
     )
   }
@@ -898,6 +964,7 @@ export default function EditorScreen() {
   }
 
   const importChart = useCallback((chart: Chart) => {
+    pushHistory()
     setTitle(chart.title)
     setArtist(chart.artist)
     setBpm(chart.bpm)
@@ -914,7 +981,7 @@ export default function EditorScreen() {
     setPositionMs(0)
     setSelectedRing(null)
     setImportError(null)
-  }, [])
+  }, [pushHistory])
 
   const importFromFile = (file: File) => {
     const reader = new FileReader()
@@ -938,6 +1005,7 @@ export default function EditorScreen() {
     if (!window.confirm('現在の譜面（リング・セグメント・BPM変更）をすべてクリアします。よろしいですか？')) {
       return
     }
+    pushHistory()
     setRings([])
     setSegments([])
     setBpmChanges([])
@@ -1323,11 +1391,11 @@ export default function EditorScreen() {
             onSelectSegment={handleSelectSegment}
             onHoverRing={setHoveredRing}
             onHoverSegment={setHoveredSegment}
-            onSegmentsChange={setSegments}
+            onSegmentsChange={commitSegments}
             onDeleteRing={removeRing}
             onSeek={seekToBeat}
           />
-          <SegmentEditor segments={segments} selectedIndex={selectedSegment} hoveredIndex={hoveredSegment} onSegmentsChange={setSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} />
+          <SegmentEditor segments={segments} selectedIndex={selectedSegment} hoveredIndex={hoveredSegment} onSegmentsChange={commitSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} />
 
           <section className="editor-pane editor-accordion">
              <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>
@@ -1389,9 +1457,9 @@ export default function EditorScreen() {
                     <select
                       className="editor-input ring-type-select"
                       value={ring.type ?? 'single'}
-                      onChange={(e) => {
+                        onChange={(e) => {
                         const type = e.target.value as 'single' | 'hold'
-                        setRings((prev) =>
+                        commitRings((prev) =>
                           prev.map((r, idx) => (idx === i ? { ...r, type, duration: type === 'hold' ? (r.duration ?? 1) : undefined } : r))
                         )
                       }}
@@ -1409,7 +1477,7 @@ export default function EditorScreen() {
                         value={ring.duration ?? 1}
                         onChange={(e) => {
                           const duration = Math.max(0.25, Number(e.target.value))
-                          setRings((prev) =>
+                          commitRings((prev) =>
                             prev.map((r, idx) => (idx === i ? { ...r, duration } : r))
                           )
                         }}
