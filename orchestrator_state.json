@@ -1039,7 +1039,7 @@
         "qa": "ses_f95033d9fffe1itLoZJgujK6PJ",
         "coder": "ses_f95022975ffe5ZUKVWaAVI9DJ4"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
