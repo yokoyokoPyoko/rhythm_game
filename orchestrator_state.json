@@ -987,7 +987,7 @@
     },
     "T149": {
       "attempts": 3,
-      "status": "running",
+      "status": "passed",
       "started": 1788486698.2550938,
       "cycles": 1,
       "sessions": {
@@ -998,7 +998,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788487690.2111676
+      "last_postmortem_at": 1788487690.2111676,
+      "finished": 1788488123.0492866
+    },
+    "T150": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788495620.8636105
     }
   },
   "consecutive_no_action": 0

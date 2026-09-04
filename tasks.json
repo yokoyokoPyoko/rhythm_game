@@ -839,5 +839,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T150",
+    "desc": "Y吸着3等分＋ドラッグ中プレビュー・mouseupコミット（頂点/辺直感操作の確定仕様）。背景: 頂点のstay判定（editorDrag.ts: dir() |d|<0.5px）が厳しすぎて中央に置けない。辺ドラッグが発散して飛んでいく（開始点基準の総量 dxBeat/dy を移動済み pts に加算する二重加算＋隣接clamp無し）。確定仕様（ユーザー承認）: Y吸着は譜面内上限〜下限のY幅260px（TW_CENTER_Y±TW_AMP = 170〜430）を3等分。上 [170,256.7)→TOP(170)／中 [256.7,343.3)→CENTER(300)／下 [343.3,430]→BOTTOM(430)。範囲外は上限/下限に丸める（上限より上→TOP、下限より下→BOTTOM）。dir() の0.5px判定は廃止しゾーンで dir＋y' を同時決定。ドラッグ中はプレビューのみ：mousemove では onSegmentsChange せずローカル dragPreview のみ更新＋描画。mouseup で1回だけコミット（＝頂点作成）。キャンセルなし（Escape等不要）。beats算出はT149方式維持：X距離優先（頂点 beatsPrev = quantize(beat'-prevBeat)／追加 beatsA = beatAdd-prevBeat, beatsB = nextBeat-beatAdd／辺 edgeBeats = origLen 維持）、dir のみ吸着Yから決定。safeSnap 量子化、頂点2／辺3セグメントのみ変更。辺clampは境界留め：隣接が safeSnap を割る場合は境界（prevBeat+snap 等）で留めた値をプレビューし、そのままコミット。新規頂点の余分な生成なし（頂点数不変）。リング表示はプレビュー連動：プレビュー中はプレビュー波形基準の waveYAt でリングYを表示。対象ファイル: src/screens/editor/WavePreview.tsx（dragPreview state新設、onMove→プレビュー保持、onUp→コミット、renderCanvas を dragPreview ?? segments 基準に、逆変換の3等分吸着）＋ src/game/editorDrag.ts（ゾーン確定済み前提、dir() 閾値削除または未使用化）。完了条件（自動テスト。オフグリッド検証原則。複雑amp 0.7/1.3/2.7＋端数0.37/1.23必須）: (1) 中央ゾーン内（例256.7〜343.3の端数Y）にドラッグして y'==CENTER かつ dir==stay になること。上下ゾーンも同様に端吸着すること。範囲外は上下限に丸まること。(2) 辺ドラッグで mousemove 中は onSegmentsChange が呼ばれず、mouseup で1回だけ呼ばれること。連続移動でも発散せず、後続 beat が dx だけずれる以外は不変（頂点数不変）。(3) 全 beats が safeSnap 整数倍、getPoints().length === segments.length+1 維持。(4) tsc --noEmit。",
+    "depends_on": [
+      "T149"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
