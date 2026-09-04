@@ -15,7 +15,7 @@ function isSnapAligned(beats: number, snap: number): boolean {
 /**
  * Reference implementation of T148 vertex deletion:
  * vi: totalBeats = segments[vi-1].beats + segments[vi].beats.
- * beats = quantizeBeat(totalBeats, safeSnap).
+ * beats = quantizeBeat(totalBeats, safeSnap) (total beats preservation prioritized).
  * dir = |d| < 0.5 ? 'stay' : d < 0 ? 'up' : 'down' (d = yNext - yPrev).
  * Endpoints cannot be deleted.
  */
@@ -59,7 +59,7 @@ function referenceT148EdgeDelete(
   return referenceT148VertexDelete(segments, timeline, startPosition, vi, safeSnap);
 }
 
-describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node', () => {
+describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node (Off-Grid & State-Transition)', () => {
   beforeEach(() => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -67,8 +67,8 @@ describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node', () 
     vi.clearAllTimers();
   });
 
-  describe('1. Vertex Deletion (vi) invariants and total beats preservation', () => {
-    const amplitudes = [0.7, 1.3, 2.7];
+  describe('1. Vertex Deletion (vi) invariants, total beats preservation, and off-grid timing', () => {
+    const amplitudes = [0.7, 1.3, 2.7, 3.4];
     const snaps = [0.25, 0.5];
 
     for (const amp of amplitudes) {
@@ -99,7 +99,7 @@ describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node', () 
           // (a) Points length decreased by exactly 1
           expect(pts1.length).toBe(initialPtsLen - 1);
 
-          // (b) Total beats preserved within ±0.5 * snap (or exact quantizeBeat)
+          // (b) Total beats preserved within ±0.5 * snap
           const newMergedSeg = deletedSegments![vi - 1];
           expect(Math.abs(newMergedSeg.beats - expectedTotalBeats)).toBeLessThanOrEqual(0.5 * snap + 1e-6);
           expect(isSnapAligned(newMergedSeg.beats, snap)).toBeTruthy();
@@ -128,13 +128,13 @@ describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node', () 
   describe('2. Edge Deletion (ei) equivalent to vertex i+1 deletion', () => {
     it('edge deletion merges 2 segments into 1 with snap alignment and points length -1', () => {
       const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
+      const tl = new BpmTimeline(120, [], 1.3);
       const initial: Segment[] = [
         { direction: 'up', beats: 1.0 },
         { direction: 'down', beats: 1.25 },
         { direction: 'up', beats: 0.75 },
       ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
+      const engine0 = new WaveEngine(initial, tl, 1.3, 0);
       const pts0 = engine0.getPoints();
 
       const edgeIdx = 1; // edge 1 (corresponds to vertex 2)
@@ -144,7 +144,7 @@ describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node', () 
       expect(deleted).not.toBeNull();
       expect(deleted!.length).toBe(initial.length - 1);
 
-      const engine1 = new WaveEngine(deleted!, tl, 1.0, 0);
+      const engine1 = new WaveEngine(deleted!, tl, 1.3, 0);
       expect(engine1.getPoints().length).toBe(pts0.length - 1);
 
       const merged = deleted![edgeIdx];
@@ -154,20 +154,20 @@ describe('T148 頂点/辺削除時の周辺変化最小化 — Vitest node', () 
   });
 
   describe('3. Round-trip restoration (add -> delete)', () => {
-    it('round-trip insertion and deletion restores original segment structure and total beats', () => {
+    it('round-trip insertion and deletion restores original segment structure and total beats with off-grid phases', () => {
       const snap = 0.25;
-      const tl = new BpmTimeline(120, [], 1.0);
+      const tl = new BpmTimeline(120, [], 2.7);
       const initial: Segment[] = [
-        { direction: 'up', beats: 2.0 },
-        { direction: 'down', beats: 2.0 },
+        { direction: 'up', beats: 1.75 },
+        { direction: 'down', beats: 1.25 },
       ];
       const originalTotalBeats = initial.reduce((sum, s) => sum + s.beats, 0);
 
       // Simulate split (add vertex)
       const splitSegments: Segment[] = [
         { direction: 'up', beats: 1.0 },
-        { direction: 'up', beats: 1.0 },
-        { direction: 'down', beats: 2.0 },
+        { direction: 'up', beats: 0.75 },
+        { direction: 'down', beats: 1.25 },
       ];
       const splitTotalBeats = splitSegments.reduce((sum, s) => sum + s.beats, 0);
       expect(splitTotalBeats).toBe(originalTotalBeats);
