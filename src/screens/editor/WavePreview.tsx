@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { quantizeBeat } from '../../chart/quantize'
 import { calculateVertexDrag, calculateEdgeDrag } from '../../game/editorDrag'
@@ -103,6 +103,12 @@ export default function WavePreview({
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
 
+  // T150: vertex/edge drags render a local preview only. mousemove updates
+  // dragPreview (no onSegmentsChange); mouseup commits once. This avoids the
+  // old direct-commit that caused edge drags to diverge/accumulate.
+  const [dragPreview, setDragPreview] = useState<Segment[] | null>(null)
+  const dragPreviewRef = useRef<Segment[] | null>(null)
+
   // T115: auto-scroll is driven by EditorScreen (positionMs/view) - keep view sync via geoRef
   // Native non-passive wheel listener so preventDefault() actually blocks
   // page scrolling (React's synthetic onWheel is attached as passive).
@@ -143,7 +149,10 @@ export default function WavePreview({
 
     const startPosNorm = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-    const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosNorm)
+    // T150: while a vertex/edge drag is in flight, render the local preview wave
+    // instead of the committed segments; rings follow the preview engine too.
+    const renderSegs = dragPreview ?? segments
+    const engine = new WaveEngine(renderSegs, timeline, EDITOR_BASE_AMP, startPosNorm)
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
     const fieldH = cssH - RULER_H
@@ -153,7 +162,7 @@ export default function WavePreview({
     const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
     const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
 
-    const totalBeats = segments.reduce((sum, seg) => sum + seg.beats, 0)
+    const totalBeats = renderSegs.reduce((sum, seg) => sum + seg.beats, 0)
     const contentBeats = Math.max(
       totalBeats,
       rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), 0),
@@ -227,7 +236,7 @@ export default function WavePreview({
     for (let i = 0; i < points.length - 1; i++) {
       const p0 = points[i]
       const p1 = points[i + 1]
-      const seg = segments[i]
+      const seg = renderSegs[i]
       const isSelectedEdge = i === selectedSegment
       const isHoveredEdge = i === hoveredSegment
       const isHighlighted = isSelectedEdge || isHoveredEdge
@@ -284,7 +293,7 @@ export default function WavePreview({
       }
     }
 
-    if (segments.length === 0) {
+    if (renderSegs.length === 0) {
       ctx.strokeStyle = ACCENT_COLOR
       ctx.lineWidth = 2.5
       ctx.beginPath()
@@ -361,7 +370,8 @@ export default function WavePreview({
       }
     }
 
-    // Rings (X axis = beat position)
+    // Rings (X axis = beat position). During a vertex/edge drag, ring Y is derived
+    // from the preview wave (dragPreview ?? segments) so rings follow the drag.
     rings.forEach((r, i) => {
       const rx = beatToX(r.beat)
       if (rx < -40 || rx > cssW + 40) return
@@ -408,7 +418,7 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
-  }, [segments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, hoveredRing, hoveredSegment, positionMs, view, recording, editMode])
+  }, [segments, dragPreview, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, hoveredRing, hoveredSegment, positionMs, view, recording, editMode])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -434,11 +444,12 @@ export default function WavePreview({
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
-      if (vertexDragRef.current && onSegmentsChange) {
+      if (vertexDragRef.current) {
         const x = e.clientX - rect.left
         const fieldH = rect.height - RULER_H
         const beat = quantizeBeat(xToBeatLocal(x, rect.width), safeSnap)
         const centerY = RULER_H + fieldH / 2
+        // T149: unified Y inverse mapping (dispAmp based) via mapYInverse.
         const maxAmp = (fieldH - 24) / 2
         const minAmp = Math.max(8, 0.2 * rect.height)
         const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
@@ -446,21 +457,34 @@ export default function WavePreview({
         const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, mapYInverse(e.clientY - rect.top)))
         const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
 
-        if (segments.length === 0) return
+        if (segments.length === 0) {
+          dragPreviewRef.current = null
+          setDragPreview(null)
+          return
+        }
+
+        // T150: boundary留め clamp for vertex preview — keep neighbors at least snap wide.
+        const tmpEngine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+        const tmpPts = tmpEngine.getPoints()
+        const idx = vertexDragRef.current.index
+        const prevBeat = idx > 0 ? tmpPts[idx - 1].beat : 0
+        const nextBeat = idx < tmpPts.length - 1 ? tmpPts[idx + 1].beat : tmpPts[tmpPts.length - 1]?.beat ?? beat + safeSnap
+        const clampedBeat = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beat))
 
         const result = calculateVertexDrag({
           segments,
           bpmTimeline: timeline,
           startPosition,
-          pointIndex: vertexDragRef.current.index,
-          targetBeat: beat,
+          pointIndex: idx,
+          targetBeat: clampedBeat,
           targetY: yPrime,
           snap: safeSnap,
         })
-        if (result) onSegmentsChange(result)
+        dragPreviewRef.current = result
+        setDragPreview(result)
         return
       }
-      if (edgeDragRef.current && onSegmentsChange) {
+      if (edgeDragRef.current) {
         const x = e.clientX - rect.left
         const fieldH = rect.height - RULER_H
         const drag = edgeDragRef.current
@@ -487,7 +511,8 @@ export default function WavePreview({
           dy,
           snap: safeSnap,
         })
-        if (result) onSegmentsChange(result)
+        dragPreviewRef.current = result
+        setDragPreview(result)
         return
       }
       if (dragRef.current) {
@@ -508,11 +533,20 @@ export default function WavePreview({
     }
     const onUp = (_e: MouseEvent) => {
       if (vertexDragRef.current) {
+        // T150: commit the local preview exactly once on mouseup.
+        const preview = dragPreviewRef.current
+        if (preview && onSegmentsChange) onSegmentsChange(preview)
         vertexDragRef.current = null
+        dragPreviewRef.current = null
+        setDragPreview(null)
         return
       }
       if (edgeDragRef.current) {
+        const preview = dragPreviewRef.current
+        if (preview && onSegmentsChange) onSegmentsChange(preview)
         edgeDragRef.current = null
+        dragPreviewRef.current = null
+        setDragPreview(null)
         return
       }
       if (dragRef.current) {
