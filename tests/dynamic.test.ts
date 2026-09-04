@@ -173,8 +173,9 @@ describe('T149 vertex X tracking / add collapse / Y mapping unified — node Vit
           const mouseY = mapY(y, centerY, dispAmp);
           const recovered = mapYInverse(mouseY, centerY, dispAmp);
           expect(Math.abs(recovered - y)).toBeLessThan(1e-6);
-          // Old formula must diverge when dispAmp != TW_AMP (field size varies)
-          if (Math.abs(dispAmp - TW_AMP) > 5) {
+            // Old formula must diverge when dispAmp != TW_AMP (field size varies).
+            // At y=CENTER both formulas agree (scale factor vanishes at origin), so skip.
+            if (Math.abs(dispAmp - TW_AMP) > 5 && Math.abs(y - CENTER) > 1e-6) {
             const oldRecovered = oldMapYInverse(mouseY, RULER_H, fieldH);
             // Old must be off by at least ~10px when dispAmp differs significantly
             expect(Math.abs(oldRecovered - y)).toBeGreaterThan(5);
@@ -232,7 +233,7 @@ describe('T149 vertex X tracking / add collapse / Y mapping unified — node Vit
             const initial: Segment[] = [
               { direction: 'down', beats: 2.0 },
               { direction: 'up', beats: 2.0 },
-              { direction: 'down', beats: 1.5 },
+              { direction: 'down', beats: 2.0 },
             ];
             const engine0 = new WaveEngine(initial, tl, amp, 0);
             const pts0 = engine0.getPoints();
