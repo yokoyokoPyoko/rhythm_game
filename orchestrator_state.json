@@ -995,7 +995,7 @@
         "coder": "ses_f95d37927ffevp5IHHiO7oJ0JN",
         "postmortem": "ses_f95d45ff7ffehKHd8nI1VCXKAI"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "coder",
       "last_postmortem_at": 1788487690.2111676
     }
