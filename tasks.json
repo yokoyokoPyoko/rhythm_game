@@ -830,5 +830,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T149",
+    "desc": "T147回帰修正：頂点追従・追加崩壊・Y mapping統一。バグ（T147実行後も残存）: (1) 頂点がマウスXに全く追従しない。(2) 新規頂点追加で譜面全体が崩れる。根本原因（コード確定）: (1) src/game/editorDrag.ts:76-88 calculateVertexDrag は beatPrime を clamp しながら beatsPrev/beatsNext = quantize(|dY|/pp) のYのみで決定し prevBeat+beatsPrev == beatPrime の拘束が無い。横ドラッグ（Y不変）では beats 不変→無変化。96-100 の candidateEngine.waveYAt(beatPrime) は void で捨てられ補正に未使用。(2) Y逆変換不一致：描画 WavePreview.tsx:146 は mapY = centerY+((y-CENTER)/TW_AMP)*dispAmp なのに逆変換 :441-442,:744 は CENTER+(((mouseY-RULER_H)/fieldH-0.5)*2)*TW_AMP で dispAmp を無視（約1.45倍ズレ）。(3) 追加 WavePreview.tsx:748-760 は beatsA/B = |yAdd-y|/perBeat のみで beatAdd-prevBeat / nextBeat-beatAdd の横幅を無視し合計拍数が変わる。(4) 辺 editorDrag.ts:144 edgeBeats = max(|dxBeat|, dy/pp) は移動量を辺長に誤用し元の origLen を破壊。148-158 の segmentFor も過大評価＋隣接clamp無し。(5) tests/.gateb_T147.test.ts:38-156 の参照実装が同一バグを再現しているため Green 素通り。窓口単体ではなく WaveEngine.getPoints/waveYAt と Cursor の数値整合で直接検証する必要がある（T127の反省と同一）。修正方針: src/game/editorDrag.ts + WavePreview.tsx の逆変換のみ。Y逆変換を mapYInverse = CENTER+((mouseY-centerY)/dispAmp)*TW_AMP に一本化（ドラッグ2箇所＋追加1箇所）。頂点：beatsPrev = quantize(beat'-prevBeat) を第一決定とし dir のみYから決定。Y由来の逆算を廃止。2セグメントのみ変更。辺：edgeBeats = origLen 維持の平行移動のみ。seg i-1/i+1 を toBeat-fromBeat で再計算。追加：beatsA = beatAdd-prevBeat, beatsB = nextBeat-beatAdd（横幅保存）＋ dir のみYから決定。テストは参照実装を捨て WaveEngine 数値整合で直接検証（複雑amp 0.7/1.3/2.7＋端数0.37/1.23必須、オフグリッド検証原則）。完了条件: (1) Vertex を横のみドラッグして Y 不変のまま X に追従し getPoints()[i].beat == beat' になること。(2) 追加→削除の round-trip で総拍数が ±0.5*safeSnap 以内で復元し後続が動かないこと。(3) 全 beats が safeSnap 整数倍、getPoints().length === segments.length+1 維持。(4) tsc --noEmit。",
+    "depends_on": [
+      "T148"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
