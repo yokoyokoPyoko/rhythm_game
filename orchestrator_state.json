@@ -1129,7 +1129,7 @@
         "qa": "ses_f8f892633ffeJ4JYA16W4ewEdn",
         "coder": "ses_f8f87bb94ffe3NYKFdh343jSUg"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
