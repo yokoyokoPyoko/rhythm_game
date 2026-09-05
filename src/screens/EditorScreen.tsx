@@ -206,6 +206,53 @@ export default function EditorScreen() {
   const autosaveIntervalRef = useRef(autosaveInterval)
   useEffect(() => { autosaveIntervalRef.current = autosaveInterval }, [autosaveInterval])
 
+  const buildChart = useCallback((): Chart => {
+    // title artist bpm metadata is serialized for autosave/export
+    const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
+    const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
+    const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
+    const safeStartPosition = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
+    const safeBpm = bpm > 0 ? bpm : 120
+    return {
+      title: title.trim() || 'Untitled',
+      artist: artist.trim(),
+      bpm: safeBpm,
+      audio: url.trim(),
+      audio_offset: safeOffset,
+      scroll_speed: safeScroll,
+      amplitude: safeAmp,
+      start_position: safeStartPosition,
+      bpm_changes: bpmChanges,
+      segments,
+      rings,
+    }
+  }, [bpm, title, artist, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings])
+
+  const saveCurrent = useCallback((chart: Chart) => {
+    try {
+      saveAutosave(chart)
+    } catch {
+      /* localStorage full/unavailable — autosave is best-effort */
+    }
+  }, [])
+
+  // T160: periodic interval autosave (setInterval) + unmount cleanup save
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      if (title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0) {
+        return
+      }
+      saveCurrent(buildChart())
+    }, autosaveIntervalRef.current * 60 * 1000)
+
+    return () => {
+      window.clearInterval(timerId)
+      if (!(title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0)) {
+        saveCurrent(buildChart())
+      }
+    }
+  }, [autosaveInterval, saveCurrent, title, segments, rings, bpmChanges, buildChart])
+
   // T159: persist the autosave interval slider value (clamped 1-5) on change.
   useEffect(() => {
     const clamped = Math.max(1, Math.min(5, autosaveInterval))
@@ -1042,27 +1089,6 @@ export default function EditorScreen() {
     seekTo(timeline.beatToMs(beat))
   }
 
-  const buildChart = useCallback((): Chart => {
-    // title artist bpm metadata is serialized for autosave/export
-    const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
-    const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
-    const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
-    const safeStartPosition = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
-    return {
-      title: title.trim() || 'Untitled',
-      artist: artist.trim(),
-      bpm: safeBpm,
-      audio: url.trim(),
-      audio_offset: safeOffset,
-      scroll_speed: safeScroll,
-      amplitude: safeAmp,
-      start_position: safeStartPosition,
-      bpm_changes: bpmChanges,
-      segments,
-      rings,
-    }
-  }, [safeBpm, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings])
-
   const exportChart = () => {
     const slug = slugify(title) || 'untitled'
     const toml = chartToToml(buildChart())
@@ -1119,37 +1145,6 @@ export default function EditorScreen() {
   // Helper wrappers keep the component using the module's tested behavior.
 
   const listSlots = useCallback((): AutosaveSlot[] => listAutosaves(), [])
-
-  const saveCurrent = useCallback((chart: Chart) => {
-    try {
-      saveAutosave(chart)
-    } catch {
-      /* localStorage full/unavailable — autosave is best-effort */
-    }
-  }, [])
-
-  // T160: periodic interval autosave (setInterval)
-  useEffect(() => {
-    const timerId = window.setInterval(() => {
-      if (title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0) {
-        return
-      }
-      saveCurrent(buildChart())
-    }, autosaveIntervalRef.current * 60 * 1000)
-
-    return () => {
-      window.clearInterval(timerId)
-    }
-  }, [autosaveInterval, saveCurrent])
-
-  // T160: unmount cleanup save
-  useEffect(() => {
-    return () => {
-      if (!(title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0)) {
-        saveCurrent(buildChart())
-      }
-    }
-  }, [saveCurrent])
 
   const restoreAutosave = useCallback((slug: string) => {
     try {
