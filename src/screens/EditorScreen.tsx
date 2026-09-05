@@ -142,6 +142,9 @@ export default function EditorScreen() {
     w.__editorSeekToBeat = seekToBeat
     w.__editorMode = editMode
     w.__editorSelectedSegment = selectedSegment
+    w.__editorSelectedSegments = selectedSegments
+    w.__editorSelectedRing = selectedRing
+    w.__editorSelectedRings = selectedRings
     w.__editorHoveredSegment = hoveredSegment
     w.__editorHoveredRing = hoveredRing
     // __editorState facade: populated after startRecording/finishRecording are defined
@@ -149,6 +152,9 @@ export default function EditorScreen() {
     facade.segments = segments
     facade.editMode = editMode
     facade.selectedSegment = selectedSegment
+    facade.selectedSegments = selectedSegments
+    facade.selectedRing = selectedRing
+    facade.selectedRings = selectedRings
     facade.hoveredSegment = hoveredSegment
     facade.hoveredRing = hoveredRing
     facade.amplitude = amplitude
@@ -876,7 +882,7 @@ export default function EditorScreen() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [snap, timeline, selectedRing, segments, notify, playFrom, stop, startRecording, finishRecording])
+  }, [snap, timeline, selectedRing, selectedRings, selectedSegment, selectedSegments, segments, notify, playFrom, stop, startRecording, finishRecording, commitRings, commitSegments])
 
   const removeRing = (index: number) => {
     commitRings((prev) => prev.filter((_, i) => i !== index))

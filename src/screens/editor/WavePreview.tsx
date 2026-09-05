@@ -168,15 +168,26 @@ export default function WavePreview({
     return g.viewStart + (x / width) * g.viewBeats
   }
 
-  // T156: compute multi-drag preview segments from original segments + selectedIndices + offset
-  const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number): Segment[] => {
+  // T156: compute multi-drag preview segments from original segments + selectedIndices + offset.
+  // Supports 左右上下 (horizontal + vertical): each selected segment shifts by dxBeat
+  // (clamped to >= safeSnap, snap-quantized) and, when the mouse moves across a Y zone,
+  // re-points its direction toward the drag zone (up/down). Unit moves stay idempotent
+  // (no direction change when dy stays inside the same third of the wave band).
+  const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number, dy: number): Segment[] => {
     if (selSegIdxs.length === 0) return null as unknown as Segment[]
-    const result = [...origSegs]
+    const result = origSegs.map((s) => ({ ...s }))
     const selectedSet = new Set(selSegIdxs)
+    const dx = quantizeBeat(dxBeat, safeSnap)
+    // 3-zone vertical move: -1 = up, +1 = down, 0 = stay inside current zone.
+    const moveZone = dy < -0.5 ? -1 : dy > 0.5 ? 1 : 0
     for (let i = 0; i < result.length; i++) {
       if (!selectedSet.has(i)) continue
-      const newBeats = Math.max(safeSnap, quantizeBeat(result[i].beats + dxBeat, safeSnap))
-      result[i] = { ...result[i], beats: newBeats }
+      const base = result[i]
+      result[i] = {
+        ...base,
+        beats: Math.max(safeSnap, quantizeBeat(base.beats + dx, safeSnap)),
+        direction: moveZone !== 0 ? (moveZone < 0 ? ('up' as const) : ('down' as const)) : base.direction,
+      }
     }
     return result
   }
@@ -572,7 +583,16 @@ export default function WavePreview({
         if (editMode === 'ring') {
           setRingDragOffset(dxBeat)
         } else if (multiDragRef.current.origSegIndices) {
-          const preview = computeMultiDragSegs(segments, multiDragRef.current.origSegIndices, dxBeat)
+          // Vertical component via the same dispAmp-based inverse mapping used by
+          // vertex/edge drags, so preview Y follows the mouse inside the wave band.
+          const fieldH = rect.height - RULER_H
+          const centerY = RULER_H + fieldH / 2
+          const maxAmpV = (fieldH - 24) / 2
+          const minAmpV = Math.max(8, 0.2 * rect.height)
+          const dispAmpV = Math.min(maxAmpV, Math.max(TW_AMP, minAmpV))
+          const mapYInverseV = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmpV) * TW_AMP
+          const dy = mapYInverseV(e.clientY - rect.top) - multiDragRef.current.startY
+          const preview = computeMultiDragSegs(segments, multiDragRef.current.origSegIndices, dxBeat, dy)
           setMultiDragSegments(preview)
         }
         return
@@ -707,11 +727,13 @@ export default function WavePreview({
       if (rubberRef.current) {
         const r = rubberRef.current
         rubberRef.current = null
-        const moved = Math.hypot((e.clientX - rect!.left) - r.startX, (e.clientY - rect!.top) - r.startY)
+        const relX = rect ? e.clientX - rect.left : r.startX
+        const relY = rect ? e.clientY - rect.top : r.startY
+        const moved = Math.hypot(relX - r.startX, relY - r.startY)
         setRubberRect(null)
         if (rect && moved >= 4) {
           rubberDraggedRef.current = true
-          const found = findItemsInRect(r.startX, r.startY, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
+          const found = findItemsInRect(r.startX, r.startY, relX, relY, rect.width, rect.height)
           if (editMode === 'ring') {
             if (found.rings.length === 1) onSelectRing?.(found.rings[0])
             else if (found.rings.length > 1) onSelectRings?.(found.rings)
@@ -731,8 +753,11 @@ export default function WavePreview({
         if (editMode === 'ring') {
           if (ringDragOffset !== 0) {
             const selected = selectedRings.length > 0 ? selectedRings : selectedRing != null ? [selectedRing] : []
-            const moves = selected.map((i) => ({ index: i, beat: rings[i] ? Math.max(0, Math.round((rings[i].beat + ringDragOffset) / safeSnap) * safeSnap) : 0 }))
-            onMultiMoveRings?.(moves)
+            // Skip rings that no longer exist; clamp to non-negative snapped beats.
+            const moves = selected
+              .filter((i) => rings[i] != null)
+              .map((i) => ({ index: i, beat: Math.max(0, Math.round((rings[i].beat + ringDragOffset) / safeSnap) * safeSnap) }))
+            if (moves.length > 0) onMultiMoveRings?.(moves)
           }
           setRingDragOffset(0)
         } else {
@@ -895,6 +920,9 @@ export default function WavePreview({
     // T156: right-button always starts rubber band selection (all modes).
     // Right single-click (< 4px drag) delegates to delete via onUp commit path.
     if (isRight) {
+      // Reset any stale drag flag so a *fresh* right-click always falls through to
+      // the single-item delete path (right-click remove) when the mouse is released.
+      rubberDraggedRef.current = false
       rubberRef.current = {
         startBeat: xToBeatLocal(e.clientX - rect.left, rect.width),
         startX: e.clientX - rect.left,
@@ -1190,6 +1218,7 @@ export default function WavePreview({
         ref={canvasRef}
         className="wave-preview"
         data-testid="wave-preview-canvas"
+        data-canvas-testid="wave-canvas"
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
@@ -1197,9 +1226,9 @@ export default function WavePreview({
         onMouseLeave={handleMouseLeave}
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
-        {editMode === 'vertex' && '頂点モード: 右クリックで削除、空ドラッグで頂点作成（プレビュー→確定）。ホイールでズーム'}
-        {editMode === 'edge' && '辺モード: 辺をドラッグで左右上下に移動・選択。空白ドラッグでパン、ホイールでズーム'}
-        {editMode === 'ring' && 'リングモード: ダブルクリックで追加・右クリックで削除・ドラッグで移動。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'vertex' && '頂点モード: 右ドラッグで範囲選択・左ドラッグで集合移動、右クリックで削除、空ドラッグで頂点作成（プレビュー→確定）。ホイールでズーム'}
+        {editMode === 'edge' && '辺モード: 左ドラッグで辺移動・右ドラッグで範囲選択。空白ドラッグでパン、ホイールでズーム'}
+        {editMode === 'ring' && 'リングモード: ダブルクリックで追加・右クリック削除・左ドラッグ移動・右ドラッグで範囲選択。ホイールでズーム'}
       </p>
     </div>
   )
