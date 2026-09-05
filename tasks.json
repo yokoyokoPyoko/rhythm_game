@@ -920,5 +920,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T159",
+    "desc": "エディタ自動保存（複数スロット＋左上復元ボタン＋保存間隔スライダー）。要求（ユーザー確定）: 自動保存機能。複数スロット（タイトル別、上限10件・超過分は古い順削除）。左上ヘッダーに復元ボタン＋保存間隔スライダー（1〜5分）。現状: 編集状態は EditorScreen.tsx の useState のみでリロード消失。buildChart()（:1012）→chartToToml→手動エクスポートのみ。localStorage はキー音・判定オフセットのみ使用。修正（EditorScreen.tsx のみ＋CSS小追加）: (1) 保存: buildChart()→TOML化し {toml, savedAt} を localStorage['rhythmEditorAutosave::<slug>']（slugはexportと同一、空欄は untitled）へ保存。編集state変更時にdebounceで実行（待機時間は保存間隔スライダー値）。履歴・再生位置・音量は対象外。(2) 一覧: 接頭辞走査で {slug, title, savedAt} を取得（TOMLパースは復元時のみ）。10件超過時は savedAt 昇順で削除。(3) 復元UI: editor-header タイトル横に <button data-testid=\"editor-restore\">復元</button>＋ドロップダウン（タイトル・保存時刻・復元・削除）。復元は parseChartText→importChart 流用。(4) 保存間隔スライダー: 復元ボタン隣に <input type=\"range\" min={1} max={5} step={1} data-testid=\"autosave-interval\">＋現在値表示（既定3分）。値自体も localStorage（rhythmEditorAutosaveInterval）に永続化し範囲外はclamp。(5) 音源: URL音源は通常ロードで再取得。ローカルファイル由来は譜面のみ復元＋再選択ヒント。「クリア」時は現タイトルのスロットも削除。完了条件: (1) 複数タイトルで編集→復元ボタンから各タイトルに戻れること（11件目で最古が消える）(2) 各スロットの波形・リング・BPM・メタ情報が再現されること (3) スライダー変更で保存待機が変わり、値がリロード後も維持されること (4) URL音源は再ロード、ローカル音源は譜面のみ＋ヒント (5) tsc --noEmit、T55・T102/T103・T155の回帰なし。",
+    "depends_on": [
+      "T158"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
