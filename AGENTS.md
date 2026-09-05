@@ -1733,3 +1733,25 @@ const minorStep =
 1. `{v}` 単独選択で `getPoints()[v].beat` のみ `+dx`、他点不変、後続シフトなし、全beats snap整数倍、長さ不変であること。
 2. off-grid（0.37/1.23）＋複雑amp（0.7/1.3/2.7）で数値整合、`tsc --noEmit`。
 3. 回帰: T141/T142/T150/T151/T152/T154/T155/T156。
+
+---
+
+### [T158] コンボ／ボーナス分離＋新得点（トレース・リング・コンボ切れの再定義）
+
+**要求（ユーザー確定）**: コンボ加算とコンボ数を分離する。変数は2つ：**コンボ数**（表示カウンタ）と**combo加算値**（スコア式 `2+combo` 専用のボーナスプール）。
+
+**仕様**:
+- リングPERFECT：スコア+100、コンボ数+1、ボーナス不変。GOOD：スコア+30、コンボ数+1、ボーナス不変。MISS：スコアなし、コンボ数・ボーナスとも0
+- トレースtick（0.15秒毎、波形重なり中）：スコア `2+combo加算値` のみ、コンボ数不変
+- 連続トレース16拍（4小節）到達：`combo加算値 += 2`（端数持越し）、コンボ数不変
+- 波形外3拍継続：コンボ数・ボーナスとも0。波形外3拍未満：不変
+
+**修正**:
+- `src/game/score.ts` のみ（ロジック集約）: 定数 `PERFECT 300→100`、`GOOD 100→30`、`TRACE_BASE 8→2`。新フィールド `comboBonus`＋`traceBeats`＋`offBeats` を追加。`recordTrace(dt, isOnWave, beatMs)` に第3引数追加（拍換算 `dt*1000/beatMs` でBPM変化対応）。`recordHit` のコンボ増減は維持しmiss時はボーナスもリセット
+- `src/screens/GameScreen.tsx:364`、`src/screens/editor/CalibrationModal.tsx:212`：第3引数 `currentBeatMs` を追加（両スコープに存在確認済み）
+
+**完了条件**:
+1. トレースtickでコンボ数不変・スコア `+2+bonus` のみ増加すること
+2. 連続トレース16拍でボーナス+2（コンボ数不変）、波形外で `traceBeats` リセット
+3. PERFECT/GOODで+100/+30かつコンボ数+1・ボーナス不変、miss／波形外3拍で両方0
+4. `tsc --noEmit`、既存テスト回帰なし（`recordTrace` 参照テストなし）。

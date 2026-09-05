@@ -7166,3 +7166,5 @@ src/screens/editor/WavePreview.tsx(791,13): error TS6133: 'dispAmp' is declared 
 2026-09-05 14:05:02,328 [INFO] [T157] Gate B Red check OK: test fails as expected (pre-implementation).
 2026-09-05 14:05:02,336 [INFO] RateLimit sleep: 5s...
 2026-09-05 14:05:07,337 [INFO] Dispatching [1mCoder(T157)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T157] Coder 790806ce)
+2026-09-05 16:27:04,727 [INFO] Orchestrator range execution: 1 tasks (from=T158, to=T158, budget=600m)
+2026-09-05 16:27:04,728 [INFO] [T158] --only mode: skipping dependency checks.
