@@ -1116,7 +1116,7 @@
         "qa": "ses_f900cafb9ffeIjGuXeSPfeTat0",
         "coder": "ses_f900b353dffe5ra8FbdgmHq8dY"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
