@@ -5,6 +5,7 @@ interface SegmentEditorProps {
   segments: Segment[]
   onSegmentsChange: (next: Segment[]) => void
   selectedIndex?: number | null
+  selectedIndices?: number[]
   hoveredIndex?: number | null
   onSelect?: (index: number | null) => void
   onHover?: (index: number | null) => void
@@ -13,7 +14,7 @@ interface SegmentEditorProps {
   onDetailsOpenChange?: (open: boolean) => void
 }
 
-export default function SegmentEditor({ segments, onSegmentsChange, selectedIndex = null, hoveredIndex = null, onSelect, onHover, editMode, detailsOpen, onDetailsOpenChange }: SegmentEditorProps) {
+export default function SegmentEditor({ segments, onSegmentsChange, selectedIndex = null, selectedIndices = [], hoveredIndex = null, onSelect, onHover, editMode, detailsOpen, onDetailsOpenChange }: SegmentEditorProps) {
   const [internalOpen, setInternalOpen] = useState(false)
 
   useEffect(() => {
@@ -80,8 +81,8 @@ export default function SegmentEditor({ segments, onSegmentsChange, selectedInde
         <p className="editor-empty">セグメントなし</p>
       ) : (
         <ul className="segment-list">
-          {segments.map((seg, i) => (
-            <li key={i} className={`segment-list-item${selectedIndex === i ? ' segment-list-item-selected' : ''}${hoveredIndex === i ? ' segment-list-item-hovered' : ''}${editMode === 'edge' && selectedIndex === i ? ' segment-list-item-edge-active' : ''}`} onClick={() => onSelect?.(i)} onMouseEnter={() => onHover?.(i)} onMouseLeave={() => onHover?.(null)} data-focus-id={`segment-${i}`} data-testid={`segment-list-item-${i}`} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect?.(i) }}>
+             {segments.map((seg, i) => (
+               <li key={i} className={`segment-list-item${selectedIndex === i || selectedIndices.includes(i) ? ' segment-list-item-selected' : ''}${hoveredIndex === i ? ' segment-list-item-hovered' : ''}${editMode === 'edge' && (selectedIndex === i || selectedIndices.includes(i)) ? ' segment-list-item-edge-active' : ''}`} onClick={() => onSelect?.(i)} onMouseEnter={() => onHover?.(i)} onMouseLeave={() => onHover?.(null)} data-focus-id={`segment-${i}`} data-testid={`segment-list-item-${i}`} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect?.(i) }}>
               <span className="segment-index">{i + 1}</span>
               <select
                 className="editor-input segment-direction"

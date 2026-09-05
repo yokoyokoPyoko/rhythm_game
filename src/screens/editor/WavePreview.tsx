@@ -169,32 +169,14 @@ export default function WavePreview({
   }
 
   // T156: compute multi-drag preview segments from original segments + selectedIndices + offset
-  const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number, dy: number, canvasH: number): Segment[] => {
+  const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number): Segment[] => {
     if (selSegIdxs.length === 0) return null as unknown as Segment[]
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-    const engine = new WaveEngine(origSegs, timeline, EDITOR_BASE_AMP, startPosition)
-    const pts = engine.getPoints()
-    const fieldH = canvasH - RULER_H
-    const centerY = RULER_H + fieldH / 2
-    const maxAmp = (fieldH - 24) / 2
-    const minAmp = Math.max(8, 0.2 * canvasH)
-    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-    const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
-    const perBeat = 2 * TW_AMP * (timeline.amplitudeAt(0) || EDITOR_BASE_AMP)
     const result = [...origSegs]
     const selectedSet = new Set(selSegIdxs)
-    for (let i = 0; i < pts.length; i++) {
+    for (let i = 0; i < result.length; i++) {
       if (!selectedSet.has(i)) continue
-      const prevPt = pts[i - 1]
-      const nextPt = pts[i + 1]
-      if (!prevPt && !nextPt) continue
-      if (i > 0 && i < pts.length) {
-        const segIdx = i - 1
-        if (segIdx >= 0 && segIdx < result.length) {
-          const newBeats = Math.max(safeSnap, quantizeBeat(result[segIdx].beats + dxBeat, safeSnap))
-          result[segIdx] = { ...result[segIdx], beats: newBeats }
-        }
-      }
+      const newBeats = Math.max(safeSnap, quantizeBeat(result[i].beats + dxBeat, safeSnap))
+      result[i] = { ...result[i], beats: newBeats }
     }
     return result
   }
@@ -269,7 +251,7 @@ export default function WavePreview({
     const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
     // T150: while a vertex/edge drag is in flight, render the local preview wave
     // instead of the committed segments; rings follow the preview engine too.
-    const renderSegs = dragPreview ?? segments
+    const renderSegs = multiDragSegments ?? dragPreview ?? segments
     const engine = new WaveEngine(renderSegs, timeline, EDITOR_BASE_AMP, startPosNorm)
 
     const centerY = RULER_H + (cssH - RULER_H) / 2
@@ -553,7 +535,7 @@ export default function WavePreview({
       ctx.rect(rubberRect.x, rubberRect.y, rubberRect.w, rubberRect.h)
       ctx.fill()
     }
-  }, [segments, dragPreview, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
+  }, [segments, dragPreview, multiDragSegments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -587,17 +569,10 @@ export default function WavePreview({
       if (multiDragRef.current) {
         const x = e.clientX - rect.left
         const dxBeat = quantizeBeat(xToBeatLocal(x, rect.width) - multiDragRef.current.startBeat, safeSnap)
-        const fieldH = rect.height - RULER_H
-        const centerY = RULER_H + fieldH / 2
-        const maxAmp = (fieldH - 24) / 2
-        const minAmp = Math.max(8, 0.2 * rect.height)
-        const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
-        const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
-        const dy = mapYInverse(e.clientY - rect.top) - multiDragRef.current.startY
         if (editMode === 'ring') {
           setRingDragOffset(dxBeat)
         } else if (multiDragRef.current.origSegIndices) {
-          const preview = computeMultiDragSegs(segments, multiDragRef.current.origSegIndices, dxBeat, dy, rect.height)
+          const preview = computeMultiDragSegs(segments, multiDragRef.current.origSegIndices, dxBeat)
           setMultiDragSegments(preview)
         }
         return
@@ -752,7 +727,6 @@ export default function WavePreview({
       }
       // T156: multi-selection move commit — single commit per mouseup
       if (multiDragRef.current) {
-        const md = multiDragRef.current
         multiDragRef.current = null
         if (editMode === 'ring') {
           if (ringDragOffset !== 0) {

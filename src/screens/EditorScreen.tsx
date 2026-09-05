@@ -93,6 +93,7 @@ export default function EditorScreen() {
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
   const [playtest, setPlaytest] = useState<{ chart: Chart; buffer: AudioBuffer | null } | null>(null)
   const [selectedRing, setSelectedRing] = useState<number | null>(null)
+  const [selectedRings, setSelectedRings] = useState<number[]>([])
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [loadingAudio, setLoadingAudio] = useState(false)
@@ -106,6 +107,7 @@ export default function EditorScreen() {
   const [mode, setMode] = useState<'play' | 'record'>('play')
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
+  const [selectedSegments, setSelectedSegments] = useState<number[]>([])
   const [hoveredSegment, setHoveredSegment] = useState<number | null>(null)
   const [hoveredRing, setHoveredRing] = useState<number | null>(null)
   const [view, setView] = useState<WaveView>({ startBeat: 0, beats: 16 })
@@ -759,10 +761,29 @@ export default function EditorScreen() {
         return
       }
 
+      if (e.code === 'Escape') {
+        setSelectedRings([])
+        setSelectedRing(null)
+        setSelectedSegments([])
+        setSelectedSegment(null)
+        return
+      }
+
       if (!editable && (e.code === 'Delete' || e.code === 'Backspace')) {
-        if (selectedRing != null) {
-          e.preventDefault()
+        e.preventDefault()
+        if (selectedRings.length > 0) {
+          commitRings((prev) => prev.filter((_, i) => !selectedRings.includes(i)))
+          setSelectedRings([])
+          setSelectedRing(null)
+        } else if (selectedRing != null) {
           removeRing(selectedRing)
+        } else if (selectedSegments.length > 0) {
+          commitSegments(segmentsRef.current.filter((_, i) => !selectedSegments.includes(i)))
+          setSelectedSegments([])
+          setSelectedSegment(null)
+        } else if (selectedSegment != null) {
+          commitSegments(segmentsRef.current.filter((_, i) => i !== selectedSegment))
+          setSelectedSegment(null)
         }
         return
       }
@@ -860,10 +881,12 @@ export default function EditorScreen() {
   const removeRing = (index: number) => {
     commitRings((prev) => prev.filter((_, i) => i !== index))
     setSelectedRing((cur) => (cur === index ? null : cur))
+    setSelectedRings((cur) => cur.filter((i) => i !== index))
   }
 
   const handleSelectRing = useCallback((index: number | null) => {
     setSelectedRing(index)
+    setSelectedRings(index != null ? [index] : [])
     if (index != null) {
       setRingDetailsOpen(true)
       requestAnimationFrame(() => {
@@ -872,8 +895,17 @@ export default function EditorScreen() {
     }
   }, [])
 
+  const handleSelectRings = useCallback((indices: number[]) => {
+    setSelectedRings(indices)
+    setSelectedRing(indices[0] ?? null)
+    if (indices.length > 0) {
+      setRingDetailsOpen(true)
+    }
+  }, [])
+
   const handleSelectSegment = useCallback((index: number | null) => {
     setSelectedSegment(index)
+    setSelectedSegments(index != null ? [index] : [])
     if (index != null) {
       setSegmentDetailsOpen(true)
       requestAnimationFrame(() => {
@@ -881,6 +913,30 @@ export default function EditorScreen() {
       })
     }
   }, [])
+
+  const handleSelectSegments = useCallback((indices: number[]) => {
+    setSelectedSegments(indices)
+    setSelectedSegment(indices[0] ?? null)
+    if (indices.length > 0) {
+      setSegmentDetailsOpen(true)
+    }
+  }, [])
+
+  const handleMultiMoveRings = useCallback((moves: { index: number; beat: number }[]) => {
+    commitRings((prev) => {
+      const next = [...prev]
+      moves.forEach(m => {
+        if (next[m.index]) {
+          next[m.index] = { ...next[m.index], beat: m.beat }
+        }
+      })
+      return next
+    })
+  }, [commitRings])
+
+  const handleMultiMoveSegments = useCallback((next: Segment[]) => {
+    commitSegments(next)
+  }, [commitSegments])
 
   const addRing = useCallback(
     (beat: number): number | undefined => {
@@ -1378,6 +1434,8 @@ export default function EditorScreen() {
             snap={snap}
             selectedRing={selectedRing}
             selectedSegment={selectedSegment}
+            selectedRings={selectedRings}
+            selectedSegments={selectedSegments}
             hoveredRing={hoveredRing}
             hoveredSegment={hoveredSegment}
             positionMs={positionMs}
@@ -1389,13 +1447,17 @@ export default function EditorScreen() {
             onMoveRing={moveRing}
             onSelectRing={handleSelectRing}
             onSelectSegment={handleSelectSegment}
+            onSelectRings={handleSelectRings}
+            onSelectSegments={handleSelectSegments}
+            onMultiMoveRings={handleMultiMoveRings}
+            onMultiMoveSegments={handleMultiMoveSegments}
             onHoverRing={setHoveredRing}
             onHoverSegment={setHoveredSegment}
             onSegmentsChange={commitSegments}
             onDeleteRing={removeRing}
             onSeek={seekToBeat}
           />
-          <SegmentEditor segments={segments} selectedIndex={selectedSegment} hoveredIndex={hoveredSegment} onSegmentsChange={commitSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} />
+          <SegmentEditor segments={segments} selectedIndex={selectedSegment} selectedIndices={selectedSegments} hoveredIndex={hoveredSegment} onSegmentsChange={commitSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} />
 
           <section className="editor-pane editor-accordion">
              <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>
@@ -1413,7 +1475,7 @@ export default function EditorScreen() {
                   .map(({ ring, i }, sortedIdx) => (
                   <li
                     key={`${i}-${ring.beat}`}
-                    className={`ring-list-item${i === selectedRing ? ' ring-list-item-selected' : ''}${i === hoveredRing ? ' ring-list-item-hovered' : ''}`}
+                    className={`ring-list-item${i === selectedRing || selectedRings.includes(i) ? ' ring-list-item-selected' : ''}${i === hoveredRing ? ' ring-list-item-hovered' : ''}`}
                     data-testid={`ring-list-item-${sortedIdx}`}
                     data-focus-id={`ring-${i}`}
                     tabIndex={0}
