@@ -30,6 +30,24 @@ export interface JudgementEvent {
   at: number;
 }
 
+export interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  alpha: number;
+}
+
+export interface UpdateParams {
+  cursor: Cursor;
+  score: ScoreManager;
+  isTracing?: boolean;
+  songTimeMs?: number;
+  cursorVelocity?: { x: number; y: number };
+}
+
 export interface RenderParams {
   waveEngine: WaveEngine;
   cursor: Cursor;
@@ -39,6 +57,8 @@ export interface RenderParams {
   bpmTimeline: BpmTimeline;
   judgementEvents?: JudgementEvent[];
   scrollSpeed?: number;
+  isTracing?: boolean;
+  cursorVelocity?: { x: number; y: number };
 }
 
 function safe(value: number, fallback: number): number {
@@ -66,14 +86,88 @@ function resultColor(result: HitResult): string {
 }
 
 export class Renderer {
+  private particles: Particle[] = [];
+  private spawnAccumulator = 0;
+  private prevCursorY = CANVAS_HEIGHT / 2;
+  private lastSongTimeMs = 0;
+
+  getParticles(): Particle[] {
+    return this.particles;
+  }
+
+  update(dt: number, params: UpdateParams): void {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life += dt;
+      if (p.life >= p.maxLife) {
+        this.particles.splice(i, 1);
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.alpha = Math.max(0, 1 - p.life / p.maxLife);
+    }
+
+    const { cursor, score: _score, isTracing, cursorVelocity } = params;
+    if (isTracing) {
+      this.spawnAccumulator += dt;
+      const interval = Math.random() * (0.08 - 0.05) + 0.05;
+      while (this.spawnAccumulator >= interval) {
+        this.spawnAccumulator -= interval;
+        const count = Math.random() < 0.5 ? 1 : 2;
+        for (let c = 0; c < count; c++) {
+          const x = TW_JUDGE_X + (Math.random() * 6 - 3);
+          const y = cursor.y + (Math.random() * 6 - 3);
+
+          const velX = cursorVelocity?.x ?? 0;
+          const velY = cursorVelocity?.y ?? (cursor.y - this.prevCursorY);
+          const revX = -velX;
+          const revY = -velY;
+
+          let baseAngle = Math.atan2(revY, revX);
+          if (revX === 0 && revY === 0) {
+            baseAngle = Math.PI + (Math.random() - 0.5) * Math.PI;
+          }
+          const angle = baseAngle + (Math.random() - 0.5) * Math.PI * 0.5;
+          const speed = Math.random() * 30 + 20;
+          const maxLife = Math.random() * 0.2 + 0.3;
+
+          this.particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 0,
+            maxLife,
+            alpha: 1,
+          });
+        }
+      }
+    }
+    this.prevCursorY = cursor.y;
+  }
+
   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
-    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline } = params;
+    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline, isTracing: paramIsTracing, cursorVelocity } = params;
     const scrollSpeed = Number.isFinite(params.scrollSpeed) && (params.scrollSpeed as number) > 0 ? (params.scrollSpeed as number) : DEFAULT_SCROLL_SPEED;
+
+    const dt = this.lastSongTimeMs > 0 ? Math.max(0, Math.min(0.1, (songTimeMs - this.lastSongTimeMs) / 1000)) : 1 / 60;
+    this.lastSongTimeMs = songTimeMs;
+
+    const isTracing = paramIsTracing ?? (Math.abs(cursor.y - waveEngine.waveYAtMs(songTimeMs)) < 26);
+    this.update(dt, {
+      cursor,
+      score,
+      isTracing,
+      songTimeMs,
+      cursorVelocity,
+    });
 
     this.drawBackground(ctx);
     this.drawJudgeLine(ctx);
     this.drawWave(ctx, waveEngine, songTimeMs, scrollSpeed);
     this.drawRings(ctx, rings, songTimeMs, scrollSpeed, waveEngine);
+    this.drawParticles(ctx, score);
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
     this.drawJudgements(ctx, params.judgementEvents ?? [], songTimeMs);
@@ -201,6 +295,18 @@ export class Renderer {
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
+  }
+
+  private drawParticles(ctx: CanvasRenderingContext2D, score: ScoreManager): void {
+    const color = TIER_COLORS[comboTier(score.getStats().combo)];
+    for (const p of this.particles) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = p.alpha;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   private drawJudgements(
