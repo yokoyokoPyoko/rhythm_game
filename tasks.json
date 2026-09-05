@@ -947,5 +947,50 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T162",
+    "desc": "スコア・判定の拡張（Great判定追加・スコア調整・Stats更新）。要求（ユーザー確定）: Perfect=50点、Great=30点（誤差50〜100ms且つY距離<60px）、Good=10点（誤差100ms〜判定ウィンドウ）。Statsに great カウント追加。修正: src/types.ts の HitResult に 'great' 追加。src/game/hitJudge.ts に Great 判定追加。src/game/score.ts 配点調整と great 統計追加。完了条件: (1) Perfect=50, Great=30, Good=10 と Great 判定が機能すること (2) tsc --noEmit。",
+    "depends_on": [
+      "T161"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T163",
+    "desc": "カーソルの継続スナップ（毎tickの波への引き寄せ）。要求（ユーザー確定）: 毎フレーム判定ライン上の波の値へごくわずかに寄せ続ける（cursorY += (nowWaveY - cursorY) * PULL_STRENGTH, PULL_STRENGTH=0.04〜0.05）。上下キー操作の直後に加算。修正: src/game/cursor.ts の update 内に追加。完了条件: (1) カーソルが毎フレームなめらかに波へ引き寄せられること (2) tsc --noEmit。",
+    "depends_on": [
+      "T162"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T164",
+    "desc": "リング密集時の不透明度アニメーション（べき乗イージング）。要求（ユーザー確定）: リングが複数重なったとき出現直後は薄くhitTimeに近づくほど濃く（べき乗1.6前後 math.pow(1-progress, 1.6)）。各リングの spawnTime 基準で独立計算。修正: src/game/renderer.ts の drawRings 内。完了条件: (1) リングが近づくにつれてフェードインすること (2) tsc --noEmit。",
+    "depends_on": [
+      "T163"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T165",
+    "desc": "カーソルパーティクル（波トレース中のパーティクル表現）。要求（ユーザー確定）: 波をなぞりスコア判定されている間カーソルの後ろに小粒発生（0.05〜0.08秒毎に1〜2個、上下左右±3px、逆方向へ流れる、寿命0.3〜0.5秒、発光なし）。修正: src/game/renderer.ts または関連クラス。完了条件: (1) トレース中にカーソル背後にパーティクルが描画されること (2) tsc --noEmit。",
+    "depends_on": [
+      "T164"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T166",
+    "desc": "判定ごとの演出（画面フラッシュ ＆ パーティクルバースト）。要求（ユーザー確定）: Perfect=白フラッシュ(alpha 0.4→0, 0.12秒)+大パーティクル20〜24個、Great=tier色フラッシュ(0.25→0, 0.12秒)+中パーティクル12個、Good=小パーティクル6個。発光なし。修正: src/game/renderer.ts。完了条件: (1) 判定に応じたフラッシュとパーティクルバーストが表示されること (2) tsc --noEmit。",
+    "depends_on": [
+      "T165"
+    ],
+    "type": "feat",
+    "test": true
   }
 ]
