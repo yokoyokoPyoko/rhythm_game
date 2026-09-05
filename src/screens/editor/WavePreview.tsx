@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { quantizeBeat } from '../../chart/quantize'
-import { calculateVertexDrag, calculateEdgeDrag } from '../../game/editorDrag'
+import { calculateVertexDrag, calculateEdgeDrag, calculateMultiDrag } from '../../game/editorDrag'
 import { TW_CENTER_Y, TW_AMP, WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
@@ -168,28 +168,19 @@ export default function WavePreview({
     return g.viewStart + (x / width) * g.viewBeats
   }
 
-  // T156: compute multi-drag preview segments from original segments + selectedIndices + offset.
-  // Supports 左右上下 (horizontal + vertical): each selected segment shifts by dxBeat
-  // (clamped to >= safeSnap, snap-quantized) and, when the mouse moves across a Y zone,
-  // re-points its direction toward the drag zone (up/down). Unit moves stay idempotent
-  // (no direction change when dy stays inside the same third of the wave band).
+  // T156-fix: multi-drag delegates to the pure parallel-move helper so the
+  // math is unit-testable directly (T127 lesson: no reference reimplementation).
   const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number, dy: number): Segment[] => {
-    if (selSegIdxs.length === 0) return null as unknown as Segment[]
-    const result = origSegs.map((s) => ({ ...s }))
-    const selectedSet = new Set(selSegIdxs)
-    const dx = quantizeBeat(dxBeat, safeSnap)
-    // 3-zone vertical move: -1 = up, +1 = down, 0 = stay inside current zone.
-    const moveZone = dy < -0.5 ? -1 : dy > 0.5 ? 1 : 0
-    for (let i = 0; i < result.length; i++) {
-      if (!selectedSet.has(i)) continue
-      const base = result[i]
-      result[i] = {
-        ...base,
-        beats: Math.max(safeSnap, quantizeBeat(base.beats + dx, safeSnap)),
-        direction: moveZone !== 0 ? (moveZone < 0 ? ('up' as const) : ('down' as const)) : base.direction,
-      }
-    }
-    return result
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    return calculateMultiDrag({
+      segments: origSegs,
+      bpmTimeline: timeline,
+      startPosition,
+      selSegIdxs,
+      dxBeat,
+      dy,
+      snap: safeSnap,
+    }) as unknown as Segment[]
   }
 
   // T156: find items inside a rubber band rectangle
@@ -952,7 +943,16 @@ export default function WavePreview({
         onSel = eHit >= 0 && (selectedSegments.includes(eHit) || selectedSegment === eHit)
       }
       if (onSel && selectedSet.size > 0) {
-        multiDragRef.current = { startBeat: xToBeatLocal(e.clientX - rect.left, rect.width), startY: clickY }
+        // T156-fix: startY must be in wave-Y units (mapYInverse space), not
+        // pixels — otherwise dy mixes units and the preview Y never follows
+        // the cursor. Same inverse mapping as vertex/edge drags.
+        const fieldH = rect.height - RULER_H
+        const centerY = RULER_H + fieldH / 2
+        const maxAmpM = (fieldH - 24) / 2
+        const minAmpM = Math.max(8, 0.2 * rect.height)
+        const dispAmpM = Math.min(maxAmpM, Math.max(TW_AMP, minAmpM))
+        const startWaveY = TW_CENTER_Y + ((clickY - centerY) / dispAmpM) * TW_AMP
+        multiDragRef.current = { startBeat: xToBeatLocal(e.clientX - rect.left, rect.width), startY: startWaveY }
         if (editMode !== 'ring') {
           multiDragRef.current.origSegIndices = selectedSegments.length ? selectedSegments : (selectedSegment != null ? [selectedSegment] : [])
         }

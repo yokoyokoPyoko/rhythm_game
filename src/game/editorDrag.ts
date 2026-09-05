@@ -127,6 +127,85 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   return candidateSegs;
 }
 
+export interface MultiDragInput {
+  segments: Segment[];
+  bpmTimeline: BpmTimeline;
+  startPosition: number;
+  selSegIdxs: number[];
+  dxBeat: number;
+  /** Vertical shift in wave-Y units (mapYInverse space, continuous). */
+  dy: number;
+  snap: number;
+}
+
+// T156-fix: rigid parallel move of a multi-selection.
+// Moved vertices (= union of selected segments' endpoints, except anchored
+// vertex 0) shift together by (dx, dy). Internal segments (both endpoints
+// moved) are kept bit-exact — no stretch. Only boundary segments (exactly
+// one endpoint moved) are re-derived: beats from the new horizontal distance
+// (X-first, snap-quantized), direction from the zone relationship
+// (dirBetween), preserving the original direction while the moved endpoint
+// stays in its zone. dx is clamped so every boundary keeps >= safeSnap.
+export function calculateMultiDrag(input: MultiDragInput): Segment[] | null {
+  const { segments, bpmTimeline, startPosition, selSegIdxs, dxBeat, dy, snap } = input;
+  const safeSnap = snap > 0 ? snap : 0.25;
+  const n = segments.length;
+  if (n === 0) return null;
+  const selSet = new Set(selSegIdxs.filter((i) => i >= 0 && i < n));
+  if (selSet.size === 0) return null;
+
+  const baseAmp = bpmTimeline.amplitudeAt(0);
+  const engine = new WaveEngine(segments, bpmTimeline, baseAmp, startPosition);
+  const pts = engine.getPoints();
+
+  const moved = new Set<number>();
+  selSet.forEach((i) => {
+    if (i > 0) moved.add(i);
+    moved.add(i + 1);
+  });
+  moved.delete(0);
+  if (moved.size === 0) return segments.map((s) => ({ ...s }));
+
+  const dx = quantizeBeat(dxBeat, safeSnap);
+  // Clamp dx so boundary segments keep >= safeSnap and beats stay >= 0.
+  let lo = -Infinity;
+  let hi = Infinity;
+  for (let j = 0; j < n; j++) {
+    const a = moved.has(j);
+    const b = moved.has(j + 1);
+    if (a === b) continue;
+    const origLen = pts[j + 1].beat - pts[j].beat;
+    if (a && !b) hi = Math.min(hi, origLen - safeSnap);
+    else lo = Math.max(lo, safeSnap - origLen);
+  }
+  moved.forEach((v) => {
+    lo = Math.max(lo, -pts[v].beat);
+  });
+  if (lo > hi) return null;
+  const dxC = Math.max(lo, Math.min(hi, dx));
+
+  const newBeat = (v: number): number => pts[v].beat + (moved.has(v) ? dxC : 0);
+  const newY = (v: number): number =>
+    moved.has(v) ? clampY(pts[v].y + dy) : pts[v].y;
+
+  return segments.map((s, j) => {
+    const a = moved.has(j);
+    const b = moved.has(j + 1);
+    if (!a && !b) return { ...s };
+    if (a && b) return { ...s };
+    // Boundary: beats from the new horizontal span; direction from zones,
+    // preserving the original direction while the moved endpoint stays in
+    // its zone (so horizontal-only drags never flip slopes).
+    const beats = Math.max(safeSnap, quantizeBeat(newBeat(j + 1) - newBeat(j), safeSnap));
+    const movedV = a ? j : j + 1;
+    const dir =
+      zoneOf(newY(movedV)) === zoneOf(pts[movedV].y)
+        ? s.direction
+        : dirBetween(newY(j), newY(j + 1));
+    return { direction: dir, beats };
+  });
+}
+
 interface EdgeDragInput {
   segments: Segment[];
   bpmTimeline: BpmTimeline;
