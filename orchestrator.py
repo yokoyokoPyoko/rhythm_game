@@ -1661,6 +1661,17 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
         log.info("[%s] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.", task.id)
     coder_commit = None
 
+    def has_coder_work() -> bool:
+        if coder_commit is not None:
+            return True
+        try:
+            _, diff_out, _ = run_cmd_pgid_stream(["git", "log", f"{head_hash}..HEAD", "--oneline"])
+            if diff_out.strip():
+                return True
+        except Exception:
+            pass
+        return False
+
     # Task-start cleanup (prevents cross-task test leakage): the dynamic test file is SHARED across
     # tasks (tests/dynamic.test.ts), so a leftover from a previous task (e.g. T127's test lingering
     # into T128) would otherwise be silently reused. For UI tasks, clear the shared test at start so
@@ -1786,10 +1797,11 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                     continue
 
         # Red verification: the test MUST FAIL before implementation exists (catch false-positives).
-        # Runs on BOTH freshly-QA-generated and reused/restored tests so need_coder is decided from
-        # actual evidence, not from whether a stale file happened to exist.
-        # --skip-red-check: bypass entire Red verification and go straight to Coder (emergency escape for false-positive loops)
-        if args and getattr(args, "skip_red_check", False):
+        # However, if Coder is already scheduled to run (e.g. retrying after Gate A or Gate B failure),
+        # skip Red verification and proceed directly to Coder implementation.
+        if need_coder:
+            log.info("[%s] Proceeding directly to Coder implementation (skipping Red check for Coder retry).", task.id)
+        elif args and getattr(args, "skip_red_check", False):
             log.warning("[%s] --skip-red-check: Skipping Red verification, proceeding directly to Coder (Green).", task.id)
             need_coder = True
         else:
@@ -1837,63 +1849,70 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                 maybe_reset_cycle()
                 continue
             if red_passed:
-                log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
-                # Check if existing code builds cleanly (Gate A)
-                ga_result = check_gate_a()
-                if ga_result.ok:
-                    # Run strict Zero-Coder Gate C review (video for playwright, git diff code review for vitest)
-                    if tr == "vitest":
-                        gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
-                    else:
-                        gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
-                    if gc_audit.ok:
-                        log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
-                        golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
-                        try:
-                            import shutil
-                            shutil.copy(test_file, golden_file)
-                            if state and task.id in state.get("tasks", {}):
-                                state["tasks"][task.id]["gate_b_golden"] = True
-                        except Exception:
-                            pass
-                        git_checkpoint(f"feat({task.id}): complete (already implemented)")
-                        deploy_to_github_pages(task.id)
-                        st["status"] = "passed"
-                        st["finished"] = time.time()
-                        state["consecutive_no_action"] = 0
-                        save_state(state)
-                        ctx = load_task_context(task.id)
-                        ctx["status"] = "passed"
-                        save_task_context(task.id, ctx)
-                        print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (Already Implemented, duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
-                        return "passed"
-                    else:
-                        log.error("[%s] Gate C Audit rejected Zero-Coder pass (confirmed FALSE-POSITIVE): %s", task.id, gc_audit.detail)
+                # If Coder has already modified code for this task, the test passing means the fix/refinement is GREEN!
+                # It is NOT a false-positive; it should proceed to Gate B/C verification.
+                if has_coder_work():
+                    log.info("[%s] %sQA test passed on existing Coder implementation! Proceeding directly to Gate B/C verification.%s", task.id, GREEN, RESET)
+                    need_coder = False
                 else:
-                    log.error("[%s] Existing code fails Gate A (tsc). Cannot be Already Implemented.", task.id)
+                    log.warning("[%s] Gate B Red check: all tests passed on existing code. Auditing if ALREADY IMPLEMENTED via Gate C...", task.id)
+                    # Check if existing code builds cleanly (Gate A)
+                    ga_result = check_gate_a()
+                    if ga_result.ok:
+                        # Run strict Zero-Coder Gate C review (video for playwright, git diff code review for vitest)
+                        if tr == "vitest":
+                            gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
+                        else:
+                            gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
+                        if gc_audit.ok:
+                            log.info("[%s] ★★★ Task is ALREADY IMPLEMENTED and verified by Gate C! (Skipping Coder to prevent code degradation)", task.id)
+                            golden_file = ROOT / "tests" / (f".gateb_{task.id}.test.ts" if tr == "vitest" else f".gateb_{task.id}.spec.ts")
+                            try:
+                                import shutil
+                                shutil.copy(test_file, golden_file)
+                                if state and task.id in state.get("tasks", {}):
+                                    state["tasks"][task.id]["gate_b_golden"] = True
+                            except Exception:
+                                pass
+                            git_checkpoint(f"feat({task.id}): complete (already implemented)")
+                            deploy_to_github_pages(task.id)
+                            st["status"] = "passed"
+                            st["finished"] = time.time()
+                            state["consecutive_no_action"] = 0
+                            save_state(state)
+                            ctx = load_task_context(task.id)
+                            ctx["status"] = "passed"
+                            save_task_context(task.id, ctx)
+                            print(f"{GREEN}{BOLD}>>> [{task.id}] ALL GATES PASSED (Already Implemented, duration: {st['finished'] - st['started']:.1f}s){RESET}\n")
+                            return "passed"
+                        else:
+                            log.error("[%s] Gate C Audit rejected Zero-Coder pass (confirmed FALSE-POSITIVE): %s", task.id, gc_audit.detail)
+                    else:
+                        log.error("[%s] Existing code fails Gate A (tsc). Cannot be Already Implemented.", task.id)
 
-                log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
-                passed_lines = [l.strip() for l in red_out.splitlines() if "passed" in l or "✓" in l or "›" in l]
-                sample_passed = "\n".join(passed_lines[:6]) if passed_lines else red_out[-400:]
-                pm_detail = (
-                    f"QA test is a FALSE-POSITIVE (all tests passed on UNIMPLEMENTED code):\n{sample_passed}\n"
-                    "The assertions were too weak (e.g. only verified initial DOM/state or default values), "
-                    "OR the test file is a leftover from a different task and does not actually test THIS task. "
-                    "Rewrite strict 3-step state-transition assertions ([Capture Before] -> [Perform Action] -> [Assert Changed Outcome]) "
-                    "that GUARANTEE failure on unimplemented features."
-                )
-                generate_postmortem(task, pm_detail, models.postmortem, state=state, fresh_sessions=fresh_sessions)
-                need_test = True
-                need_coder = False
-                mark_stage(0)
-                maybe_reset_cycle()
-                continue
-            log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
-            # Red → Green handoff: Genuine Red confirmed (test FAILS for the right reason).
-            # Now the Coder must run to implement the feature BEFORE Gate B (Green) executes —
-            # otherwise Gate B runs against unimplemented code, fails spuriously, and wastes a
-            # full cycle + postmortem. (Fixes skipped-Coder bug.)
-            need_coder = True
+                    log.error("[%s] Gate B Red check FAILED: test passed WITHOUT any implementation (false-positive). Rejecting QA test.", task.id)
+                    passed_lines = [l.strip() for l in red_out.splitlines() if "passed" in l or "✓" in l or "›" in l]
+                    sample_passed = "\n".join(passed_lines[:6]) if passed_lines else red_out[-400:]
+                    pm_detail = (
+                        f"QA test is a FALSE-POSITIVE (all tests passed on UNIMPLEMENTED code):\n{sample_passed}\n"
+                        "The assertions were too weak (e.g. only verified initial DOM/state or default values), "
+                        "OR the test file is a leftover from a different task and does not actually test THIS task. "
+                        "Rewrite strict 3-step state-transition assertions ([Capture Before] -> [Perform Action] -> [Assert Changed Outcome]) "
+                        "that GUARANTEE failure on unimplemented features."
+                    )
+                    generate_postmortem(task, pm_detail, models.postmortem, state=state, fresh_sessions=fresh_sessions)
+                    need_test = True
+                    need_coder = False
+                    mark_stage(0)
+                    maybe_reset_cycle()
+                    continue
+            else:
+                log.info("[%s] Gate B Red check OK: test fails as expected (pre-implementation).", task.id)
+                # Red → Green handoff: Genuine Red confirmed (test FAILS for the right reason).
+                # Now the Coder must run to implement the feature BEFORE Gate B (Green) executes —
+                # otherwise Gate B runs against unimplemented code, fails spuriously, and wastes a
+                # full cycle + postmortem. (Fixes skipped-Coder bug.)
+                need_coder = True
 
         # --- TDD Phase 2: Coder implements to make the test Green (+ Gate A) ---
         if need_coder:
