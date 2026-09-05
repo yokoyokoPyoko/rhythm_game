@@ -1,10 +1,10 @@
 {
   "started_at": 1787099390.9580224,
   "models": {
-    "coder": "opencode/big-pickle",
-    "qa": "opencode/muse-spark-1.2-contributor-free",
+    "coder": "google/gemini-3.5-flash-lite",
+    "qa": "google/gemini-3.5-flash-lite",
     "reviewer": "google/gemini-3.5-flash-lite",
-    "postmortem": "opencode/muse-spark-1.2-contributor-free"
+    "postmortem": "opencode/nemotron-3-ultra-free"
   },
   "tasks": {
     "T00": {
@@ -1135,7 +1135,7 @@
     },
     "T159": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788593896.2908375,
       "cycles": 1,
       "sessions": {
@@ -1146,7 +1146,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788594221.1905859
+      "last_postmortem_at": 1788594221.1905859,
+      "finished": 1788594629.6261444
+    },
+    "T160": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788605793.7994885
     }
   },
   "consecutive_no_action": 0
