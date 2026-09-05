@@ -1,9 +1,13 @@
 import type { HitResult } from '../types';
 
-const PERFECT_SCORE = 300;
-const GOOD_SCORE = 100;
+const PERFECT_SCORE = 100;
+const GOOD_SCORE = 30;
 const TRACE_INTERVAL = 0.15;
-const TRACE_BASE_SCORE = 8;
+const TRACE_BASE_SCORE = 2;
+const TRACE_BONUS_STEP_BEATS = 16;
+const TRACE_BONUS_STEP = 2;
+const OFF_BEAT_RESET = 3;
+const OFF_BEAT_EPS = 1e-9;
 
 export interface ScoreStats {
   score: number;
@@ -24,6 +28,9 @@ export class ScoreManager {
   private good = 0;
   private miss = 0;
   private traceAccumulator = 0;
+  private comboBonus = 0;
+  private traceBeats = 0;
+  private offBeats = 0;
 
   recordHit(result: HitResult): void {
     switch (result) {
@@ -40,20 +47,38 @@ export class ScoreManager {
       case 'miss':
         this.miss++;
         this.combo = 0;
+        this.comboBonus = 0;
+        this.traceBeats = 0;
+        this.offBeats = 0;
+        this.traceAccumulator = 0;
         break;
     }
   }
 
-  recordTrace(dt: number, isOnWave: boolean): void {
+  recordTrace(dt: number, isOnWave: boolean, beatMs: number): void {
+    const beats = (dt * 1000) / beatMs;
     if (!isOnWave) {
       this.traceAccumulator = 0;
+      this.traceBeats = 0;
+      this.offBeats += beats;
+      if (this.offBeats >= OFF_BEAT_RESET - OFF_BEAT_EPS) {
+        this.combo = 0;
+        this.comboBonus = 0;
+        this.traceBeats = 0;
+        this.traceAccumulator = 0;
+      }
       return;
+    }
+    this.offBeats = 0;
+    this.traceBeats += beats;
+    while (this.traceBeats >= TRACE_BONUS_STEP_BEATS) {
+      this.traceBeats -= TRACE_BONUS_STEP_BEATS;
+      this.comboBonus += TRACE_BONUS_STEP;
     }
     this.traceAccumulator += dt;
     while (this.traceAccumulator >= TRACE_INTERVAL) {
       this.traceAccumulator -= TRACE_INTERVAL;
-      this.incrementCombo();
-      this.score += TRACE_BASE_SCORE + this.combo;
+      this.score += TRACE_BASE_SCORE + this.comboBonus;
     }
   }
 

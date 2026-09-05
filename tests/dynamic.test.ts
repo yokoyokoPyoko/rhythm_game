@@ -1,674 +1,581 @@
+/**
+ * @vitest-environment node
+ * T158 コンボ／ボーナス分離＋新得点（トレース・リング・コンボ切れの再定義） - Vitest node acceptance test
+ * RED phase: expects ScoreManager with PERFECT 100, GOOD 30, TRACE_BASE 2, comboBonus/traceBeats/offBeats, recordTrace(dt,isOnWave,beatMs)
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
-import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { quantizeBeat } from '../src/chart/quantize';
-import {
-  calculateVertexDrag,
-  calculateVertexMultiDrag,
-  calculateMultiDrag,
-  calculateEdgeDrag,
-} from '../src/game/editorDrag';
-import { Cursor } from '../src/game/cursor';
-import type { Segment, RingDef } from '../src/types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 vi.useFakeTimers();
 
-const CENTER = TW_CENTER_Y;
-const TOP = TW_CENTER_Y - TW_AMP;
-const BOTTOM = TW_CENTER_Y + TW_AMP;
+import { ScoreManager } from '../src/game/score';
 
-function isSnapAligned(beats: number, snap: number): boolean {
-  if (!(snap > 0)) return true;
-  const rem = ((beats % snap) + snap) % snap;
-  return rem < 1e-6 || Math.abs(rem - snap) < 1e-6;
+const BEAT_MS_120 = 500; // 120 BPM = 500ms per beat
+const BEAT_MS_180 = 333.333333;
+const TRACE_INTERVAL = 0.15;
+const EPS = 1e-6;
+
+function scoreFrom(manager: ScoreManager): number { return manager.getStats().score; }
+function comboFrom(manager: ScoreManager): number { return manager.getStats().combo; }
+function getBonus(manager: ScoreManager): number {
+  const anyM = manager as unknown as Record<string, unknown>;
+  if ('comboBonus' in anyM) return anyM['comboBonus'] as number;
+  if ('bonus' in anyM) return anyM['bonus'] as number;
+  if ('comboAdd' in anyM) return anyM['comboAdd'] as number;
+  // fallback: infer from score delta if not exposed – return NaN to force structural failure
+  return NaN;
+}
+function getTraceBeats(manager: ScoreManager): number | undefined {
+  const anyM = manager as unknown as Record<string, unknown>;
+  if ('traceBeats' in anyM) return anyM['traceBeats'] as number;
+  return undefined;
+}
+function getOffBeats(manager: ScoreManager): number | undefined {
+  const anyM = manager as unknown as Record<string, unknown>;
+  if ('offBeats' in anyM) return anyM['offBeats'] as number;
+  if ('offWaveBeats' in anyM) return anyM['offWaveBeats'] as number;
+  return undefined;
 }
 
-// T150 zone helpers (mirror editorDrag)
-const ZONE_MID_START = 256.7;
-const ZONE_MID_END = 343.3;
-function zoneOf(y: number): 0 | 1 | 2 {
-  return y < ZONE_MID_START ? 0 : y < ZONE_MID_END ? 1 : 2;
-}
-function snapY(y: number): number {
-  const z = zoneOf(y);
-  return z === 0 ? TOP : z === 1 ? CENTER : BOTTOM;
-}
+// ================================================================
+// 1. Source structure: constants and new fields
+// ================================================================
+describe('T158 source structure: score.ts constants and new fields', () => {
+  const srcPath = path.join(process.cwd(), 'src/game/score.ts');
+  const src = fs.readFileSync(srcPath, 'utf-8');
 
-describe('T156 右ドラッグ範囲選択・左ドラッグ移動（モード対応・左右上下）— Vitest node', () => {
-  beforeEach(() => {
-    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  it('PERFECT_SCORE must be 100 (300→100)', () => {
+    // [Step1] capture initial file content
+    expect(src.length).toBeGreaterThan(200);
+    // [Step2] check constant definition
+    const has100 = /PERFECT_SCORE\s*=\s*100\b/.test(src) || /PERFECT[^0-9]*100/.test(src);
+    expect(has100, 'PERFECT_SCORE should be 100, not 300. Found: ' + src.slice(src.indexOf('PERFECT'), src.indexOf('PERFECT')+80)).toBe(true);
+    // [Step3] ensure old value 300 is not used as PERFECT_SCORE
+    const oldPerfect = /PERFECT_SCORE\s*=\s*300/.test(src);
+    expect(oldPerfect, 'old PERFECT_SCORE=300 must be replaced with 100').toBe(false);
   });
-  afterEach(() => {
-    vi.clearAllTimers();
+
+  it('GOOD_SCORE must be 30 (100→30)', () => {
+    const has30 = /GOOD_SCORE\s*=\s*30\b/.test(src);
+    expect(has30, 'GOOD_SCORE should be 30').toBe(true);
+    const oldGood = /GOOD_SCORE\s*=\s*100\b/.test(src);
+    expect(oldGood, 'old GOOD_SCORE=100 must be replaced').toBe(false);
   });
 
-  // ------------------------------------------------------------------
-  // 0. Helpers: emulate rubber-band selection geometry (same as WavePreview)
-  // ------------------------------------------------------------------
-  function makeGeometry(viewStart: number, viewBeats: number, w: number, h: number, engine: WaveEngine) {
-    const RULER_H = 22;
-    const fieldH = h - RULER_H;
-    const centerY = RULER_H + fieldH / 2;
-    const maxAmp = (fieldH - 24) / 2;
-    const minAmpV = Math.max(8, 0.2 * h);
-    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmpV));
-    const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp;
-    const beatToX = (b: number) => ((b - viewStart) / viewBeats) * w;
-    return { RULER_H, fieldH, centerY, dispAmp, mapY, beatToX };
-  }
+  it('TRACE_BASE_SCORE must be 2 (8→2)', () => {
+    const has2 = /TRACE_BASE_SCORE\s*=\s*2\b/.test(src) || /TRACE_BASE[^=]*=\s*2\b/.test(src);
+    expect(has2, 'TRACE_BASE_SCORE should be 2').toBe(true);
+    const oldTrace8 = /TRACE_BASE_SCORE\s*=\s*8\b/.test(src);
+    expect(oldTrace8, 'old TRACE_BASE_SCORE=8 must be replaced').toBe(false);
+  });
 
-  function findVerticesInRect(
-    engine: WaveEngine,
-    viewStart: number,
-    viewBeats: number,
-    w: number,
-    h: number,
-    x0: number, y0: number, x1: number, y1: number,
-  ): number[] {
-    const { mapY, beatToX } = makeGeometry(viewStart, viewBeats, w, h, engine);
-    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
-    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
-    const pts = engine.getPoints();
-    const found: number[] = [];
-    for (let v = 0; v < pts.length; v++) {
-      const vx = beatToX(pts[v].beat);
-      const vy = mapY(pts[v].y);
-      if (vx >= minX - 14 && vx <= maxX + 14 && vy >= minY - 14 && vy <= maxY + 14) found.push(v);
-    }
-    return found;
-  }
+  it('must introduce new fields comboBonus / traceBeats / offBeats', () => {
+    expect(src, 'must declare comboBonus').toMatch(/comboBonus/);
+    expect(src, 'must declare traceBeats').toMatch(/traceBeats/);
+    expect(src, 'must declare offBeats').toMatch(/offBeats/);
+  });
 
-  function findEdgesInRect(
-    engine: WaveEngine,
-    segments: Segment[],
-    viewStart: number,
-    viewBeats: number,
-    w: number,
-    h: number,
-    x0: number, y0: number, x1: number, y1: number,
-  ): number[] {
-    const { mapY, beatToX } = makeGeometry(viewStart, viewBeats, w, h, engine);
-    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
-    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
-    const minBX = (minX / w) * viewBeats + viewStart;
-    const maxBX = (maxX / w) * viewBeats + viewStart;
-    const found: number[] = [];
-    const SAMPLE_STEP = 0.25;
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments.slice(0, i).reduce((acc, seg) => acc + seg.beats, 0);
-      const e = s + segments[i].beats;
-      if (e < minBX || s > maxBX) continue;
-      let hit = false;
-      for (let b = Math.max(s, minBX); b <= Math.min(e, maxBX) + 1e-9 && !hit; b += SAMPLE_STEP) {
-        const bx = beatToX(Math.min(b, e));
-        const by = mapY(engine.waveYAt(Math.min(b, e)));
-        if (bx >= minX - 16 && bx <= maxX + 16 && by >= minY - 16 && by <= maxY + 16) { hit = true; found.push(i); }
-      }
-    }
-    return found;
-  }
+  it('recordTrace signature must have third argument beatMs', () => {
+    expect(src, 'recordTrace must accept 3 args (dt, isOnWave, beatMs)').toMatch(/recordTrace\s*\(\s*dt[^,]*,\s*isOnWave[^,]*,\s*beatMs/);
+    // beat conversion must use dt*1000/beatMs
+    expect(src, 'must convert dt to beats via dt*1000/beatMs or dt/beatMs*1000').toMatch(/1000\s*\/\s*beatMs|beatMs.*1000|dt\s*\*\s*1000/);
+  });
 
-  function findRingsInRect(
-    rings: RingDef[],
-    viewStart: number,
-    viewBeats: number,
-    w: number,
-    x0: number, x1: number,
-  ): number[] {
-    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
-    const beatToX = (b: number) => ((b - viewStart) / viewBeats) * w;
-    const found: number[] = [];
-    rings.forEach((r, i) => {
-      const rx = beatToX(r.beat);
-      if (rx >= minX - 35 && rx <= maxX + 35) found.push(i);
-    });
-    return found;
-  }
-
-  // ------------------------------------------------------------------
-  // 1. Right-drag range selection: vertex / edge / ring mode-対応
-  // ------------------------------------------------------------------
-  describe('1. 右ドラッグ範囲選択 — モード対応（vertex/edge/ring）', () => {
-    const snap = 0.25;
-    const amp = 1.3;
-    const tl = new BpmTimeline(120, [], amp);
-    const segments: Segment[] = [
-      { direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }, { direction: 'up', beats: 2 },
+  it('GameScreen.tsx and CalibrationModal must pass beatMs as third arg', () => {
+    const gsPath = path.join(process.cwd(), 'src/screens/GameScreen.tsx');
+    const gsSrc = fs.readFileSync(gsPath, 'utf-8');
+    expect(gsSrc, 'GameScreen must call recordTrace with 3 args').toMatch(/recordTrace\s*\(.*currentBeatMs|recordTrace\s*\(.*beatMs/);
+    const calPathCandidates = [
+      path.join(process.cwd(), 'src/screens/editor/CalibrationModal.tsx'),
+      path.join(process.cwd(), 'src/screens/CalibrationScreen.tsx'),
+      path.join(process.cwd(), 'src/screens/editor/CalibrationOverlay.tsx'),
     ];
-    const engine = new WaveEngine(segments, tl, amp, 0);
-    const rings: RingDef[] = [{ beat: 1.0, type: 'single' }, { beat: 3.5, type: 'single' }, { beat: 5.2, type: 'single' }];
-    const w = 800, h = 400, viewStart = 0, viewBeats = 16;
+    const existingCal = calPathCandidates.find(p => fs.existsSync(p));
+    expect(existingCal, 'Calibration modal/overlay file must exist').toBeDefined();
+    const calSrc = fs.readFileSync(existingCal!, 'utf-8');
+    expect(calSrc, 'Calibration must call recordTrace with 3 args').toMatch(/recordTrace\s*\(.*currentBeatMs|recordTrace\s*\(.*beatMs/);
+  });
+});
 
-    it('vertex: 右ドラッグ矩形で複数頂点を選択できる', () => {
-      // [Step 1: Capture Initial] — zero selection
-      const initSel: number[] = [];
-      expect(initSel.length).toBe(0);
-      // [Step 2: Perform] — drag covering first 3 vertices (beats 0,2,4)
-      const { beatToX, mapY } = makeGeometry(viewStart, viewBeats, w, h, engine);
-      const pts = engine.getPoints();
-      // rectangle spanning beats [0,5] and full Y
-      const x0 = beatToX(pts[0].beat) - 5, x1 = beatToX(pts[2].beat) + 5;
-      const y0 = mapY(TOP) - 10, y1 = mapY(BOTTOM) + 10;
-      const found = findVerticesInRect(engine, viewStart, viewBeats, w, h, x0, y0, x1, y1);
-      // [Step 3: Assert]
-      expect(found.length).toBeGreaterThanOrEqual(3);
-      expect(found).toEqual(expect.arrayContaining([0, 1, 2]));
-      // movement flag >=4px: this drag is large, so it should be considered selection, not delete
-      const moved = Math.hypot(x1 - x0, y1 - y0);
-      expect(moved).toBeGreaterThanOrEqual(4);
-    });
+// ================================================================
+// 2. Hit scoring: PERFECT +100/+1 bonus unchanged, GOOD +30/+1, MISS resets both
+// ================================================================
+describe('T158 hit scoring: PERFECT/GOOD/MISS with combo and bonus separation', () => {
+  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+  afterEach(() => { vi.clearAllTimers(); });
 
-    it('edge: 右ドラッグ矩形で複数辺を選択できる（両端内包またはポリライン交差）', () => {
-      const initSel: number[] = [];
-      expect(initSel.length).toBe(0);
-      const { beatToX, mapY } = makeGeometry(viewStart, viewBeats, w, h, engine);
-      // rectangle covering edges 0-1 (beats 0..4)
-      const x0 = beatToX(0.2), x1 = beatToX(3.8);
-      const y0 = mapY(TOP) - 20, y1 = mapY(BOTTOM) + 20;
-      const found = findEdgesInRect(engine, segments, viewStart, viewBeats, w, h, x0, y0, x1, y1);
-      expect(found.length).toBeGreaterThanOrEqual(2);
-      expect(found).toContain(0);
-      expect(found).toContain(1);
-    });
-
-    it('ring: 右ドラッグ矩形でリング集合を選択（beat範囲内、Yはフィルタのみ）', () => {
-      const initSel: number[] = [];
-      expect(initSel.length).toBe(0);
-      const beatToX = (b: number) => ((b - viewStart) / viewBeats) * w;
-      // rectangle covering beats [0.5,4.0] should hit rings at 1.0 and 3.5
-      // Y range is deliberately narrow to prove Y is ignored for rings
-      const x0 = beatToX(0.5), x1 = beatToX(4.0);
-      const found = findRingsInRect(rings, viewStart, viewBeats, w, x0, x1);
-      expect(found).toEqual(expect.arrayContaining([0, 1]));
-      expect(found).not.toContain(2);
-      // Y filtering must not affect ring selection: same beat with different Y still selected
-      // (rings share same beat proximity regardless of waveYAt)
-      const narrowYFound = findRingsInRect(rings, viewStart, viewBeats, w, x0, x1);
-      expect(narrowYFound).toEqual(found);
-    });
+  it('PERFECT: score+100, combo+1, bonus unchanged (3-step)', () => {
+    // [Step1] capture initial state: fresh manager with no bonus
+    const m = new ScoreManager();
+    // accrue bonus artificially via 16 beats trace so we can test invariance
+    const beatMs = BEAT_MS_120;
+    // generate bonus 2 by tracing 16 beats
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 54*0.3=16.2 beats -> bonus 2
+    const bonusBefore = getBonus(m);
+    expect(bonusBefore, 'bonus should be 2 after 16 beats').toBe(2);
+    const scoreBefore = scoreFrom(m);
+    const comboBefore = comboFrom(m);
+    expect(comboBefore).toBe(0); // trace must not affect combo
+    // [Step2] perform PERFECT hit
+    m.recordHit('perfect');
+    // [Step3] assert transition
+    const afterScore = scoreFrom(m);
+    const afterCombo = comboFrom(m);
+    const afterBonus = getBonus(m);
+    expect(afterScore - scoreBefore).toBe(100);
+    expect(afterCombo).toBe(comboBefore + 1);
+    expect(afterBonus).toBe(bonusBefore);
+    //perfect count
+    expect(m.getStats().perfect).toBe(1);
   });
 
-  // ------------------------------------------------------------------
-  // 2. Right single-click (<4px) は削除のみで選択が残らない
-  // ------------------------------------------------------------------
-  describe('2. 右単発クリック (<4px) は削除デリゲート、選択を残さない', () => {
-    it('移動<4pxなら削除パス、>=4pxなら選択パスとして分岐', () => {
-      // [Step 1] initial: no selection, simulate two mouse sequences
-      const threshold = 4;
-      // [Step 2] small move: 2px diagonal (<4)
-      const smallMoved = Math.hypot(1.5, 1.5); // ~2.12
-      expect(smallMoved).toBeLessThan(threshold);
-      const shouldDelegateToDeleteSmall = smallMoved < threshold;
-      // [Step 3] large move
-      const largeMoved = Math.hypot(10, 10); // ~14.14
-      expect(largeMoved).toBeGreaterThanOrEqual(threshold);
-      const shouldSelectLarge = largeMoved >= threshold;
-      expect(shouldDelegateToDeleteSmall).toBe(true);
-      expect(shouldSelectLarge).toBe(true);
-      // verify that after a <4px right click, selection array stays empty (delete handled elsewhere)
-      const selectedAfterSmall: number[] = [];
-      expect(selectedAfterSmall.length).toBe(0);
-      // after >=4px drag, selection should populate
-      const selectedAfterLarge = [0, 1];
-      expect(selectedAfterLarge.length).toBeGreaterThan(0);
-    });
-
-    it('onContextMenu suppressed after rubber drag (>=4px) so delete does not double-fire', () => {
-      // Simulate flag rubberDraggedRef.current
-      let rubberDragged = false;
-      const moved = 10;
-      if (moved >= 4) rubberDragged = true;
-      expect(rubberDragged).toBe(true);
-      // handleContextMenu should early-return when rubberDragged
-      const shouldDeleteInContextMenu = !rubberDragged;
-      expect(shouldDeleteInContextMenu).toBe(false);
-      // For small click, not dragged, delete allowed
-      rubberDragged = false;
-      expect(!rubberDragged).toBe(true);
-    });
+  it('GOOD: score+30, combo+1, bonus unchanged (3-step)', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    const bonusBefore = getBonus(m);
+    expect(bonusBefore).toBe(2);
+    const scoreBefore = scoreFrom(m);
+    const comboBefore = comboFrom(m);
+    // [Step2] GOOD hit
+    m.recordHit('good');
+    // [Step3]
+    expect(scoreFrom(m) - scoreBefore).toBe(30);
+    expect(comboFrom(m)).toBe(comboBefore + 1);
+    expect(getBonus(m)).toBe(bonusBefore);
+    expect(m.getStats().good).toBe(1);
   });
 
-  // ------------------------------------------------------------------
-  // 3. 左ドラッグ移動 — プレビューのみ → mouseupで1回コミット
-  // ------------------------------------------------------------------
-  describe('3. 左ドラッグ移動はプレビューのみ、mouseupで1回コミット（履歴整合）', () => {
-    const snap = 0.25;
-    const amp = 1.3;
-    const tl = new BpmTimeline(120, [], amp);
-    const baseSegs: Segment[] = [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }];
-
-    it('vertex集合の移動: mousemoveはpreviewのみ、onSegmentsChangeはmouseupで1回', () => {
-      // [Step 1] capture initial
-      const initSegs = baseSegs.map(s => ({ ...s }));
-      const engine0 = new WaveEngine(initSegs, tl, amp, 0);
-      const pts0 = engine0.getPoints();
-      const selVertices = [1, 2];
-      expect(initSegs).toEqual(baseSegs);
-      // [Step 2] preview iterations (multiple mousemove with same dx should not mutate initSegs)
-      let previewCalls = 0;
-      let commitCalls = 0;
-      let committed: Segment[] | null = null;
-      const dxRaw = 0.37;
-      const dx = quantizeBeat(dxRaw, snap);
-      // simulate 3 mousemove previews using same dx (from original, not accumulated)
-      for (let i = 0; i < 3; i++) {
-        const preview = calculateVertexMultiDrag({ segments: initSegs, bpmTimeline: tl, startPosition: 0, vertexIndices: selVertices, dxBeat: dx, dy: 0, snap });
-        previewCalls++;
-        expect(preview).not.toBeNull();
-        // preview should be derived from initSegs, not from previous preview
-        // so repeated calls yield identical result
-        if (i > 0) {
-          const prevPreview = calculateVertexMultiDrag({ segments: initSegs, bpmTimeline: tl, startPosition: 0, vertexIndices: selVertices, dxBeat: dx, dy: 0, snap });
-          expect(preview).toEqual(prevPreview);
-        }
-      }
-      // [Step 3] mouseup commit exactly once
-      const finalPreview = calculateVertexMultiDrag({ segments: initSegs, bpmTimeline: tl, startPosition: 0, vertexIndices: selVertices, dxBeat: dx, dy: 0, snap });
-      committed = finalPreview;
-      commitCalls++;
-      expect(previewCalls).toBe(3);
-      expect(commitCalls).toBe(1);
-      expect(committed).not.toBeNull();
-      // initSegs must remain unchanged until commit
-      expect(initSegs).toEqual(baseSegs);
-      // committed beats are snap-aligned
-      for (const s of committed!) expect(isSnapAligned(s.beats, snap)).toBe(true);
-      // verify vertices moved by dx (clamped to boundary)
-      const pts1 = new WaveEngine(committed!, tl, amp, 0).getPoints();
-      // vertices 1,2 should have shifted, 0 remains anchored, 3 (last) may shift if moved
-      expect(pts1[1].beat).toBeGreaterThan(pts0[1].beat);
-    });
-
-    it('edge集合の平行移動: プレビューは同じorigLenを維持し、mouseupで1回のみcommit', () => {
-      const selSegIdxs = [1, 2];
-      const dx = quantizeBeat(0.37, snap);
-      // preview 2 times
-      const p1 = calculateMultiDrag({ segments: baseSegs, bpmTimeline: tl, startPosition: 0, selSegIdxs, dxBeat: dx, dy: 0, snap });
-      const p2 = calculateMultiDrag({ segments: baseSegs, bpmTimeline: tl, startPosition: 0, selSegIdxs, dxBeat: dx, dy: 0, snap });
-      expect(p1).toEqual(p2);
-      expect(p1).not.toBeNull();
-      // commit once
-      let commitCount = 0;
-      const committed = calculateMultiDrag({ segments: baseSegs, bpmTimeline: tl, startPosition: 0, selSegIdxs, dxBeat: dx, dy: 0, snap });
-      commitCount++;
-      expect(commitCount).toBe(1);
-      for (const s of committed!) expect(isSnapAligned(s.beats, snap)).toBe(true);
-    });
-
-    it('ring集合の移動: beat += quantize(dxBeat) のみ実効、Yは従属', () => {
-      const ringsInit: RingDef[] = [{ beat: 2.0 }, { beat: 4.5 }, { beat: 7.0 }];
-      const selected = [0, 1];
-      const dx = quantizeBeat(1.23, snap); // off-grid 1.23 -> 1.25 with snap 0.25
-      // [Step 1] initial rings
-      expect(ringsInit[0].beat).toBe(2.0);
-      // [Step 2] preview offset
-      let previewOffset = dx;
-      expect(previewOffset).toBeCloseTo(quantizeBeat(1.23, snap), 6);
-      // [Step 3] commit: beats shifted quantized
-      const moves = selected.map(i => ({ index: i, beat: Math.max(0, quantizeBeat(ringsInit[i].beat + dx, snap)) }));
-      const after = ringsInit.map((r, idx) => {
-        const m = moves.find(mm => mm.index === idx);
-        return m ? { ...r, beat: m.beat } : r;
-      });
-      expect(after[0].beat).toBeCloseTo(quantizeBeat(2.0 + dx, snap), 6);
-      expect(after[1].beat).toBeCloseTo(quantizeBeat(4.5 + dx, snap), 6);
-      expect(after[2].beat).toBe(7.0); // not selected, unchanged
-      for (const r of after) expect(isSnapAligned(r.beat, snap)).toBe(true);
-    });
+  it('MISS: score+0, combo→0 and bonus→0 (3-step)', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(2);
+    m.recordHit('perfect'); // combo 1
+    m.recordHit('good'); // combo 2
+    const scoreBeforeMiss = scoreFrom(m);
+    const comboBeforeMiss = comboFrom(m);
+    expect(comboBeforeMiss).toBe(2);
+    // [Step2] miss
+    m.recordHit('miss');
+    // [Step3]
+    expect(scoreFrom(m)).toBe(scoreBeforeMiss); // no score
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+    expect(m.getStats().miss).toBe(1);
   });
 
-  // ------------------------------------------------------------------
-  // 4. Vertex集合への (dxBeat, 吸着Y) 移動 — Yは3等分吸着、X優先
-  // ------------------------------------------------------------------
-  describe('4. Vertex集合 (dxBeat, 吸着Y) — 3等分ゾーン・X優先・snap整数倍', () => {
-    const snaps = [0.125, 0.25, 0.5, 1] as const;
-    const amps = [0.7, 1.3, 2.7, 3.4] as const;
-    const offGridDxs = [0.37, 1.23] as const;
+  it('fresh manager PERFECT adds exactly 100 (old 300 must fail)', () => {
+    const m = new ScoreManager();
+    const before = scoreFrom(m);
+    m.recordHit('perfect');
+    expect(scoreFrom(m) - before).toBe(100);
+  });
 
-    for (const amp of amps) {
-      for (const snap of snaps) {
-        for (const dxRaw of offGridDxs) {
-          it(`amp=${amp} snap=${snap} dxRaw=${dxRaw}: 頂点集合{1,2}水平移動で全beatsがsnap整数倍`, () => {
-            const tl = new BpmTimeline(120, [], amp);
-            const segs: Segment[] = [
-              { direction: 'down', beats: quantizeBeat(1.5, snap) || 1 },
-              { direction: 'up', beats: quantizeBeat(1.5, snap) || 1 },
-              { direction: 'down', beats: quantizeBeat(1.5, snap) || 1 },
-              { direction: 'up', beats: quantizeBeat(1.5, snap) || 1 },
-            ];
-            const offGridDy = 0; // horizontal only for this case
-            // [Step 1] initial
-            const engine0 = new WaveEngine(segs, tl, amp, 0);
-            const pts0 = engine0.getPoints();
-            const dx = quantizeBeat(dxRaw, snap);
-            const vertexIndices = [1, 2];
-            // clamp dx to keep boundaries >= snap
-            const preview = calculateVertexMultiDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, vertexIndices, dxBeat: dx, dy: offGridDy, snap });
-            if (!preview) return; // clamped to null when no room, skip
-            // [Step 2->3] assert snap alignment and length invariant
-            for (const s of preview) expect(isSnapAligned(s.beats, snap)).toBe(true);
-            expect(preview.length).toBe(segs.length);
-            const pts1 = new WaveEngine(preview, tl, amp, 0).getPoints();
-            expect(pts1.length).toBe(pts0.length);
-          });
-        }
-      }
+  it('fresh manager GOOD adds exactly 30 (old 100 must fail)', () => {
+    const m = new ScoreManager();
+    const before = scoreFrom(m);
+    m.recordHit('good');
+    expect(scoreFrom(m) - before).toBe(30);
+  });
+
+  it('multiple PERFECT/GOOD accumulate correctly without affecting bonus', () => {
+    const m = new ScoreManager();
+    // [Step1] initial
+    expect(scoreFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+    // [Step2] sequence perfect, good, perfect
+    m.recordHit('perfect'); // +100
+    m.recordHit('good'); // +30
+    m.recordHit('perfect'); // +100
+    // [Step3] total 230, combo 3, bonus still 0
+    expect(scoreFrom(m)).toBe(230);
+    expect(comboFrom(m)).toBe(3);
+    expect(getBonus(m)).toBe(0);
+    expect(m.getStats().maxCombo).toBe(3);
+  });
+});
+
+// ================================================================
+// 3. Trace tick: score 2+bonus, combo unchanged
+// ================================================================
+describe('T158 trace tick: score 2+bonus, combo unchanged', () => {
+  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+  afterEach(() => { vi.clearAllTimers(); });
+
+  it('single tick adds 2 when bonus 0 and does not change combo', () => {
+    // [Step1] fresh, bonus 0
+    const m = new ScoreManager();
+    expect(getBonus(m)).toBe(0);
+    const scoreBefore = scoreFrom(m);
+    const comboBefore = comboFrom(m);
+    // [Step2] one tick
+    m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_120);
+    // [Step3] score +2, combo unchanged
+    expect(scoreFrom(m) - scoreBefore).toBe(2);
+    expect(comboFrom(m)).toBe(comboBefore);
+  });
+
+  it('tick with bonus 2 adds 4, combo still unchanged', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // [Step1] accumulate bonus to 2 via 16 beats
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(2);
+    const beforeScore = scoreFrom(m);
+    const beforeCombo = comboFrom(m);
+    // [Step2] next tick
+    m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    // [Step3] should be 2+2=4
+    expect(scoreFrom(m) - beforeScore).toBe(4);
+    expect(comboFrom(m)).toBe(beforeCombo);
+  });
+
+  it('accumulating dt smaller than TRACE_INTERVAL does not score until threshold', () => {
+    const m = new ScoreManager();
+    // [Step1] dt=0.07 twice
+    m.recordTrace(0.07, true, BEAT_MS_120);
+    expect(scoreFrom(m)).toBe(0);
+    expect(comboFrom(m)).toBe(0);
+    // [Step2] second 0.07 -> total 0.14 still <0.15
+    m.recordTrace(0.07, true, BEAT_MS_120);
+    expect(scoreFrom(m)).toBe(0);
+    // [Step3] third 0.07 -> total 0.21 crosses 0.15 once
+    m.recordTrace(0.07, true, BEAT_MS_120);
+    expect(scoreFrom(m)).toBe(2);
+    expect(comboFrom(m)).toBe(0); // combo must remain 0
+  });
+
+  it('old implementation increments combo on trace -> must fail (combo unchanged)', () => {
+    const m = new ScoreManager();
+    const beforeCombo = comboFrom(m);
+    m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_120);
+    // old code would have combo 1 here
+    expect(comboFrom(m), 'trace must NOT increment combo').toBe(beforeCombo);
+  });
+
+  it('trace tick score before bonus vs after bonus differs', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // first 53 ticks still bonus 0? Let's compute: 53*0.3=15.9 beats (<16) so bonus still 0
+    for (let i = 0; i < 53; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(0);
+    const sBefore = scoreFrom(m);
+    m.recordTrace(TRACE_INTERVAL, true, beatMs); // 54th tick crosses 16 beats -> bonus becomes 2, but this tick's score was with old bonus 0 or new?
+    // Need to determine order: traceTick score uses current bonus before increment? Spec says tick adds 2+bonus, and bonus increments separately after 16 beats.
+    // Implementation likely increments bonus after adding score for the tick that crosses threshold, or before next tick.
+    // We test that bonus becomes 2 and next tick uses 4.
+    expect(getBonus(m)).toBe(2);
+    // The crossing tick's score: could be 2 or 4 depending on order; we assert next tick is 4
+    const sAfterCross = scoreFrom(m);
+    const deltaCross = sAfterCross - sBefore;
+    expect([2,4].includes(deltaCross), 'crossing tick delta 2 or 4').toBe(true);
+    const nBefore = scoreFrom(m);
+    m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(scoreFrom(m) - nBefore).toBe(4);
+  });
+});
+
+// ================================================================
+// 4. Continuous trace 16 beats -> bonus +2 with remainder carry
+// ================================================================
+describe('T158 continuous trace 16 beats: bonus +2 with remainder carry, combo unchanged', () => {
+  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+  afterEach(() => { vi.clearAllTimers(); });
+
+  it('16 beats of on-wave tracing increments bonus by 2, combo unchanged', () => {
+    // [Step1] fresh
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    expect(getBonus(m)).toBe(0);
+    expect(comboFrom(m)).toBe(0);
+    // [Step2] simulate 16 beats via repeated TRACE_INTERVAL ticks (each 0.3 beats at 120 BPM)
+    // Need ceil to exceed 16: 54 ticks =16.2 beats
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    // [Step3] bonus +2, combo still 0
+    expect(getBonus(m)).toBe(2);
+    expect(comboFrom(m)).toBe(0);
+    // traceBeats remainder 0.2 should remain
+    const tb = getTraceBeats(m);
+    if (tb !== undefined) {
+      expect(tb).toBeCloseTo(0.2, 1);
     }
-
-    it('Y吸着: 中央ゾーン内トラジェクトリが CENTER (stay) に吸着される', () => {
-      // Simulate dragging vertex 1 with dy that lands inside middle zone
-      const snap = 0.25;
-      const amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs: Segment[] = [{ direction: 'down', beats: 1.5 }, { direction: 'up', beats: 1.0 }];
-      const engine0 = new WaveEngine(segs, tl, amp, 0);
-      const pt = engine0.getPoints()[1];
-      // targetY inside middle zone (256.7-343.3) should snap to CENTER
-      const targetMiddle = 300;
-      const result = calculateVertexDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, pointIndex: 1, targetBeat: pt.beat, targetY: targetMiddle, snap });
-      expect(result).not.toBeNull();
-      const candPts = new WaveEngine(result!, tl, amp, 0).getPoints();
-      // The moved vertex Y should be derived via zone snapping - direction stay case
-      // For a middle zone, the Y after move should be near CENTER projection
-      // At least the direction between neighbors should be consistent with zone
-      const zone = zoneOf(targetMiddle);
-      expect(zone).toBe(1);
-      expect(snapY(targetMiddle)).toBe(CENTER);
-      // beats remain snap aligned
-      for (const s of result!) expect(isSnapAligned(s.beats, snap)).toBe(true);
-      expect(candPts.length).toBe(engine0.getPoints().length);
-    });
-
-    it('単一頂点 {v} の水平移動で他点不変・後続シフトなし（T157 回帰）', () => {
-      const snap = 0.25, amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const initial: Segment[] = [
-        { direction: 'down', beats: 1.0 }, { direction: 'up', beats: 1.0 }, { direction: 'down', beats: 1.0 }, { direction: 'up', beats: 1.0 },
-      ];
-      const pts0 = new WaveEngine(initial, tl, amp, 0).getPoints();
-      const v = 2;
-      const dx = quantizeBeat(0.37, snap);
-      const result = calculateVertexMultiDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, vertexIndices: [v], dxBeat: dx, dy: 0, snap });
-      expect(result).not.toBeNull();
-      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
-      expect(Math.abs(pts1[v + 1].beat - pts0[v + 1].beat)).toBeLessThan(1e-6);
-      // trailing beyond v+1 unchanged
-      for (let i = v + 2; i < pts0.length; i++) expect(Math.abs(pts1[i].beat - pts0[i].beat)).toBeLessThan(1e-6);
-    });
   });
 
-  // ------------------------------------------------------------------
-  // 5. Edge集合の (dxBeat, dy) 平行移動 — 境界留め・snap量子化
-  // ------------------------------------------------------------------
-  describe('5. Edge集合 (dxBeat, dy) 平行移動 — 複数辺同時', () => {
-    const amps = [0.7, 1.3, 2.7] as const;
-    const snaps = [0.25, 0.5] as const;
-    for (const amp of amps) {
-      for (const snap of snaps) {
-        it(`amp=${amp} snap=${snap} off-grid 0.37/1.23: 複数辺が平行移動し内部セグメントは伸縮なし`, () => {
-          const tl = new BpmTimeline(120, [], amp);
-          const segs: Segment[] = [
-            { direction: 'down', beats: 1.0 }, { direction: 'up', beats: 1.0 }, { direction: 'down', beats: 1.0 }, { direction: 'up', beats: 1.0 },
-          ];
-          const selSegIdxs = [1, 2];
-          const dx = quantizeBeat(0.37, snap);
-          const dy = 0;
-          const res = calculateMultiDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, selSegIdxs, dxBeat: dx, dy, snap });
-          if (!res) return;
-          expect(res.length).toBe(segs.length);
-          for (const s of res) expect(isSnapAligned(s.beats, snap)).toBe(true);
-          // internal segment between moved edges (if both endpoints moved) stays bit-exact
-          const engine0 = new WaveEngine(segs, tl, amp, 0);
-          const engine1 = new WaveEngine(res, tl, amp, 0);
-          // The union of moved vertices for [1,2] includes {1,2,3}; so segment 2 is internal (both moved) -> beats unchanged
-          // segments[?] internal check via engine points
-          const pts0 = engine0.getPoints();
-          const pts1 = engine1.getPoints();
-          // moved vertices shift, unmoved do not
-          expect(pts1.length).toBe(pts0.length);
-        });
-      }
+  it('32 beats (two thresholds) bonus +4 with remainder', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    for (let i = 0; i < 107; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 107*0.3=32.1 beats
+    // [Step1] after 32.1 beats, two bonuses
+    expect(getBonus(m)).toBe(4);
+    expect(comboFrom(m)).toBe(0);
+    const tb = getTraceBeats(m);
+    if (tb !== undefined) expect(tb).toBeCloseTo(0.1, 1); // 32.1-32=0.1
+  });
+
+  it('fractional off-grid dt still correctly counts beats (off-grid principle)', () => {
+    // Use dt that is not multiple of TRACE_INTERVAL or snapshot
+    // e.g., dt=0.07 (0.14 beats at 120 BPM) and 0.11, etc.
+    const m = new ScoreManager();
+    const beatMs = 400; // 150 BPM -> 0.15s =0.375 beats
+    // [Step1] initial bonus 0
+    expect(getBonus(m)).toBe(0);
+    // [Step2] accumulate 16 beats via irregular dts
+    let totalBeats = 0;
+    while (totalBeats < 16.2) {
+      const dt = 0.07 + (totalBeats % 0.05); // varying off-grid
+      m.recordTrace(dt, true, beatMs);
+      totalBeats += dt * 1000 / beatMs;
     }
-
-    it('single edge parallel move preserves edge length (edgeBeats=origLen) and clamps at boundary', () => {
-      const snap = 0.25, amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs: Segment[] = [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 1 }, { direction: 'down', beats: 2 }];
-      const idx = 1;
-      const engine0 = new WaveEngine(segs, tl, amp, 0);
-      const pts0 = engine0.getPoints();
-      const startBeat = pts0[idx].beat, startY = pts0[idx].y;
-      const startPrevBeat = pts0[idx - 1].beat, startNextBeat = pts0[idx + 2]?.beat ?? pts0[pts0.length - 1].beat;
-      const res = calculateEdgeDrag({
-        segments: segs, bpmTimeline: tl, startPosition: 0,
-        edgeIndex: idx, startBeat, startY, startPrevBeat, startNextBeat,
-        dxBeat: quantizeBeat(0.37, snap), dy: 0, snap,
-      });
-      expect(res).not.toBeNull();
-      const afterEdgeBeats = res![idx].beats;
-      const origLen = quantizeBeat(pts0[idx + 1].beat - pts0[idx].beat, snap);
-      expect(isSnapAligned(afterEdgeBeats, snap)).toBe(true);
-      expect(isSnapAligned(origLen, snap)).toBe(true);
-      expect(afterEdgeBeats).toBeCloseTo(origLen, 6);
-    });
+    // [Step3] at least one bonus
+    expect(getBonus(m)).toBeGreaterThanOrEqual(2);
+    expect(comboFrom(m)).toBe(0);
   });
 
-  // ------------------------------------------------------------------
-  // 6. Bulk delete (Delete/Backspace) and Escape clear — 集合一括
-  // ------------------------------------------------------------------
-  describe('6. Bulk delete / Escape — 集合一括削除と選択解除', () => {
-    it('Delete: selectedRings一括削除後に配列長が減少し選択クリア', () => {
-      // [Step 1] initial rings + selection
-      const rings: RingDef[] = [{ beat: 1 }, { beat: 2 }, { beat: 3 }, { beat: 4 }];
-      let selectedRings = [0, 2];
-      let selectedRing: number | null = 0;
-      expect(rings.length).toBe(4);
-      expect(selectedRings.length).toBe(2);
-      // [Step 2] perform Delete (filter)
-      const after = rings.filter((_, i) => !selectedRings.includes(i));
-      selectedRings = [];
-      selectedRing = null;
-      // [Step 3] assert
-      expect(after.length).toBe(2);
-      expect(after).toEqual([{ beat: 2 }, { beat: 4 }]);
-      expect(selectedRings.length).toBe(0);
-      expect(selectedRing).toBeNull();
-    });
-
-    it('Delete: selectedSegments一括削除後に segments.length が減少', () => {
-      const segs: Segment[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }, { direction: 'down', beats: 1 }];
-      const selectedSegments = [0, 2];
-      const after = segs.filter((_, i) => !selectedSegments.includes(i));
-      expect(after.length).toBe(1);
-      expect(after[0].direction).toBe('up');
-    });
-
-    it('Escape: すべての選択集合をクリア（editable编集中は除外）', () => {
-      let selectedRings = [0, 1];
-      let selectedSegments = [1];
-      let selectedVertices = [1, 2];
-      let selectedRing: number | null = 0;
-      let selectedSegment: number | null = 1;
-      const editable = false;
-      if (!editable) {
-        selectedRings = [];
-        selectedRing = null;
-        selectedSegments = [];
-        selectedSegment = null;
-        selectedVertices = [];
-      }
-      expect(selectedRings.length).toBe(0);
-      expect(selectedSegments.length).toBe(0);
-      expect(selectedVertices.length).toBe(0);
-      expect(selectedRing).toBeNull();
-      expect(selectedSegment).toBeNull();
-      // editable true should NOT clear
-      selectedRings = [0, 1];
-      const editable2 = true;
-      if (editable2) {
-        // no op
-      } else {
-        selectedRings = [];
-      }
-      expect(selectedRings.length).toBe(2);
-    });
-
-    it('Delete during editable (INPUT/SELECT) is ignored', () => {
-      const tag = 'INPUT';
-      const editable = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
-      expect(editable).toBe(true);
-      const segs: Segment[] = [{ direction: 'down', beats: 1 }];
-      const selectedSegments = [0];
-      // handler would early-return when editable, so no deletion
-      let after = segs;
-      if (!editable) after = segs.filter((_, i) => !selectedSegments.includes(i));
-      expect(after.length).toBe(1);
-    });
+  it('off-wave resets traceBeats progress (short off <3 beats discards progress)', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // [Step1] accumulate 15 beats short of threshold (50 ticks =15 beats)
+    for (let i = 0; i < 50; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); //15 beats
+    expect(getBonus(m)).toBe(0);
+    // verify traceBeats ~15
+    const beforeOffBeats = getTraceBeats(m);
+    if (beforeOffBeats !== undefined) expect(beforeOffBeats).toBeCloseTo(15, 0);
+    // [Step2] go off-wave for 2 beats ( <3 ) -> should reset traceBeats but not bonus/combo
+    for (let i = 0; i < 7; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs); // 7*0.3=2.1 beats off
+    expect(getBonus(m)).toBe(0); // still 0, not reset (bonus was 0) but check combo
+    expect(comboFrom(m)).toBe(0);
+    const afterOffTrace = getTraceBeats(m);
+    if (afterOffTrace !== undefined) expect(afterOffTrace).toBe(0);
+    // [Step3] need fresh 16 beats to get bonus (not 1 beat)
+    for (let i = 0; i < 4; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // only 1.2 beats
+    expect(getBonus(m)).toBe(0); // should still be 0 because progress reset
+    // now fill full 16 beats
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(2);
   });
 
-  // ------------------------------------------------------------------
-  // 7. Undo/Redo — 波形＋リング両方
-  // ------------------------------------------------------------------
-  describe('7. Undo/Redo (Ctrl+Z / Ctrl+Shift+Z) — 波形＋リング', () => {
-    it('commit→undo→redo で history past/future が正しく遷移し、preview中はpushされない', () => {
-      // [Step 1] initial with history facade
-      const past: { segments: Segment[]; rings: RingDef[] }[] = [];
-      const future: { segments: Segment[]; rings: RingDef[] }[] = [];
-      let segments: Segment[] = [{ direction: 'down', beats: 1 }];
-      let rings: RingDef[] = [{ beat: 1 }];
-      const pushHistory = () => {
-        past.push({ segments: segments.map(s => ({ ...s })), rings: rings.map(r => ({ ...r })) });
-        if (past.length > 50) past.shift();
-        future.length = 0;
-      };
-      expect(past.length).toBe(0);
-      // [Step 2] commit (e.g. add segment) pushes history
-      pushHistory();
-      segments = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }];
-      expect(past.length).toBe(1);
-      // preview should NOT push
-      const previewCalls = 3;
-      for (let i = 0; i < previewCalls; i++) {
-        // no pushHistory
-      }
-      expect(past.length).toBe(1);
-      // [Step 3] undo restores
-      const undo = () => {
-        if (past.length === 0) return;
-        future.push({ segments: segments.map(s => ({ ...s })), rings: rings.map(r => ({ ...r })) });
-        const prev = past.pop()!;
-        segments = prev.segments;
-        rings = prev.rings;
-      };
-      undo();
-      expect(segments.length).toBe(1);
-      expect(future.length).toBe(1);
-      // redo
-      const redo = () => {
-        if (future.length === 0) return;
-        past.push({ segments: segments.map(s => ({ ...s })), rings: rings.map(r => ({ ...r })) });
-        const next = future.pop()!;
-        segments = next.segments;
-        rings = next.rings;
-      };
-      redo();
-      expect(segments.length).toBe(2);
-      expect(past.length).toBe(1);
-      expect(future.length).toBe(0);
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // 8. Off-grid + complex amp numeric consistency (WaveEngine ↔ Cursor)
-  // ------------------------------------------------------------------
-  describe('8. Off-grid数値整合 — WaveEngine dY クランプと Cursor速度が 2*TW_AMP*amp で一致', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4] as const;
-    const offGrid = [0.37, 1.23] as const;
-    for (const amp of amps) {
-      for (const ob of offGrid) {
-        it(`amp=${amp} off=${ob}: waveYAt clamped per-beat matches cursor`, () => {
-          const tl = new BpmTimeline(120, [], amp);
-          const segs: Segment[] = [{ direction: 'down', beats: 3 }];
-          const engine = new WaveEngine(segs, tl, amp, 0);
-          const perBeat = 2 * TW_AMP * amp;
-          const p0 = engine.getPoints()[0];
-          const rawY = p0.y + perBeat * ob;
-          const expectedY = Math.max(TOP, Math.min(BOTTOM, rawY));
-          const actualY = engine.waveYAt(ob);
-          expect(Math.abs(actualY - expectedY)).toBeLessThan(1e-6);
-          const beatMs = 500;
-          const cursor = new Cursor(amp, 0);
-          cursor.setAmplitude(amp);
-          const startY = cursor.y;
-          cursor.update(beatMs / 1000, false, true, beatMs);
-          const disp = cursor.y - startY;
-          const clampedDisp = Math.min(BOTTOM - startY, perBeat);
-          expect(Math.abs(disp - clampedDisp)).toBeLessThan(1e-3);
-        });
-      }
+  it('beatMs scaling: same dt at different BPM gives different beat thresholds', () => {
+    // [Step1] two managers, same dt sequence but different beatMs
+    const mSlow = new ScoreManager(); // beatMs 500 -> 0.3 beats per tick
+    const mFast = new ScoreManager(); // beatMs 250 -> 0.6 beats per tick
+    const beatSlow = 500;
+    const beatFast = 250;
+    // 30 ticks: slow 9 beats, fast 18 beats
+    for (let i = 0; i < 30; i++) {
+      mSlow.recordTrace(TRACE_INTERVAL, true, beatSlow);
+      mFast.recordTrace(TRACE_INTERVAL, true, beatFast);
     }
+    // [Step3] fast should have crossed 16 beats (bonus 2), slow not yet
+    expect(getBonus(mSlow)).toBe(0);
+    expect(getBonus(mFast)).toBe(2);
+    // both combos unchanged
+    expect(comboFrom(mSlow)).toBe(0);
+    expect(comboFrom(mFast)).toBe(0);
+  });
+});
 
-    it('全segments beatsが snap整数倍、getPoints().length===segments.length+1 を維持（T127/T128不変）', () => {
-      const snap = 0.25, amp = 2.7;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs: Segment[] = [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 1 } ];
-      const dx = quantizeBeat(0.37, snap);
-      const res = calculateVertexMultiDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, vertexIndices: [1], dxBeat: dx, dy: 0, snap });
-      expect(res).not.toBeNull();
-      for (const s of res!) expect(isSnapAligned(s.beats, snap)).toBe(true);
-      expect(new WaveEngine(res!, tl, amp, 0).getPoints().length).toBe(res!.length + 1);
-    });
+// ================================================================
+// 5. Off-wave 3 beats continuous resets combo+bonus; <3 beats no reset
+// ================================================================
+describe('T158 off-wave 3 beats continuous resets combo and bonus', () => {
+  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+  afterEach(() => { vi.clearAllTimers(); });
+
+  it('off-wave <3 beats does NOT reset combo/bonus', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // [Step1] build combo via hits and bonus via trace
+    m.recordHit('perfect'); // combo 1
+    m.recordHit('perfect'); // combo 2
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2
+    expect(comboFrom(m)).toBe(2);
+    expect(getBonus(m)).toBe(2);
+    // [Step2] off for 2.4 beats (8 ticks *0.3=2.4)
+    for (let i = 0; i < 8; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
+    // [Step3] still unchanged (threshold 3 not reached)
+    expect(comboFrom(m)).toBe(2);
+    expect(getBonus(m)).toBe(2);
   });
 
-  // ------------------------------------------------------------------
-  // 9. Regression: T116 V/E/R分離, T141/T142 dblClick/ctxMenu, T146 classes, T150 preview, T155 history
-  // ------------------------------------------------------------------
-  describe('9. Regression guards', () => {
-    it('Single right-click delete threshold vs rubber selection at exactly 4px boundary', () => {
-      expect(Math.hypot(4, 0)).toBeGreaterThanOrEqual(4);
-      expect(Math.hypot(3.9, 0)).toBeLessThan(4);
-    });
+  it('off-wave 3 beats exactly resets combo and bonus to 0', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    m.recordHit('perfect'); // combo 1
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2, combo still 1
+    expect(comboFrom(m)).toBe(1);
+    expect(getBonus(m)).toBe(2);
+    // [Step1] capture before
+    const scoreBefore = scoreFrom(m);
+    // [Step2] off for 3 beats = 10 ticks (10*0.3=3.0)
+    for (let i = 0; i < 10; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
+    // [Step3] both reset
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+    expect(scoreFrom(m)).toBe(scoreBefore); // off-wave no score increase
+  });
 
-    it('連続previewが元セグメントを汚染しない（origLen維持）', () => {
-      const snap = 0.25, amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs: Segment[] = [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }];
-      const orig = segs.map(s => ({ ...s }));
-      // call preview 5 times with varying dx, each from original
-      for (const dxRaw of [0.37, 1.23, 0.63]) {
-        const dx = quantizeBeat(dxRaw, snap);
-        calculateVertexMultiDrag({ segments: orig, bpmTimeline: tl, startPosition: 0, vertexIndices: [1], dxBeat: dx, dy: 0, snap });
-        expect(orig).toEqual(segs);
-      }
-    });
+  it('off-wave >3 beats also resets and stays 0', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    m.recordHit('perfect');
+    m.recordHit('good');
+    expect(comboFrom(m)).toBe(2);
+    expect(getBonus(m)).toBe(2);
+    for (let i = 0; i < 20; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs); // 6 beats
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+  });
 
-    it('vertex 0 anchored — moved set never includes 0 even if selected', () => {
-      const snap = 0.25, amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs: Segment[] = [{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }];
-      const res = calculateVertexMultiDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, vertexIndices: [0, 1], dxBeat: quantizeBeat(0.37, snap), dy: 0, snap });
-      // vertex 0 should be ignored, only vertex 1 moves
-      expect(res).not.toBeNull();
-      const pts0 = new WaveEngine(segs, tl, amp, 0).getPoints();
-      const pts1 = new WaveEngine(res!, tl, amp, 0).getPoints();
-      expect(pts1[0].beat).toBe(pts0[0].beat);
-      expect(pts1[1].beat).not.toBe(pts0[1].beat);
-    });
+  it('off-wave interrupted (<3) then back on-wave resets offBeats counter', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    m.recordHit('perfect'); // combo 1
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2
+    // [Step1] off 2 beats
+    for (let i = 0; i < 7; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs); // 2.1 beats
+    expect(comboFrom(m)).toBe(1);
+    // [Step2] back on-wave for one tick -> offBeats should reset to 0
+    m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(comboFrom(m)).toBe(1);
+    expect(getBonus(m)).toBe(2);
+    // [Step3] off again 2.1 beats should still not reset (since counter restarted)
+    for (let i = 0; i < 7; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
+    expect(comboFrom(m)).toBe(1);
+    expect(getBonus(m)).toBe(2);
+    // now off 3 beats continuous -> reset
+    for (let i = 0; i < 10; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+  });
 
-    it('empty drag <4px: single vertex {self} only case leaves later points unchanged (4px guard)', () => {
-      const snap = 0.25, amp = 1.3;
-      const tl = new BpmTimeline(120, [], amp);
-      const segs: Segment[] = [{ direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }];
-      // simulate empty creation drag: would be rejected via distance check in UI; engine still valid but caller would not commit
-      // verify the engine math for a tiny dx still snap-aligned
-      const dx = quantizeBeat(0.05, snap); // ~0.0 after quantize
-      const res = calculateVertexMultiDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, vertexIndices: [1], dxBeat: dx, dy: 0, snap });
-      // dx quantized to 0 => no move, returns either null or original-equivalent
-      if (res) {
-        for (const s of res) expect(isSnapAligned(s.beats, snap)).toBe(true);
-      } else {
-        expect(res).toBeNull();
-      }
-    });
+  it('off-wave via irregular dt (off-grid 0.37/1.23 style) still thresholds at 3 beats', () => {
+    const m = new ScoreManager();
+    const beatMs = 400; // 150 BPM
+    m.recordHit('perfect');
+    for (let i = 0; i < 50; i++) m.recordTrace(0.15, true, beatMs);
+    expect(comboFrom(m)).toBe(1);
+    const bonusMid = getBonus(m);
+    // off with dt 0.07 and 0.11 alternating -> 0.07*1000/400=0.175 beats, 0.11=0.275 etc
+    let offBeats = 0;
+    let ticks = 0;
+    while (offBeats < 2.8) {
+      const dt = ticks % 2 === 0 ? 0.07 : 0.11;
+      const beforeCombo = comboFrom(m);
+      m.recordTrace(dt, false, beatMs);
+      offBeats += dt * 1000 / beatMs;
+      expect(comboFrom(m)).toBe(beforeCombo); // not yet reset
+      ticks++;
+    }
+    // push over threshold
+    let extra = 0;
+    while (extra < 0.5) {
+      const dt = 0.15;
+      m.recordTrace(dt, false, beatMs);
+      extra += dt * 1000 / beatMs;
+    }
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+    void bonusMid;
+  });
+});
+
+// ================================================================
+// 6. Integration: trace and hit interleaving, bonus carry, miss resets
+// ================================================================
+describe('T158 integration: trace/hit interleaving and bonus persistence', () => {
+  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+  afterEach(() => { vi.clearAllTimers(); });
+
+  it('combo increases only on hits, not on trace; bonus only on trace, not on hits', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // [Step1] initial
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+    // [Step2] 10 trace ticks -> combo 0, bonus 0 (9 beats not enough)
+    for (let i = 0; i < 30; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 9 beats
+    expect(comboFrom(m)).toBe(0);
+    expect(getBonus(m)).toBe(0);
+    const scoreAfterTrace = scoreFrom(m);
+    expect(scoreAfterTrace).toBe(30 * 2); // 60
+    // hit perfect -> combo 1, bonus still 0, score +100
+    m.recordHit('perfect');
+    expect(comboFrom(m)).toBe(1);
+    expect(getBonus(m)).toBe(0);
+    expect(scoreFrom(m)).toBe(scoreAfterTrace + 100);
+    // more trace to reach 16 beats total -> need 7 more beats -> 24 ticks (7.2 beats) total 16.2
+    for (let i = 0; i < 24; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(2);
+    expect(comboFrom(m)).toBe(1); // still 1
+    // good hit -> combo 2, bonus unchanged 2
+    const beforeGoodScore = scoreFrom(m);
+    m.recordHit('good');
+    expect(comboFrom(m)).toBe(2);
+    expect(getBonus(m)).toBe(2);
+    expect(scoreFrom(m) - beforeGoodScore).toBe(30);
+  });
+
+  it('miss resets both combo and bonus regardless of prior trace progress', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2
+    m.recordHit('perfect'); // combo1
+    m.recordHit('perfect'); // combo2
+    expect(getBonus(m)).toBe(2);
+    expect(comboFrom(m)).toBe(2);
+    // [Step2] miss
+    m.recordHit('miss');
+    // [Step3] both 0
+    expect(getBonus(m)).toBe(0);
+    expect(comboFrom(m)).toBe(0);
+    // traceBeats should also be reset? at least bonus reset, and off not needed
+    // further trace needs full 16 beats again
+    for (let i = 0; i < 30; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 9 beats
+    expect(getBonus(m)).toBe(0);
+  });
+
+  it('after reset, bonus accumulation restarts from 0 with remainder carry again', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // first bonus
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(2);
+    // reset via off-wave 3 beats
+    for (let i = 0; i < 10; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
+    expect(getBonus(m)).toBe(0);
+    // second accrual: again 54 ticks -> bonus 2 again
+    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(getBonus(m)).toBe(2);
+    expect(comboFrom(m)).toBe(0);
+  });
+
+  it('multiple bonuses: score per tick reflects current bonus level', () => {
+    const m = new ScoreManager();
+    const beatMs = BEAT_MS_120;
+    // [Step1] accrue to bonus 4 (32 beats)
+    for (let i = 0; i < 107; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 32.1 beats -> bonus 4
+    expect(getBonus(m)).toBe(4);
+    const before = scoreFrom(m);
+    // [Step2] one more tick should give 2+4=6
+    m.recordTrace(TRACE_INTERVAL, true, beatMs);
+    expect(scoreFrom(m) - before).toBe(6);
+    // [Step3] combo still 0
+    expect(comboFrom(m)).toBe(0);
+  });
+
+  it('complex amplitude/beat scenario: traceBeats accounts BPM changes via beatMs param', () => {
+    const m = new ScoreManager();
+    // simulate BPM changes: first 8 beats at 120 (500ms), next 8 beats at 180 (333ms)
+    // Use 27 ticks at 120: 27*0.3=8.1 beats
+    for (let i = 0; i < 27; i++) m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_120);
+    expect(getBonus(m)).toBe(0);
+    // remaining 8 beats at 180: each tick 0.45 beats -> need 18 ticks for 8.1 beats
+    for (let i = 0; i < 18; i++) m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_180);
+    // total 16.2 beats -> bonus 2
+    expect(getBonus(m)).toBe(2);
+    expect(comboFrom(m)).toBe(0);
   });
 });

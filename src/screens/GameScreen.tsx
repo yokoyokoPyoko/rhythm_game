@@ -361,7 +361,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
 
       if (startedRef.current) {
         const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
-        scoreRef.current.recordTrace(dt, isOnWave)
+        scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       }
 
       // T121: dynamic scroll_speed from chart
