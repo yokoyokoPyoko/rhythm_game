@@ -1108,9 +1108,15 @@
       "finished": 1788581898.33799
     },
     "T157": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788584604.407596
+      "started": 1788584604.407596,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f900cafb9ffeIjGuXeSPfeTat0",
+        "coder": "ses_f900b353dffe5ra8FbdgmHq8dY"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

@@ -108,6 +108,7 @@ export default function EditorScreen() {
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
   const [selectedSegments, setSelectedSegments] = useState<number[]>([])
+  const [selectedVertices, setSelectedVertices] = useState<number[]>([])
   const [hoveredSegment, setHoveredSegment] = useState<number | null>(null)
   const [hoveredRing, setHoveredRing] = useState<number | null>(null)
   const [view, setView] = useState<WaveView>({ startBeat: 0, beats: 16 })
@@ -143,6 +144,7 @@ export default function EditorScreen() {
     w.__editorMode = editMode
     w.__editorSelectedSegment = selectedSegment
     w.__editorSelectedSegments = selectedSegments
+    w.__editorSelectedVertices = selectedVertices
     w.__editorSelectedRing = selectedRing
     w.__editorSelectedRings = selectedRings
     w.__editorHoveredSegment = hoveredSegment
@@ -153,6 +155,7 @@ export default function EditorScreen() {
     facade.editMode = editMode
     facade.selectedSegment = selectedSegment
     facade.selectedSegments = selectedSegments
+    facade.selectedVertices = selectedVertices
     facade.selectedRing = selectedRing
     facade.selectedRings = selectedRings
     facade.hoveredSegment = hoveredSegment
@@ -219,6 +222,8 @@ export default function EditorScreen() {
     setSegments(prev.segments)
     setRings(prev.rings)
     setSelectedSegment((cur) => cur != null && cur >= prev.segments.length ? null : cur)
+    setSelectedSegments((cur) => cur.filter((i) => i < prev.segments.length))
+    setSelectedVertices((cur) => cur.filter((v) => v < prev.segments.length + 1))
     setSelectedRing((cur) => cur != null && cur >= prev.rings.length ? null : cur)
   }, [])
 
@@ -231,6 +236,8 @@ export default function EditorScreen() {
     setSegments(next.segments)
     setRings(next.rings)
     setSelectedSegment((cur) => cur != null && cur >= next.segments.length ? null : cur)
+    setSelectedSegments((cur) => cur.filter((i) => i < next.segments.length))
+    setSelectedVertices((cur) => cur.filter((v) => v < next.segments.length + 1))
     setSelectedRing((cur) => cur != null && cur >= next.rings.length ? null : cur)
   }, [])
 
@@ -928,6 +935,15 @@ export default function EditorScreen() {
     }
   }, [])
 
+  const handleSelectVertices = useCallback((indices: number[]) => {
+    setSelectedVertices(indices)
+    setSelectedSegments(indices.map((v) => (v === 0 ? 0 : v - 1)))
+    setSelectedSegment(indices[0] == null ? null : indices[0] === 0 ? 0 : indices[0] - 1)
+    if (indices.length > 0) {
+      setSegmentDetailsOpen(true)
+    }
+  }, [])
+
   const handleMultiMoveRings = useCallback((moves: { index: number; beat: number }[]) => {
     commitRings((prev) => {
       const next = [...prev]
@@ -1455,6 +1471,8 @@ export default function EditorScreen() {
             onSelectSegment={handleSelectSegment}
             onSelectRings={handleSelectRings}
             onSelectSegments={handleSelectSegments}
+            onSelectVertices={handleSelectVertices}
+            selectedVertices={selectedVertices}
             onMultiMoveRings={handleMultiMoveRings}
             onMultiMoveSegments={handleMultiMoveSegments}
             onHoverRing={setHoveredRing}

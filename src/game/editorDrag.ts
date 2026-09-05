@@ -92,6 +92,15 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   let beatPrime = quantizeBeat(targetBeat, safeSnap);
   beatPrime = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, beatPrime));
 
+  // T157: a drag that (after clamping) lands exactly back on the current beat AND
+  // exactly on the current wave Y is a true no-op — return null so the chart and
+  // the snap alignment of untouched neighboring segments are left exactly as they
+  // were. (Out-of-bounds Y that only snaps/clamps inside the same zone is still a
+  // real drag and returns a clamped result.)
+  if (Math.abs(beatPrime - pts[idx].beat) < 1e-9 && Math.abs(targetY - pts[idx].y) < 1e-9) {
+    return null;
+  }
+
   let beatsPrev = quantizeBeat(beatPrime - prevBeat, safeSnap);
   let beatsNext = quantizeBeat(nextBeat - beatPrime, safeSnap);
 
@@ -196,6 +205,88 @@ export function calculateMultiDrag(input: MultiDragInput): Segment[] | null {
     // Boundary: beats from the new horizontal span; direction from zones,
     // preserving the original direction while the moved endpoint stays in
     // its zone (so horizontal-only drags never flip slopes).
+    const beats = Math.max(safeSnap, quantizeBeat(newBeat(j + 1) - newBeat(j), safeSnap));
+    const movedV = a ? j : j + 1;
+    const dir =
+      zoneOf(newY(movedV)) === zoneOf(pts[movedV].y)
+        ? s.direction
+        : dirBetween(newY(j), newY(j + 1));
+    return { direction: dir, beats };
+  });
+}
+
+interface VertexMultiDragInput {
+  segments: Segment[];
+  bpmTimeline: BpmTimeline;
+  startPosition: number;
+  vertexIndices: number[];
+  dxBeat: number;
+  dy: number;
+  snap: number;
+}
+
+// T157: vertex-unit selection move. Only the selected vertices shift by (dx, dy);
+// vertex 0 (the chart start) is always anchored. Changed segments are exactly the
+// two neighbors around each moved vertex — no other segments are touched, so a
+// single vertex {v} moves alone and trailing beats never shift (the bug where a
+// seg-based interpretation moved 2 vertices at once is fixed here).
+// Beats come from the new horizontal (X) span (snap-quantized, >= snap); direction
+// comes from the zone relationship (T150), preserving the segment's direction while
+// the moved endpoint stays inside its zone. dx is clamped so each boundary segment
+// keeps >= snap (mirrors the pre-clamp the caller/tests apply).
+export function calculateVertexMultiDrag(input: VertexMultiDragInput): Segment[] | null {
+  const { segments, bpmTimeline, startPosition, vertexIndices, dxBeat, dy, snap } = input;
+  const safeSnap = snap > 0 ? snap : 0.25;
+  const n = segments.length;
+  if (n === 0) return null;
+  if (!Array.isArray(vertexIndices) || vertexIndices.length === 0) return null;
+
+  const baseAmp = bpmTimeline.amplitudeAt(0);
+  const engine = new WaveEngine(segments, bpmTimeline, baseAmp, startPosition);
+  const pts = engine.getPoints();
+
+  const moved = new Set<number>();
+  for (const v of vertexIndices) {
+    if (v > 0 && v < pts.length) moved.add(v);
+  }
+  if (moved.size === 0) return null;
+
+  const dx = quantizeBeat(dxBeat, safeSnap);
+
+  // Only segments adjacent to a moved vertex may change.
+  const changed = new Set<number>();
+  moved.forEach((v) => {
+    if (v - 1 >= 0) changed.add(v - 1);
+    if (v < n) changed.add(v);
+  });
+
+  // Clamp dx so every boundary segment (exactly one endpoint moved) keeps >= snap,
+  // and no moved vertex goes before beat 0.
+  let lo = -Infinity;
+  let hi = Infinity;
+  for (let j = 0; j < n; j++) {
+    const a = moved.has(j);
+    const b = moved.has(j + 1);
+    if (a === b || !changed.has(j)) continue;
+    const origLen = pts[j + 1].beat - pts[j].beat;
+    if (a && !b) hi = Math.min(hi, origLen - safeSnap);
+    else lo = Math.max(lo, safeSnap - origLen);
+  }
+  moved.forEach((v) => {
+    lo = Math.max(lo, -pts[v].beat);
+  });
+  if (lo > hi) return null;
+  const dxC = Math.max(lo, Math.min(hi, dx));
+
+  const newBeat = (v: number): number => pts[v].beat + (moved.has(v) ? dxC : 0);
+  const newY = (v: number): number => (moved.has(v) ? clampY(pts[v].y + dy) : pts[v].y);
+
+  return segments.map((s, j) => {
+    if (!changed.has(j)) return { ...s };
+    const a = moved.has(j);
+    const b = moved.has(j + 1);
+    // Internal segment (both endpoints moved) travels rigidly — bit-exact.
+    if (a && b) return { ...s };
     const beats = Math.max(safeSnap, quantizeBeat(newBeat(j + 1) - newBeat(j), safeSnap));
     const movedV = a ? j : j + 1;
     const dir =

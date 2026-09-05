@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { quantizeBeat } from '../../chart/quantize'
-import { calculateVertexDrag, calculateEdgeDrag, calculateMultiDrag } from '../../game/editorDrag'
+import { calculateVertexDrag, calculateEdgeDrag, calculateMultiDrag, calculateVertexMultiDrag } from '../../game/editorDrag'
 import { TW_CENTER_Y, TW_AMP, WaveEngine } from '../../game/waveEngine'
 import type { BpmChange, RingDef, Segment } from '../../types'
 
@@ -53,6 +53,7 @@ export interface WavePreviewProps {
   selectedSegment?: number | null
   selectedRings?: number[]
   selectedSegments?: number[]
+  selectedVertices?: number[]
   hoveredRing?: number | null
   hoveredSegment?: number | null
   positionMs?: number
@@ -66,6 +67,7 @@ export interface WavePreviewProps {
   onSelectSegment?: (index: number | null) => void
   onSelectRings?: (indices: number[]) => void
   onSelectSegments?: (indices: number[]) => void
+  onSelectVertices?: (indices: number[]) => void
   onMultiMoveRings?: (moves: { index: number; beat: number }[]) => void
   onMultiMoveSegments?: (next: Segment[]) => void
   onHoverRing?: (index: number | null) => void
@@ -87,6 +89,7 @@ export default function WavePreview({
   selectedSegment = null,
   selectedRings = [],
   selectedSegments = [],
+  selectedVertices = [],
   hoveredRing = null,
   hoveredSegment = null,
   positionMs,
@@ -100,6 +103,7 @@ export default function WavePreview({
   onSelectSegment,
   onSelectRings,
   onSelectSegments,
+  onSelectVertices,
   onMultiMoveRings,
   onMultiMoveSegments,
   onHoverRing,
@@ -125,7 +129,7 @@ export default function WavePreview({
   const rubberDraggedRef = useRef(false)
   const [rubberRect, setRubberRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   // T156: multi-item drag (left-drag on selected items)
-  const multiDragRef = useRef<{ startBeat: number; startY: number; origRingBeats?: number[]; origSegIndices?: number[] } | null>(null)
+  const multiDragRef = useRef<{ startBeat: number; startY: number; origRingBeats?: number[]; origSegIndices?: number[]; origVertices?: number[] } | null>(null)
   const [multiDragSegments, setMultiDragSegments] = useState<Segment[] | null>(null)
   const [ringDragOffset, setRingDragOffset] = useState(0)
   const onViewChangeRef = useRef(onViewChange)
@@ -183,6 +187,21 @@ export default function WavePreview({
     }) as unknown as Segment[]
   }
 
+  // T157: vertex-unit multi-drag — only the selected vertices move, so a single
+  // vertex {v} shifts alone (previous seg-based interpretation moved 2 points).
+  const computeVertexMultiSegs = (origSegs: Segment[], vertexIdxs: number[], dxBeat: number, dy: number): Segment[] | null => {
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    return calculateVertexMultiDrag({
+      segments: origSegs,
+      bpmTimeline: timeline,
+      startPosition,
+      vertexIndices: vertexIdxs,
+      dxBeat,
+      dy,
+      snap: safeSnap,
+    })
+  }
+
   // T156: find items inside a rubber band rectangle
   const findItemsInRect = (
     x0: number, y0: number, x1: number, y1: number,
@@ -210,18 +229,24 @@ export default function WavePreview({
       const minAmpV = Math.max(8, 0.2 * rectH)
       const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmpV))
       const mapYLocal = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
-      const SAMPLE_STEP = 0.25
-      for (let i = 0; i < segments.length; i++) {
-        const segStart = segments.slice(0, i).reduce((s, seg) => s + seg.beats, 0)
-        const segEnd = segStart + segments[i].beats
-        if (segEnd < minBX || segStart > maxBX) continue
-        if (editMode === 'vertex') {
-          const vPt = engine.getPoints()[i]
+      if (editMode === 'vertex') {
+        // T157: push the VERTEX index (0..segments.length), not the segment index,
+        // so the final vertex n (points[segments.length]) is included and a single
+        // vertex maps 1:1 to itself when moved.
+        const points = engine.getPoints()
+        for (let v = 0; v < points.length && v <= segments.length; v++) {
+          const vPt = points[v]
           if (!vPt) continue
           const vx = beatToXLocal(vPt.beat, rectW)
           const vy = mapYLocal(vPt.y)
-          if (vx >= minX - 14 && vx <= maxX + 14 && vy >= minY - 14 && vy <= maxY + 14) foundSegs.push(i)
-        } else {
+          if (vx >= minX - 14 && vx <= maxX + 14 && vy >= minY - 14 && vy <= maxY + 14) foundSegs.push(v)
+        }
+      } else {
+        const SAMPLE_STEP = 0.25
+        for (let i = 0; i < segments.length; i++) {
+          const segStart = segments.slice(0, i).reduce((s, seg) => s + seg.beats, 0)
+          const segEnd = segStart + segments[i].beats
+          if (segEnd < minBX || segStart > maxBX) continue
           let hit = false
           for (let b = Math.max(segStart, minBX); b <= Math.min(segEnd, maxBX) + 1e-9 && !hit; b += SAMPLE_STEP) {
             const bx = beatToXLocal(Math.min(b, segEnd), rectW)
@@ -412,7 +437,7 @@ export default function WavePreview({
         const vy = mapY(p.y)
         const isStart = p.beat === 0
         const isHoveredVertex = hoveredSegment != null && (hoveredSegment === idx || hoveredSegment === idx - 1)
-        const isSelectedVertex = (selectedSegments.includes(idx) || selectedSegments.includes(idx - 1)) || (selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1))
+        const isSelectedVertex = selectedVertices.includes(idx) || (selectedSegments.includes(idx) || selectedSegments.includes(idx - 1)) || (selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1))
         const isHighlightedV = isSelectedVertex || isHoveredVertex
         ctx.fillStyle = isHighlightedV ? SELECT_COLOR : isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
         ctx.beginPath()
@@ -537,7 +562,7 @@ export default function WavePreview({
       ctx.rect(rubberRect.x, rubberRect.y, rubberRect.w, rubberRect.h)
       ctx.fill()
     }
-  }, [segments, dragPreview, multiDragSegments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
+  }, [segments, dragPreview, multiDragSegments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, selectedVertices, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -573,6 +598,17 @@ export default function WavePreview({
         const dxBeat = quantizeBeat(xToBeatLocal(x, rect.width) - multiDragRef.current.startBeat, safeSnap)
         if (editMode === 'ring') {
           setRingDragOffset(dxBeat)
+        } else if (multiDragRef.current.origVertices) {
+          // T157: vertex-unit move — only the selected vertices shift.
+          const fieldH = rect.height - RULER_H
+          const centerY = RULER_H + fieldH / 2
+          const maxAmpV = (fieldH - 24) / 2
+          const minAmpV = Math.max(8, 0.2 * rect.height)
+          const dispAmpV = Math.min(maxAmpV, Math.max(TW_AMP, minAmpV))
+          const mapYInverseV = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmpV) * TW_AMP
+          const dy = mapYInverseV(e.clientY - rect.top) - multiDragRef.current.startY
+          const preview = computeVertexMultiSegs(segments, multiDragRef.current.origVertices, dxBeat, dy)
+          setMultiDragSegments(preview)
         } else if (multiDragRef.current.origSegIndices) {
           // Vertical component via the same dispAmp-based inverse mapping used by
           // vertex/edge drags, so preview Y follows the mouse inside the wave band.
@@ -731,7 +767,15 @@ export default function WavePreview({
             else onSelectRing?.(null)
           } else {
             const segs = found.segs
-            if (segs.length === 1) onSelectSegment?.(segs[0])
+            if (editMode === 'vertex') {
+              // T157: report VERTEX indices; mirror legacy mapping (v===0?0:v-1).
+              if (segs.length > 0) {
+                onSelectVertices?.(segs)
+                onSelectSegments?.(segs.map((v) => (v === 0 ? 0 : v - 1)))
+              } else {
+                onSelectSegment?.(null)
+              }
+            } else if (segs.length === 1) onSelectSegment?.(segs[0])
             else if (segs.length > 1) onSelectSegments?.(segs)
             else onSelectSegment?.(null)
           }
@@ -795,7 +839,7 @@ export default function WavePreview({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, rings, findItemsInRect])
+  }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, onSelectVertices, selectedVertices, rings, findItemsInRect])
 
   const nearestRingIndex = (clientX: number): number => {
     const canvas = canvasRef.current
@@ -933,19 +977,19 @@ export default function WavePreview({
       : new Set(selectedSegments.length ? selectedSegments : selectedSegment != null ? [selectedSegment] : [])
     if (e.button === 0) {
       let onSel = false
+      let vHit = -1
       if (editMode === 'ring') {
         onSel = nearestRingIndex(e.clientX) >= 0 && selectedRings.includes(nearestRingIndex(e.clientX))
       } else if (editMode === 'vertex') {
-        const vHit = nearestVertexIndex(e.clientX, e.clientY)
-        onSel = vHit >= 0 && (selectedSegments.includes(vHit === 0 ? 0 : vHit - 1) || (selectedSegment === (vHit === 0 ? 0 : vHit - 1)))
+        vHit = nearestVertexIndex(e.clientX, e.clientY)
+        onSel = vHit >= 0 && (selectedVertices.includes(vHit) || selectedSegments.includes(vHit === 0 ? 0 : vHit - 1) || (selectedSegment === (vHit === 0 ? 0 : vHit - 1)))
       } else if (editMode === 'edge') {
         const eHit = nearestEdgeIndex(e.clientX, e.clientY)
         onSel = eHit >= 0 && (selectedSegments.includes(eHit) || selectedSegment === eHit)
+        if (eHit >= 0) onSelectSegment?.(eHit)
       }
       if (onSel && selectedSet.size > 0) {
-        // T156-fix: startY must be in wave-Y units (mapYInverse space), not
-        // pixels — otherwise dy mixes units and the preview Y never follows
-        // the cursor. Same inverse mapping as vertex/edge drags.
+        // startY in wave-Y units (mapYInverse space)
         const fieldH = rect.height - RULER_H
         const centerY = RULER_H + fieldH / 2
         const maxAmpM = (fieldH - 24) / 2
@@ -954,7 +998,11 @@ export default function WavePreview({
         const startWaveY = TW_CENTER_Y + ((clickY - centerY) / dispAmpM) * TW_AMP
         multiDragRef.current = { startBeat: xToBeatLocal(e.clientX - rect.left, rect.width), startY: startWaveY }
         if (editMode !== 'ring') {
-          multiDragRef.current.origSegIndices = selectedSegments.length ? selectedSegments : (selectedSegment != null ? [selectedSegment] : [])
+          if (editMode === 'vertex') {
+            multiDragRef.current.origVertices = selectedVertices.length ? selectedVertices : (vHit >= 0 ? [vHit] : [])
+          } else {
+            multiDragRef.current.origSegIndices = selectedSegments.length ? selectedSegments : (selectedSegment != null ? [selectedSegment] : [])
+          }
         }
         e.preventDefault()
         return
@@ -965,6 +1013,8 @@ export default function WavePreview({
     if (editMode === 'vertex') {
       const vHit = nearestVertexIndex(e.clientX, e.clientY)
       if (vHit >= 0) {
+        // T157: single vertex selects by vertex index; mirror legacy segment mapping.
+        onSelectVertices?.([vHit])
         onSelectSegment?.(vHit === 0 ? 0 : vHit - 1)
         vertexDragRef.current = { index: vHit }
         e.preventDefault()
