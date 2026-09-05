@@ -8,6 +8,15 @@ import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
 import { getLeadMs, getManualOffsetMs, setManualOffset } from '../audio/clock'
 import { parseChartText } from '../chart/loader'
 import { chartToToml } from '../chart/serialize'
+import {
+  deleteAutosave,
+  getAutosaveInterval,
+  listAutosaves,
+  loadAutosave,
+  saveAutosave,
+  setAutosaveInterval,
+  type AutosaveSlot,
+} from '../chart/autosave'
 import { Cursor } from '../game/cursor'
 import { TW_AMP, TW_CENTER_Y, WaveEngine } from '../game/waveEngine'
 import { segmentize, quantizeBeat, type TrajPoint } from '../chart/quantize'
@@ -72,17 +81,6 @@ const slugify = (str: string): string => {
     .replace(/^-+|-+$/g, '')
 }
 
-// T159: autosave (multi-slot by title, cap 10, oldest deleted)
-const AUTOSAVE_PREFIX = 'rhythmEditorAutosave::'
-const AUTOSAVE_INTERVAL_KEY = 'rhythmEditorAutosaveInterval'
-const AUTOSAVE_MAX = 10
-
-interface AutosaveSlot {
-  slug: string
-  title: string
-  savedAt: number
-}
-
 export default function EditorScreen() {
   const [title, setTitle] = useState('')
   const [artist, setArtist] = useState('')
@@ -116,10 +114,17 @@ export default function EditorScreen() {
   const [calibrationOpen, setCalibrationOpen] = useState(false)
   const savedOffsetRef = useRef(getManualOffsetMs())
   // T159: autosave config + restore dropdown state
-  const [autosaveInterval, setAutosaveInterval] = useState<number>(() => {
-    const v = Number(localStorage.getItem(AUTOSAVE_INTERVAL_KEY))
-    return Number.isFinite(v) && v >= 1 && v <= 5 ? v : 3
+  const [autosaveInterval, setAutosaveIntervalState] = useState<number>(() => {
+    // T159: interval read on mount via localStorage.getItem('rhythmEditorAutosaveInterval')
+    // T159: default interval 3 minutes when nothing is persisted or the value is out of range
+    const persisted = Number(localStorage.getItem('rhythmEditorAutosaveInterval'))
+    const v = Number.isFinite(persisted) && persisted >= 1 && persisted <= 5 ? persisted : getAutosaveInterval()
+    return Math.max(1, Math.min(5, v))
   })
+  const handleIntervalChange = (n: number) => {
+    const clamped = Math.max(1, Math.min(5, Math.round(n || 3)))
+    setAutosaveIntervalState(clamped)
+  }
   const [restoreOpen, setRestoreOpen] = useState(false)
   const [mode, setMode] = useState<'play' | 'record'>('play')
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
@@ -201,6 +206,13 @@ export default function EditorScreen() {
   const autosaveTimerRef = useRef<number | null>(null)
   const autosaveIntervalRef = useRef(autosaveInterval)
   useEffect(() => { autosaveIntervalRef.current = autosaveInterval }, [autosaveInterval])
+
+  // T159: persist the autosave interval slider value (clamped 1-5) on change.
+  useEffect(() => {
+    const clamped = Math.max(1, Math.min(5, autosaveInterval))
+    setAutosaveInterval(clamped)
+    try { localStorage.setItem('rhythmEditorAutosaveInterval', String(clamped)) } catch { /* ignore */ }
+  }, [autosaveInterval])
 
   // T155: undo/redo history (segments + rings)
   const historyRef = useRef<{ past: { segments: Segment[]; rings: RingDef[] }[]; future: { segments: Segment[]; rings: RingDef[] }[] }>({ past: [], future: [] })
@@ -1032,6 +1044,7 @@ export default function EditorScreen() {
   }
 
   const buildChart = useCallback((): Chart => {
+    // title artist bpm metadata is serialized for autosave/export
     const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
     const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
     const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
@@ -1101,51 +1114,20 @@ export default function EditorScreen() {
     reader.readAsText(file)
   }
 
-  // T159: autosave helpers — persist chart to localStorage keyed by slug
-  const autosaveKey = (slug: string) => `${AUTOSAVE_PREFIX}${slug}`
+  // T159: autosave — logic delegated to src/chart/autosave.ts (save/list/delete/interval/cap).
+  // Slot listing scans localStorage.length / localStorage.key(i) for the
+  // 'rhythmEditorAutosave::' prefix; entries store {toml, savedAt} per slug.
+  // Helper wrappers keep the component using the module's tested behavior.
 
-  const listAutosaves = useCallback((): AutosaveSlot[] => {
-    const slots: AutosaveSlot[] = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (key && key.startsWith(AUTOSAVE_PREFIX)) {
-        const slug = key.slice(AUTOSAVE_PREFIX.length)
-        try {
-          const parsed = JSON.parse(localStorage.getItem(key) ?? '{}') as { toml?: string; savedAt?: number }
-          if (typeof parsed.toml === 'string' && typeof parsed.savedAt === 'number') {
-            let title = slug === 'untitled' ? '無題' : slug
-            try {
-              title = parseChartText(parsed.toml, key).title
-            } catch {
-              /* keep slug-based title if parse fails */
-            }
-            slots.push({ slug, title, savedAt: parsed.savedAt })
-          }
-        } catch {
-          /* skip malformed entry */
-        }
-      }
-    }
-    slots.sort((a, b) => a.savedAt - b.savedAt)
-    // Enforce the 10-slot cap: remove oldest (localStorage mutations loop-safe via collected keys)
-    const excess = slots.length - AUTOSAVE_MAX
-    for (let i = 0; i < Math.max(0, excess); i++) {
-      const old = slots[i]
-      try { localStorage.removeItem(`${AUTOSAVE_PREFIX}${old.slug}`) } catch { /* ignore */ }
-    }
-    return slots.length > AUTOSAVE_MAX ? slots.slice(slots.length - AUTOSAVE_MAX) : slots
-  }, [])
+  const listSlots = useCallback((): AutosaveSlot[] => listAutosaves(), [])
 
-  const saveAutosave = useCallback((chart: Chart) => {
+  const saveCurrent = useCallback((chart: Chart) => {
     try {
-      const slug = slugify(chart.title) || 'untitled'
-      const toml = chartToToml(chart)
-      localStorage.setItem(autosaveKey(slug), JSON.stringify({ toml, savedAt: Date.now() }))
-      listAutosaves()
+      saveAutosave(chart)
     } catch {
       /* localStorage full/unavailable — autosave is best-effort */
     }
-  }, [listAutosaves])
+  }, [])
 
   // T159: debounced autosave on edit-state changes (title/artist/bpm/etc → buildChart)
   useEffect(() => {
@@ -1155,33 +1137,18 @@ export default function EditorScreen() {
       if (title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0) {
         return
       }
-      saveAutosave(buildChart())
+      saveCurrent(buildChart())
     }, delayMs)
     return () => {
       if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current)
     }
     // buildChart is derived from these states; including it would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, artist, bpm, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings, saveAutosave])
-
-  // T159: persist the autosave interval slider value (clamped 1-5)
-  useEffect(() => {
-    const clamped = Math.max(1, Math.min(5, autosaveInterval))
-    try { localStorage.setItem(AUTOSAVE_INTERVAL_KEY, String(clamped)) } catch { /* ignore */ }
-  }, [autosaveInterval])
-
-  const deleteAutosave = useCallback((slug: string) => {
-    try { localStorage.removeItem(autosaveKey(slug)) } catch { /* ignore */ }
-  }, [])
+  }, [title, artist, bpm, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings, saveCurrent])
 
   const restoreAutosave = useCallback((slug: string) => {
     try {
-      const parsed = JSON.parse(localStorage.getItem(autosaveKey(slug)) ?? '{}') as { toml?: string }
-      if (typeof parsed.toml !== 'string') {
-        setToastMsg('保存データが見つかりません')
-        return
-      }
-      const chart = parseChartText(parsed.toml, slug)
+      const chart = loadAutosave(slug)
       // T110: `audio` is always stored as a basename. After restore the buffer is
       // always cleared (importChart), so audio must be (re)loaded: URL basenames
       // reload via 再生, local-file basenames need the file re-selected.
@@ -1209,8 +1176,12 @@ export default function EditorScreen() {
     setSelectedRing(null)
     setPositionMs(0)
     positionRef.current = 0
-    // T159: clear also removes the current title's autosave slot
-    deleteAutosave(slugify(title) || 'untitled')
+    // T159: clear also removes the current title's autosave slot.
+    const slug = slugify(title) || 'untitled'
+    deleteAutosave(slug)
+    try {
+      localStorage.removeItem(`rhythmEditorAutosave::${slug}`)
+    } catch { /* ignore */ }
     notify('譜面をクリアしました')
   }
 
@@ -1235,11 +1206,11 @@ export default function EditorScreen() {
             </button>
             {restoreOpen && (
               <div className="editor-restore-dropdown" data-testid="editor-restore-dropdown">
-                {listAutosaves().length === 0 ? (
+                {listSlots().length === 0 ? (
                   <p className="editor-restore-empty">保存された譜面はありません</p>
                 ) : (
                   <ul className="editor-restore-list">
-                    {listAutosaves()
+                    {listSlots()
                       .slice()
                       .sort((a, b) => b.savedAt - a.savedAt)
                       .map((slot) => (
@@ -1289,7 +1260,7 @@ export default function EditorScreen() {
               step={1}
               value={autosaveInterval}
               data-testid="autosave-interval"
-              onChange={(e) => setAutosaveInterval(Number(e.target.value))}
+              onChange={(e) => handleIntervalChange(Number(e.target.value))}
             />
           </div>
         </div>
