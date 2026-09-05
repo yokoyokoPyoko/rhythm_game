@@ -25,7 +25,7 @@ export class Cursor {
     }
   }
 
-  update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, _segmentBeats = 1): void {
+  update(dt: number, upPressed: boolean, downPressed: boolean, beatMs: number, nowWaveY?: number): void {
     const waveTop = TW_CENTER_Y - TW_AMP;
     const waveBottom = TW_CENTER_Y + TW_AMP;
     // T127/T131: amplitude is speed coefficient (higher amplitude = faster/steeper).
@@ -35,6 +35,13 @@ export class Cursor {
     if (upPressed) delta -= speed;
     if (downPressed) delta += speed;
     this.y = Math.max(waveTop, Math.min(waveBottom, this.y + delta * dt));
+
+    // T163: Continuous snap towards nowWaveY every tick (PULL_STRENGTH = 0.04 - 0.05)
+    if (typeof nowWaveY === 'number' && Number.isFinite(nowWaveY)) {
+      const PULL_STRENGTH = 0.045;
+      const clampedTarget = Math.max(waveTop, Math.min(waveBottom, nowWaveY));
+      this.y = Math.max(waveTop, Math.min(waveBottom, this.y + (clampedTarget - this.y) * PULL_STRENGTH));
+    }
   }
 
   /**

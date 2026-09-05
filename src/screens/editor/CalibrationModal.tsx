@@ -187,7 +187,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       const currentBeat = timeline.msToBeat(songTimeMs)
       const currentBeatMs = timeline.beatMsAt(currentBeat)
       cursorRef.current.setAmplitude(timeline.amplitudeAt(currentBeat))
-      cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs)
+       cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs, wave.waveYAtMs(songTimeMs))
 
       const beatFloor = Math.floor(currentBeat)
       if (beatFloor !== prevBeatFloor) {

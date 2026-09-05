@@ -313,12 +313,13 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       const currentBeatMs = timeline.beatMsAt(currentBeat)
       // T131: time-varying amplitude — cursor speed follows the bpm_changes amplitude list
       cursorRef.current.setAmplitude(timeline.amplitudeAt(currentBeat))
-      cursorRef.current.update(
-        dt,
-        keysRef.current.up,
-        keysRef.current.down,
-        currentBeatMs,
-      )
+       cursorRef.current.update(
+         dt,
+         keysRef.current.up,
+         keysRef.current.down,
+         currentBeatMs,
+         wave.waveYAtMs(songTimeMs),
+       )
       // T119: wave attraction assist — on 1-beat boundary crossing, pull cursor toward wave
       if (startedRef.current) {
         const currentBeatFloor = Math.floor(currentBeat)
