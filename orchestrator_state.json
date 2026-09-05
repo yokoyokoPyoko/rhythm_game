@@ -1150,9 +1150,18 @@
       "finished": 1788594629.6261444
     },
     "T160": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1788605793.7994885
+      "started": 1788605793.7994885,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f8ebb7d19ffekp1gTUKAjCJAO6",
+        "coder": "ses_f8eb8883bffek8VZpLiKXzixOO",
+        "postmortem": "ses_f8ebc2957ffefv2OPJCXI3YSW4"
+      },
+      "gate_b_golden": false,
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1788606704.7855883
     }
   },
   "consecutive_no_action": 0

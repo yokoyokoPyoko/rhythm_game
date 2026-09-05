@@ -202,8 +202,7 @@ export default function EditorScreen() {
   const keysRef = useRef({ up: false, down: false, space: false })
   const spacePressBeatRef = useRef(0)
 
-  // T159: autosave debounce
-  const autosaveTimerRef = useRef<number | null>(null)
+  // T160: autosave interval ref
   const autosaveIntervalRef = useRef(autosaveInterval)
   useEffect(() => { autosaveIntervalRef.current = autosaveInterval }, [autosaveInterval])
 
@@ -1129,22 +1128,28 @@ export default function EditorScreen() {
     }
   }, [])
 
-  // T159: debounced autosave on edit-state changes (title/artist/bpm/etc → buildChart)
+  // T160: periodic interval autosave (setInterval)
   useEffect(() => {
-    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current)
-    const delayMs = autosaveIntervalRef.current * 60 * 1000
-    autosaveTimerRef.current = window.setTimeout(() => {
+    const timerId = window.setInterval(() => {
       if (title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0) {
         return
       }
       saveCurrent(buildChart())
-    }, delayMs)
+    }, autosaveIntervalRef.current * 60 * 1000)
+
     return () => {
-      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current)
+      window.clearInterval(timerId)
     }
-    // buildChart is derived from these states; including it would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, artist, bpm, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings, saveCurrent])
+  }, [autosaveInterval, saveCurrent])
+
+  // T160: unmount cleanup save
+  useEffect(() => {
+    return () => {
+      if (!(title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0)) {
+        saveCurrent(buildChart())
+      }
+    }
+  }, [saveCurrent])
 
   const restoreAutosave = useCallback((slug: string) => {
     try {
