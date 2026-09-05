@@ -1151,7 +1151,7 @@
     },
     "T160": {
       "attempts": 5,
-      "status": "running",
+      "status": "passed",
       "started": 1788605793.7994885,
       "cycles": 1,
       "sessions": {
@@ -1162,7 +1162,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788608918.936237
+      "last_postmortem_at": 1788608918.936237,
+      "finished": 1788609569.683128
+    },
+    "T161": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788610734.5104613
     }
   },
   "consecutive_no_action": 0
