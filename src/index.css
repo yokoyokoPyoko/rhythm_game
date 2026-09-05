@@ -437,6 +437,124 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.editor-header-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.editor-restore-group {
+  position: relative;
+}
+
+.editor-restore-button {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.editor-restore-button:hover {
+  border-color: var(--accent);
+}
+
+.editor-restore-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  z-index: 100;
+  padding: 0.5rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.editor-restore-empty {
+  padding: 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.editor-restore-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.editor-restore-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.editor-restore-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.editor-restore-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-restore-time {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.editor-restore-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.editor-restore-actions button {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.editor-restore-actions button:hover {
+  border-color: var(--accent);
+}
+
+.editor-autosave-interval {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.editor-autosave-interval .editor-label {
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+.editor-autosave-interval .editor-slider {
+  width: 120px;
+}
+
 .editor-body {
   display: flex;
   flex: 1;

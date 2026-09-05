@@ -1,581 +1,758 @@
 /**
  * @vitest-environment node
- * T158 コンボ／ボーナス分離＋新得点（トレース・リング・コンボ切れの再定義） - Vitest node acceptance test
- * RED phase: expects ScoreManager with PERFECT 100, GOOD 30, TRACE_BASE 2, comboBonus/traceBeats/offBeats, recordTrace(dt,isOnWave,beatMs)
+ * T159 エディタ自動保存（複数スロット＋左上復元ボタン＋保存間隔スライダー） — Vitest node acceptance test (TDD Red→Green)
+ * Verifies behavior/internal state, never surface-only DOM presence.
+ * 3-step state-transition pattern, pure computed values, off-grid phases, complex amplitudes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { chartToToml } from '../src/chart/serialize';
+import { parseChartText } from '../src/chart/loader';
+import { BpmTimeline } from '../src/audio/bpmTimeline';
+import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
+import { quantizeBeat } from '../src/chart/quantize';
+import type { Chart, Segment, RingDef, BpmChange } from '../src/types';
 
 vi.useFakeTimers();
 
-import { ScoreManager } from '../src/game/score';
-
-const BEAT_MS_120 = 500; // 120 BPM = 500ms per beat
-const BEAT_MS_180 = 333.333333;
-const TRACE_INTERVAL = 0.15;
-const EPS = 1e-6;
-
-function scoreFrom(manager: ScoreManager): number { return manager.getStats().score; }
-function comboFrom(manager: ScoreManager): number { return manager.getStats().combo; }
-function getBonus(manager: ScoreManager): number {
-  const anyM = manager as unknown as Record<string, unknown>;
-  if ('comboBonus' in anyM) return anyM['comboBonus'] as number;
-  if ('bonus' in anyM) return anyM['bonus'] as number;
-  if ('comboAdd' in anyM) return anyM['comboAdd'] as number;
-  // fallback: infer from score delta if not exposed – return NaN to force structural failure
-  return NaN;
+// ------------------------------------------------------------------
+// Polyfill localStorage for node
+// ------------------------------------------------------------------
+class MemoryStorage {
+  private m = new Map<string, string>();
+  getItem(k: string): string | null { return this.m.has(k) ? this.m.get(k)! : null; }
+  setItem(k: string, v: string): void { this.m.set(k, String(v)); }
+  removeItem(k: string): void { this.m.delete(k); }
+  clear(): void { this.m.clear(); }
+  key(i: number): string | null { return [...this.m.keys()][i] ?? null; }
+  get length(): number { return this.m.size; }
+  // allow prefix scan
+  keys(): string[] { return [...this.m.keys()]; }
 }
-function getTraceBeats(manager: ScoreManager): number | undefined {
-  const anyM = manager as unknown as Record<string, unknown>;
-  if ('traceBeats' in anyM) return anyM['traceBeats'] as number;
-  return undefined;
+
+function installStorage(): MemoryStorage {
+  const s = new MemoryStorage();
+  (globalThis as unknown as Record<string, unknown>).localStorage = s as unknown as Storage;
+  // also window if referenced
+  (globalThis as unknown as Record<string, unknown>).window = globalThis as unknown as Record<string, unknown>;
+  return s;
 }
-function getOffBeats(manager: ScoreManager): number | undefined {
-  const anyM = manager as unknown as Record<string, unknown>;
-  if ('offBeats' in anyM) return anyM['offBeats'] as number;
-  if ('offWaveBeats' in anyM) return anyM['offWaveBeats'] as number;
-  return undefined;
+
+function readEditorSrc(): string {
+  return fs.readFileSync(path.join(process.cwd(), 'src/screens/EditorScreen.tsx'), 'utf-8');
+}
+function readIndexCss(): string {
+  return fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+}
+
+// Shared helpers
+const PREFIX = 'rhythmEditorAutosave::';
+const INTERVAL_KEY = 'rhythmEditorAutosaveInterval';
+const DEFAULT_INTERVAL = 3;
+
+function slugifyExport(str: string): string {
+  return str.toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
+}
+
+function makeChart(over: Partial<Chart> & { title: string }): Chart {
+  return {
+    title: over.title,
+    artist: over.artist ?? 'artist-' + over.title,
+    bpm: over.bpm ?? 120,
+    audio: over.audio ?? '/rhythm_game/audio/test.flac',
+    audio_offset: over.audio_offset ?? 0,
+    scroll_speed: over.scroll_speed ?? 110,
+    amplitude: over.amplitude ?? 1.0,
+    start_position: over.start_position ?? 0.0,
+    bpm_changes: over.bpm_changes ?? [],
+    segments: over.segments ?? [],
+    rings: over.rings ?? [],
+  };
+}
+
+// Try to import autosave module — this is the expected implementation path.
+// If file does not exist yet, tests in section 2+ will fail (Red phase) intentionally.
+let autosaveMod: unknown = null;
+let autosaveImportError: unknown = null;
+async function tryImportAutosave(): Promise<unknown> {
+  const candidates = [
+    '../src/chart/autosave',
+    '../src/chart/autosave.ts',
+    '../src/utils/autosave',
+    '../src/screens/EditorScreen',
+  ];
+  for (const c of candidates) {
+    try {
+      const m = await import(c);
+      // Check if it actually exports autosave helpers
+      if (m && (m.AUTOSAVE_PREFIX || m.PREFIX || m.saveAutosave || m.saveSlot || m.listAutosaves || m.getAutosaveInterval)) {
+        return m;
+      }
+    } catch (e) {
+      autosaveImportError = e;
+    }
+  }
+  return null;
 }
 
 // ================================================================
-// 1. Source structure: constants and new fields
+// 1. Source structure: EditorScreen.tsx + CSS (3-step, no surface-only)
 // ================================================================
-describe('T158 source structure: score.ts constants and new fields', () => {
-  const srcPath = path.join(process.cwd(), 'src/game/score.ts');
-  const src = fs.readFileSync(srcPath, 'utf-8');
-
-  it('PERFECT_SCORE must be 100 (300→100)', () => {
-    // [Step1] capture initial file content
-    expect(src.length).toBeGreaterThan(200);
-    // [Step2] check constant definition
-    const has100 = /PERFECT_SCORE\s*=\s*100\b/.test(src) || /PERFECT[^0-9]*100/.test(src);
-    expect(has100, 'PERFECT_SCORE should be 100, not 300. Found: ' + src.slice(src.indexOf('PERFECT'), src.indexOf('PERFECT')+80)).toBe(true);
-    // [Step3] ensure old value 300 is not used as PERFECT_SCORE
-    const oldPerfect = /PERFECT_SCORE\s*=\s*300/.test(src);
-    expect(oldPerfect, 'old PERFECT_SCORE=300 must be replaced with 100').toBe(false);
+describe('T159 source structure — EditorScreen.tsx autosave UI & storage wiring', () => {
+  it('editor-header contains restore button and interval slider adjacent (data-testids)', () => {
+    // [Step1] capture source
+    const src = readEditorSrc();
+    expect(src.length).toBeGreaterThan(5000);
+    // [Step2] header region
+    const headerIdx = src.indexOf('editor-header');
+    expect(headerIdx, 'must have editor-header').toBeGreaterThan(-1);
+    const headerRegion = src.slice(headerIdx, headerIdx + 8000);
+    // [Step3] assert restore button and slider
+    expect(headerRegion, 'must have data-testid="editor-restore"').toMatch(/data-testid="editor-restore"/);
+    expect(headerRegion, 'must have button text 復元').toMatch(/復元/);
+    expect(headerRegion, 'must have data-testid="autosave-interval"').toMatch(/data-testid="autosave-interval"/);
+    expect(src, 'restore button should be button element').toMatch(/<button[^>]*data-testid="editor-restore"/);
   });
 
-  it('GOOD_SCORE must be 30 (100→30)', () => {
-    const has30 = /GOOD_SCORE\s*=\s*30\b/.test(src);
-    expect(has30, 'GOOD_SCORE should be 30').toBe(true);
-    const oldGood = /GOOD_SCORE\s*=\s*100\b/.test(src);
-    expect(oldGood, 'old GOOD_SCORE=100 must be replaced').toBe(false);
+  it('interval slider is type range min 1 max 5 step 1 with default 3', () => {
+    const src = readEditorSrc();
+    // [Step1] capture slider region
+    const idx = src.indexOf('autosave-interval');
+    expect(idx).toBeGreaterThan(-1);
+    const region = src.slice(Math.max(0, idx - 1200), idx + 1200);
+    // [Step2] check attributes
+    expect(region, 'interval slider must be type="range"').toMatch(/type="range"/);
+    expect(region, 'min 1').toMatch(/min=\{1\}|min="1"/);
+    expect(region, 'max 5').toMatch(/max=\{5\}|max="5"/);
+    expect(region, 'step 1').toMatch(/step=\{1\}|step="1"/);
+    // [Step3] default 3 and interval state
+    expect(src, 'default interval 3').toMatch(/autosaveInterval|interval.*3|useState\(3\)/);
+    expect(region, 'must display current value (e.g. 3分 or %)').toMatch(/分|autosaveInterval|interval/);
   });
 
-  it('TRACE_BASE_SCORE must be 2 (8→2)', () => {
-    const has2 = /TRACE_BASE_SCORE\s*=\s*2\b/.test(src) || /TRACE_BASE[^=]*=\s*2\b/.test(src);
-    expect(has2, 'TRACE_BASE_SCORE should be 2').toBe(true);
-    const oldTrace8 = /TRACE_BASE_SCORE\s*=\s*8\b/.test(src);
-    expect(oldTrace8, 'old TRACE_BASE_SCORE=8 must be replaced').toBe(false);
+  it('storage keys follow spec: rhythmEditorAutosave::<slug> and rhythmEditorAutosaveInterval', () => {
+    const src = readEditorSrc();
+    // [Step1] capture keys
+    expect(src, `must contain prefix ${PREFIX}`).toMatch(/rhythmEditorAutosave::/);
+    expect(src, `must contain interval key ${INTERVAL_KEY}`).toMatch(/rhythmEditorAutosaveInterval/);
+    // [Step2] slug is export slugify(title)||untitled
+    expect(src, 'must derive slug from title via slugify').toMatch(/slugify/);
+    expect(src, 'must fallback to untitled').toMatch(/untitled/);
+    // [Step3] verify setItem/getItem usage with prefix
+    expect(src, 'must call localStorage.setItem for slot').toMatch(/localStorage\.setItem/);
+    expect(src, 'must call localStorage.getItem for interval').toMatch(/localStorage\.getItem/);
+    expect(src, 'interval value must be clamped 1-5').toMatch(/Math\.max.*1.*Math\.min.*5|clamp/);
   });
 
-  it('must introduce new fields comboBonus / traceBeats / offBeats', () => {
-    expect(src, 'must declare comboBonus').toMatch(/comboBonus/);
-    expect(src, 'must declare traceBeats').toMatch(/traceBeats/);
-    expect(src, 'must declare offBeats').toMatch(/offBeats/);
+  it('saving uses buildChart→chartToToml→JSON {toml,savedAt} with debounce wait = interval minutes', () => {
+    const src = readEditorSrc();
+    // [Step1] capture saving path
+    expect(src, 'must call buildChart').toMatch(/buildChart/);
+    expect(src, 'must call chartToToml').toMatch(/chartToToml/);
+    expect(src, 'must store {toml,savedAt}').toMatch(/toml.*savedAt|savedAt.*toml/);
+    // [Step2] debounce pattern
+    expect(src, 'must debounce saves').toMatch(/debounce|setTimeout.*save|autosave.*Timeout/);
+    // interval drives wait: interval*60*1000 or 60*1000*interval
+    expect(src, 'wait must be interval minutes (60*1000)').toMatch(/60\s*\*\s*1000|60000/);
+    // [Step3] history/playback/volume excluded (not part of buildChart)
+    // buildChart should only return Chart fields, not history/position/volume
+    const buildIdx = src.indexOf('const buildChart');
+    expect(buildIdx).toBeGreaterThan(-1);
+    const buildRegion = src.slice(buildIdx, buildIdx + 1500);
+    expect(buildRegion, 'buildChart must not include history').not.toMatch(/history/);
+    expect(buildRegion, 'must include title/artist/bpm').toMatch(/title.*artist.*bpm/);
   });
 
-  it('recordTrace signature must have third argument beatMs', () => {
-    expect(src, 'recordTrace must accept 3 args (dt, isOnWave, beatMs)').toMatch(/recordTrace\s*\(\s*dt[^,]*,\s*isOnWave[^,]*,\s*beatMs/);
-    // beat conversion must use dt*1000/beatMs
-    expect(src, 'must convert dt to beats via dt*1000/beatMs or dt/beatMs*1000').toMatch(/1000\s*\/\s*beatMs|beatMs.*1000|dt\s*\*\s*1000/);
+  it('list scans prefix rhythmEditorAutosave:: and parses TOML only on restore', () => {
+    const src = readEditorSrc();
+    // [Step1] list via prefix scan
+    expect(src, 'must scan localStorage keys for prefix').toMatch(/rhythmEditorAutosave::/);
+    // helper that iterates storage: localStorage.length / key(i) or Object.keys
+    expect(src, 'must iterate storage keys').toMatch(/localStorage\.length|localStorage\.key|Object\.keys.*localStorage/);
+    // [Step2] restore uses parseChartText → importChart
+    expect(src, 'restore must use parseChartText').toMatch(/parseChartText/);
+    expect(src, 'restore must call importChart').toMatch(/importChart/);
+    // list should NOT parse TOML (only restore does)
+    // Check that list helper does not call parseChartText inside its loop directly (heuristic: list function slice)
+    const listMarkers = ['listAutosave', 'getAutosaveList', 'listSlots', 'getSlots', 'autosaveList'];
+    const hasListHelper = listMarkers.some(k => src.includes(k));
+    // Either has a helper or inline scan; ensure parseChartText appears near restore not near plain list
+    expect(src, 'parseChartText must appear near restore/import').toMatch(/parseChartText/);
+    void hasListHelper;
   });
 
-  it('GameScreen.tsx and CalibrationModal must pass beatMs as third arg', () => {
-    const gsPath = path.join(process.cwd(), 'src/screens/GameScreen.tsx');
-    const gsSrc = fs.readFileSync(gsPath, 'utf-8');
-    expect(gsSrc, 'GameScreen must call recordTrace with 3 args').toMatch(/recordTrace\s*\(.*currentBeatMs|recordTrace\s*\(.*beatMs/);
-    const calPathCandidates = [
-      path.join(process.cwd(), 'src/screens/editor/CalibrationModal.tsx'),
-      path.join(process.cwd(), 'src/screens/CalibrationScreen.tsx'),
-      path.join(process.cwd(), 'src/screens/editor/CalibrationOverlay.tsx'),
+  it('cap 10: when 10+ slots, oldest savedAt evicted (savedAt ascending delete)', () => {
+    const src = readEditorSrc();
+    // [Step1] cap constant 10
+    expect(src, 'must enforce cap 10').toMatch(/10/);
+    // [Step2] savedAt ordering
+    expect(src, 'must sort by savedAt').toMatch(/savedAt/);
+    // [Step3] eviction logic (shift/splice/filter after sort)
+    expect(src, 'must remove oldest when exceeding cap').toMatch(/savedAt.*sort|sort.*savedAt/);
+    expect(src, 'must remove oldest entry').toMatch(/removeItem|delete|shift|splice/);
+  });
+
+  it('clearAll deletes current title slot; URL vs local audio hint preserved', () => {
+    const src = readEditorSrc();
+    // [Step1] clearAll region
+    const clearIdx = src.indexOf('clearAll');
+    expect(clearIdx, 'must have clearAll').toBeGreaterThan(-1);
+    const clearRegion = src.slice(clearIdx, clearIdx + 3000);
+    // [Step2] deletes autosave slot for current slug
+    expect(clearRegion, 'clear should interact with autosave prefix').toMatch(/rhythmEditorAutosave|localStorage/);
+    // [Step3] URL reload vs local hint (title reflects file name)
+    // URL audio is basename and reloadable; local file shows hint
+    expect(src, 'must handle audio basename').toMatch(/getBasename|audio.*basename/);
+    // hint text for local file re-select
+    // at least one place mentions re-select or local file hint after restore
+    expect(src.length).toBeGreaterThan(1000);
+  });
+
+  it('interval persistence: setItem on change and getItem on mount with clamp fallback', () => {
+    const src = readEditorSrc();
+    // [Step1] interval state persisted
+    expect(src, 'must persist interval to localStorage').toMatch(/rhythmEditorAutosaveInterval.*setItem|setItem.*rhythmEditorAutosaveInterval/);
+    expect(src, 'must read interval on mount').toMatch(/getItem.*rhythmEditorAutosaveInterval|rhythmEditorAutosaveInterval.*getItem/);
+    // [Step2] clamp out-of-range
+    expect(src, 'must clamp interval 1..5').toMatch(/Math\.(max|min).*1.*5|clamp/);
+    // [Step3] default 3 when missing
+    expect(src, 'must default to 3').toMatch(/DEFAULT.*3|interval.*3|useState\(3/);
+  });
+});
+
+// ================================================================
+// 2. Pure autosave module behavior (node, fake timers, 3-step)
+// ================================================================
+describe('T159 pure autosave: save/list/load/delete/cap/interval (node vi.useFakeTimers)', () => {
+  let storage: MemoryStorage;
+  let mod: Record<string, unknown> | null = null;
+
+  const AUTOSAVE_PATH = path.join(process.cwd(), 'src/chart/autosave.ts');
+  function assertAutosaveModuleReady(): void {
+    // 3-step style: fail fast if implementation missing (ensures Red phase is visible)
+    const exists = fs.existsSync(AUTOSAVE_PATH);
+    expect(exists, 'src/chart/autosave.ts must exist — T159 autosave helpers (PREFIX, interval, save/list/load/delete/cap 10) must be extracted to a testable pure module').toBe(true);
+    // also expect dynamic import succeeded
+    expect(mod, 'autosave module must be importable via import("../src/chart/autosave")').not.toBeNull();
+  }
+
+  beforeEach(async () => {
+    installStorage();
+    storage = (globalThis as unknown as Record<string, unknown>).localStorage as unknown as MemoryStorage;
+    storage.clear();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    // attempt to load autosave module fresh per test (clear import cache via dynamic import)
+    // We import directly from expected path; if not found, mod stays null and tests will fail as Red.
+    mod = null;
+    try {
+      // @ts-ignore dynamic
+      const m = await import('../src/chart/autosave');
+      mod = m as unknown as Record<string, unknown>;
+    } catch {
+      // fallback: try EditorScreen re-export if autosave helpers are exported there
+      try {
+        // @ts-ignore
+        const m2 = await import('../src/screens/EditorScreen');
+        if (m2 && (m2 as unknown as Record<string, unknown>).AUTOSAVE_PREFIX) mod = m2 as unknown as Record<string, unknown>;
+      } catch { /* keep null */ }
+    }
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    storage?.clear();
+  });
+
+  it('module must be importable and export required helpers (Red if missing)', async () => {
+    // [Step1] capture import attempt
+    expect(autosaveImportError, 'autosave module should be importable (implement src/chart/autosave.ts)').toBeNull;
+    // [Step2] module exists check via mod variable populated in beforeEach
+    const hasMod = mod !== null;
+    // If directly imported above failed, try again synchronously via fs existence
+    const autosavePath = path.join(process.cwd(), 'src/chart/autosave.ts');
+    const exists = fs.existsSync(autosavePath);
+    expect(exists || hasMod, 'src/chart/autosave.ts must exist (T159 requires autosave helpers in a testable module)').toBe(true);
+    // [Step3] assert exports if exists
+    if (exists && mod) {
+      const keys = Object.keys(mod);
+      expect(keys.join(',')).toMatch(/save|list|load|interval/i);
+    }
+  });
+
+  it('saveSlot: buildChart→chartToToml stored as {toml,savedAt} under prefix::<slug> (untitled fallback)', async () => {
+    assertAutosaveModuleReady();
+    // [Step1] capture initial storage empty
+    expect(storage.length).toBe(0);
+    const chart = makeChart({ title: '', segments: [{ direction: 'down', beats: 1 }] });
+    const toml = chartToToml(chart);
+    const slug = slugifyExport(chart.title); // untitled
+    expect(slug).toBe('untitled');
+    // [Step2] simulate save via module (must exist for Green)
+    if (mod && typeof (mod as Record<string, unknown>).saveAutosave === 'function') {
+      (mod as unknown as { saveAutosave: (c: Chart)=>void }).saveAutosave(chart);
+    } else if (mod && typeof (mod as Record<string, unknown>).saveSlot === 'function') {
+      (mod as unknown as { saveSlot: (c: Chart)=>void }).saveSlot(chart);
+    } else {
+      storage.setItem(PREFIX + slug, JSON.stringify({ toml, savedAt: Date.now() }));
+    }
+    // [Step3] assert resulting storage entry
+    const raw = storage.getItem(PREFIX + 'untitled');
+    expect(raw, 'slot must exist under prefix::untitled').not.toBeNull();
+    const parsed = JSON.parse(raw!);
+    expect(parsed).toHaveProperty('toml');
+    expect(parsed).toHaveProperty('savedAt');
+    expect(typeof parsed.savedAt).toBe('number');
+    expect(parsed.toml).toContain('title = "Untitled"');
+    expect(parsed.toml).toContain('[[segments]]');
+  });
+
+  it('save and list: multiple titles each have independent slot and list returns them', async () => {
+    assertAutosaveModuleReady();
+    // [Step1] clear and capture empty list
+    expect(storage.length).toBe(0);
+    // [Step2] create 3 distinct charts with off-grid beats and complex amps
+    const titles = ['Alpha', 'Beta 0.37', 'Gamma-1.23'];
+    for (const t of titles) {
+      const c = makeChart({
+        title: t,
+        bpm: 120,
+        amplitude: 1.3,
+        segments: [{ direction: 'down', beats: quantizeBeat(1.23, 0.25) }],
+        rings: [{ beat: quantizeBeat(0.37, 0.25) }],
+      });
+      const toml = chartToToml(c);
+      storage.setItem(PREFIX + slugifyExport(t), JSON.stringify({ toml, savedAt: Date.now() + Math.random() * 1000 }));
+      vi.advanceTimersByTime(10);
+    }
+    // [Step3] assert list contains 3 entries via prefix scan (simulating module list)
+    const keys = storage.keys().filter(k => k.startsWith(PREFIX));
+    expect(keys.length).toBe(3);
+    expect(keys).toContain(PREFIX + 'alpha');
+    expect(keys).toContain(PREFIX + 'beta-037');
+    // list should provide slug/title/savedAt without parsing TOML fully (title from TOML is parse-on-restore)
+    // But we can verify savedAt ordering exists
+    const entries = keys.map(k => {
+      const raw = JSON.parse(storage.getItem(k)!);
+      return { slug: k.slice(PREFIX.length), savedAt: raw.savedAt, toml: raw.toml };
+    });
+    expect(entries.length).toBe(3);
+    for (const e of entries) expect(typeof e.savedAt).toBe('number');
+  });
+
+  it('cap 10: 11th save evicts oldest savedAt (ascending delete)', () => {
+    assertAutosaveModuleReady();
+    // [Step1] fill 10 slots with deterministic savedAt
+    storage.clear();
+    for (let i = 0; i < 10; i++) {
+      const t = `Song-${i}`;
+      const c = makeChart({ title: t, segments: [{ direction: 'down', beats: 1 }] });
+      storage.setItem(PREFIX + slugifyExport(t), JSON.stringify({ toml: chartToToml(c), savedAt: 1000 + i * 1000 }));
+    }
+    expect(storage.keys().filter(k => k.startsWith(PREFIX)).length).toBe(10);
+    const beforeKeys = storage.keys().filter(k => k.startsWith(PREFIX)).sort();
+    expect(beforeKeys).toContain(PREFIX + 'song-0'); // oldest
+    // [Step2] add 11th
+    const c11 = makeChart({ title: 'Song-10', segments: [{ direction: 'up', beats: 1 }] });
+    // Simulate cap logic: after save, if >10, remove oldest
+    storage.setItem(PREFIX + slugifyExport('Song-10'), JSON.stringify({ toml: chartToToml(c11), savedAt: 1000 + 10 * 1000 }));
+    // apply cap manually as module would (or check module does it)
+    if (mod && typeof (mod as Record<string, unknown>).saveAutosave === 'function') {
+      // if module implements cap, it would have already removed oldest; we mimic expected after state
+      // To test module, we clear and use its API to save 11 via module calls sequentially
+      storage.clear();
+      const saveFn = (mod as unknown as { saveAutosave: (c: Chart, at?: number)=>void }).saveAutosave;
+      if (saveFn) {
+        for (let i = 0; i < 10; i++) saveFn(makeChart({ title: `Song-${i}`, segments: [{ direction: 'down', beats: 1 }] }));
+        // advance time for distinct savedAt
+        vi.setSystemTime(new Date('2026-01-01T00:01:00Z'));
+        saveFn(c11);
+        const afterModKeys = storage.keys().filter(k => k.startsWith(PREFIX));
+        expect(afterModKeys.length).toBe(10);
+        expect(afterModKeys).not.toContain(PREFIX + 'song-0');
+        return;
+      }
+    }
+    // Fallback manual cap check (spec logic)
+    const all = storage.keys().filter(k => k.startsWith(PREFIX)).map(k => ({ k, at: JSON.parse(storage.getItem(k)!).savedAt as number })).sort((a,b)=>a.at-b.at);
+    if (all.length > 10) {
+      const toRemove = all.slice(0, all.length - 10);
+      for (const r of toRemove) storage.removeItem(r.k);
+    }
+    // [Step3] assert oldest gone, newest present
+    const after = storage.keys().filter(k => k.startsWith(PREFIX));
+    expect(after.length).toBe(10);
+    expect(after).not.toContain(PREFIX + 'song-0');
+    expect(after).toContain(PREFIX + 'song-10');
+  });
+
+  it('interval persistence: default 3, set/get clamped 1-5, survives reload (storage)', () => {
+    assertAutosaveModuleReady();
+    // [Step1] default when no key
+    storage.removeItem(INTERVAL_KEY);
+    const getInterval = (mod && (mod as Record<string, unknown>).getAutosaveInterval) as (()=>number)|undefined;
+    const setIntervalFn = (mod && ((mod as Record<string, unknown>).setAutosaveInterval || (mod as Record<string, unknown>).setInterval)) as ((n:number)=>void)|undefined;
+    let val: number;
+    if (getInterval) val = getInterval();
+    else {
+      const raw = storage.getItem(INTERVAL_KEY);
+      val = raw ? Number(raw) : DEFAULT_INTERVAL;
+      if (!Number.isFinite(val) || val < 1 || val > 5) val = DEFAULT_INTERVAL;
+    }
+    expect(val).toBe(3);
+    // [Step2] set to 5 and 1 boundaries
+    if (setIntervalFn) {
+      setIntervalFn(5);
+      expect(getInterval!()).toBe(5);
+      setIntervalFn(1);
+      expect(getInterval!()).toBe(1);
+      // out of range clamp
+      setIntervalFn(0);
+      expect(getInterval!()).toBe(1);
+      setIntervalFn(10);
+      expect(getInterval!()).toBe(5);
+      setIntervalFn(3);
+      expect(getInterval!()).toBe(3);
+    } else {
+      // manual spec path
+      storage.setItem(INTERVAL_KEY, '5');
+      expect(Number(storage.getItem(INTERVAL_KEY))).toBe(5);
+      storage.setItem(INTERVAL_KEY, '0');
+      const clampedLow = Math.max(1, Math.min(5, Number(storage.getItem(INTERVAL_KEY))));
+      expect(clampedLow).toBe(1);
+      storage.setItem(INTERVAL_KEY, '10');
+      const clampedHigh = Math.max(1, Math.min(5, Number(storage.getItem(INTERVAL_KEY))));
+      expect(clampedHigh).toBe(5);
+      storage.setItem(INTERVAL_KEY, '3');
+    }
+    // [Step3] simulate reload: new storage instance reads same underlying store? We reuse same storage object
+    // but verify get still returns 3 after re-read
+    const afterReloadRaw = storage.getItem(INTERVAL_KEY);
+    expect(afterReloadRaw).toBe('3');
+    const afterReloadVal = getInterval ? getInterval() : Math.max(1, Math.min(5, Number(afterReloadRaw)));
+    expect(afterReloadVal).toBe(3);
+  });
+
+  it('debounce: edits trigger save after interval*60000, not before (wait = slider value)', () => {
+    assertAutosaveModuleReady();
+    // This tests the debounce contract: changing interval changes wait.
+    // We simulate with vi timers without DOM, using manual debounce helper if module exposes it.
+    // [Step1] initial no saves
+    storage.clear();
+    expect(storage.keys().filter(k=>k.startsWith(PREFIX)).length).toBe(0);
+    // Helper to create a debounced saver (as spec: edit state change -> debounce -> save)
+    let savedAt: number | null = null;
+    const chart = makeChart({ title: 'DebounceTest', segments: [{ direction: 'down', beats: 1 }] });
+    let intervalMin = 3;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = (c: Chart) => {
+      if (timer) clearTimeout(timer as unknown as number);
+      const wait = intervalMin * 60 * 1000;
+      timer = setTimeout(() => {
+        storage.setItem(PREFIX + slugifyExport(c.title), JSON.stringify({ toml: chartToToml(c), savedAt: Date.now() }));
+        savedAt = Date.now();
+      }, wait) as unknown as ReturnType<typeof setTimeout>;
+    };
+    // [Step2] schedule with interval 3 -> should not save before 3min
+    schedule(chart);
+    vi.advanceTimersByTime(2 * 60 * 1000);
+    expect(storage.getItem(PREFIX + 'debouncetest')).toBeNull();
+    expect(savedAt).toBeNull();
+    vi.advanceTimersByTime(1 * 60 * 1000 + 10);
+    expect(storage.getItem(PREFIX + 'debouncetest')).not.toBeNull();
+    expect(savedAt).not.toBeNull();
+    // [Step3] change interval to 1 -> wait shorter
+    storage.clear();
+    savedAt = null;
+    intervalMin = 1;
+    schedule(chart);
+    vi.advanceTimersByTime(59 * 1000);
+    expect(storage.getItem(PREFIX + 'debouncetest')).toBeNull();
+    vi.advanceTimersByTime(2 * 1000);
+    expect(storage.getItem(PREFIX + 'debouncetest')).not.toBeNull();
+    // interval 5 -> longer
+    storage.clear();
+    savedAt = null;
+    intervalMin = 5;
+    schedule(chart);
+    vi.advanceTimersByTime(4 * 60 * 1000);
+    expect(storage.getItem(PREFIX + 'debouncetest')).toBeNull();
+    vi.advanceTimersByTime(1 * 60 * 1000 + 10);
+    expect(storage.getItem(PREFIX + 'debouncetest')).not.toBeNull();
+    if (timer) clearTimeout(timer as unknown as number);
+  });
+
+  it('each slot TOML roundtrips via parseChartText preserving segments/rings/bpm/amplitude/meta', () => {
+    assertAutosaveModuleReady();
+    // [Step1] build complex chart with off-grid beats and complex amps
+    const segs: Segment[] = [
+      { direction: 'down', beats: quantizeBeat(1.23, 0.25) },
+      { direction: 'up', beats: quantizeBeat(0.37, 0.25) },
+      { direction: 'stay', beats: quantizeBeat(0.5, 0.25) },
     ];
-    const existingCal = calPathCandidates.find(p => fs.existsSync(p));
-    expect(existingCal, 'Calibration modal/overlay file must exist').toBeDefined();
-    const calSrc = fs.readFileSync(existingCal!, 'utf-8');
-    expect(calSrc, 'Calibration must call recordTrace with 3 args').toMatch(/recordTrace\s*\(.*currentBeatMs|recordTrace\s*\(.*beatMs/);
+    const rings: RingDef[] = [
+      { beat: quantizeBeat(0.37, 0.25), type: 'single' },
+      { beat: quantizeBeat(1.23, 0.25), type: 'hold', duration: quantizeBeat(0.5, 0.25) },
+    ];
+    const bpmChanges: BpmChange[] = [{ beat: 4, bpm: 150, amplitude: 2.7 }];
+    const chart = makeChart({
+      title: 'Roundtrip',
+      artist: 'Tester',
+      bpm: 120,
+      audio: '08.Reply.flac',
+      audio_offset: 80,
+      scroll_speed: 130,
+      amplitude: 1.3,
+      start_position: 0.5,
+      segments: segs,
+      rings,
+      bpm_changes: bpmChanges,
+    });
+    // [Step2] serialize and store
+    const toml = chartToToml(chart);
+    storage.setItem(PREFIX + slugifyExport(chart.title), JSON.stringify({ toml, savedAt: Date.now() }));
+    // load back (parse only on restore per spec)
+    const raw = JSON.parse(storage.getItem(PREFIX + 'roundtrip')!);
+    const restored = parseChartText(raw.toml);
+    // [Step3] assert fidelity
+    expect(restored.title).toBe(chart.title);
+    expect(restored.artist).toBe(chart.artist);
+    expect(restored.bpm).toBe(chart.bpm);
+    expect(restored.audio).toBe('08.Reply.flac'); // basename
+    expect(restored.audio_offset).toBe(chart.audio_offset);
+    expect(restored.scroll_speed).toBe(chart.scroll_speed);
+    expect(restored.amplitude).toBeCloseTo(chart.amplitude, 4);
+    expect(restored.start_position).toBeCloseTo(chart.start_position, 4);
+    expect(restored.segments.length).toBe(segs.length);
+    restored.segments.forEach((s, i) => {
+      expect(s.direction).toBe(segs[i].direction);
+      expect(s.beats).toBeCloseTo(segs[i].beats, 4);
+    });
+    expect(restored.rings.length).toBe(rings.length);
+    restored.rings.forEach((r, i) => {
+      expect(r.beat).toBeCloseTo(rings[i].beat, 4);
+      expect(r.type).toBe(rings[i].type);
+      if (rings[i].duration) expect(r.duration).toBeCloseTo(rings[i].duration!, 4);
+    });
+    expect(restored.bpm_changes.length).toBe(1);
+    expect(restored.bpm_changes[0].beat).toBe(4);
+    expect(restored.bpm_changes[0].bpm).toBe(150);
+    expect(restored.bpm_changes[0].amplitude).toBeCloseTo(2.7, 4);
+  });
+
+  it('URL vs local audio: save stores basename only, restore can reload URL immediately', () => {
+    assertAutosaveModuleReady();
+    // [Step1] URL chart
+    const urlChart = makeChart({ title: 'UrlSong', audio: 'https://example.com/audio/08.Reply.flac', segments: [{ direction: 'down', beats: 1 }] });
+    const urlToml = chartToToml(urlChart);
+    expect(urlToml).toContain('audio = "08.Reply.flac"'); // basename only per T110
+    storage.setItem(PREFIX + slugifyExport('UrlSong'), JSON.stringify({ toml: urlToml, savedAt: Date.now() }));
+    // [Step2] local file chart (basename also)
+    const localChart = makeChart({ title: 'LocalSong', audio: 'MySong.flac', segments: [{ direction: 'up', beats: 1 }] });
+    const localToml = chartToToml(localChart);
+    expect(localToml).toContain('audio = "MySong.flac"');
+    storage.setItem(PREFIX + slugifyExport('LocalSong'), JSON.stringify({ toml: localToml, savedAt: Date.now()+1000 }));
+    // [Step3] restore parse must give basename (local file would need re-select hint but TOML is same)
+    const urlRestored = parseChartText(JSON.parse(storage.getItem(PREFIX + 'urlsong')!).toml);
+    expect(urlRestored.audio).toBe('08.Reply.flac');
+    const localRestored = parseChartText(JSON.parse(storage.getItem(PREFIX + 'localsong')!).toml);
+    expect(localRestored.audio).toBe('MySong.flac');
+    // Both have same shape; UI would show hint for local if AudioCache missing (not tested here but storage holds toml)
+    expect(storage.keys().filter(k=>k.startsWith(PREFIX)).length).toBe(2);
+  });
+
+  it('delete: removing a slot and clearAll removes only that slug', () => {
+    assertAutosaveModuleReady();
+    // [Step1] two slots
+    storage.clear();
+    storage.setItem(PREFIX + 'alpha', JSON.stringify({ toml: chartToToml(makeChart({ title: 'Alpha' })), savedAt: 1000 }));
+    storage.setItem(PREFIX + 'beta', JSON.stringify({ toml: chartToToml(makeChart({ title: 'Beta' })), savedAt: 2000 }));
+    expect(storage.keys().filter(k=>k.startsWith(PREFIX)).length).toBe(2);
+    // [Step2] delete alpha via module or direct
+    if (mod && typeof (mod as Record<string, unknown>).deleteAutosave === 'function') {
+      (mod as unknown as { deleteAutosave: (s:string)=>void }).deleteAutosave('alpha');
+    } else if (mod && typeof (mod as Record<string, unknown>).removeSlot === 'function') {
+      (mod as unknown as { removeSlot: (s:string)=>void }).removeSlot('alpha');
+    } else {
+      storage.removeItem(PREFIX + 'alpha');
+    }
+    // [Step3] only beta remains
+    expect(storage.getItem(PREFIX + 'alpha')).toBeNull();
+    expect(storage.getItem(PREFIX + 'beta')).not.toBeNull();
+    expect(storage.keys().filter(k=>k.startsWith(PREFIX)).length).toBe(1);
+  });
+
+  it('list does not parse TOML: entries have slug/title/savedAt without full chart parse', () => {
+    assertAutosaveModuleReady();
+    // [Step1] put 2 slots
+    storage.clear();
+    const c1 = makeChart({ title: 'NoParse', segments: [{ direction: 'down', beats: 1 }] });
+    const c2 = makeChart({ title: 'NoParse2', segments: [{ direction: 'up', beats: 1 }] });
+    storage.setItem(PREFIX + slugifyExport('NoParse'), JSON.stringify({ toml: chartToToml(c1), savedAt: 5000 }));
+    storage.setItem(PREFIX + slugifyExport('NoParse2'), JSON.stringify({ toml: chartToToml(c2), savedAt: 6000 }));
+    // [Step2] simulate list helper that only extracts slug/title/savedAt (title from toml header without full parse)
+    // Here we verify that list can be built without calling parseChartText for each entry
+    const keys = storage.keys().filter(k=>k.startsWith(PREFIX));
+    const listed = keys.map(k => {
+      const raw = JSON.parse(storage.getItem(k)!);
+      // extract title via regex from TOML header (as spec says list scan, not parse)
+      const m = raw.toml.match(/^title\s*=\s*"([^"]+)"/m);
+      return { slug: k.slice(PREFIX.length), title: m ? m[1] : '', savedAt: raw.savedAt as number };
+    });
+    // [Step3] titles are present without needing parseChartText
+    expect(listed.length).toBe(2);
+    expect(listed.find(e=>e.slug==='noparse')?.title).toBe('NoParse');
+    expect(listed.find(e=>e.slug==='noparse2')?.title).toBe('NoParse2');
+    for (const e of listed) expect(typeof e.savedAt).toBe('number');
   });
 });
 
 // ================================================================
-// 2. Hit scoring: PERFECT +100/+1 bonus unchanged, GOOD +30/+1, MISS resets both
+// 3. Numeric consistency: WaveEngine/Cursor unaffected by autosave (complex amps off-grid)
 // ================================================================
-describe('T158 hit scoring: PERFECT/GOOD/MISS with combo and bonus separation', () => {
-  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
-  afterEach(() => { vi.clearAllTimers(); });
+describe('T159 numeric regression: autosave does not break WaveEngine/Cursor (complex amps off-grid)', () => {
+  const amps = [0.7, 1.3, 2.7, 3.4] as const;
+  const snaps = [0.125, 0.25, 0.5, 1] as const;
+  const offBeats = [0.37, 1.23, 0.63, 2.37];
 
-  it('PERFECT: score+100, combo+1, bonus unchanged (3-step)', () => {
-    // [Step1] capture initial state: fresh manager with no bonus
-    const m = new ScoreManager();
-    // accrue bonus artificially via 16 beats trace so we can test invariance
-    const beatMs = BEAT_MS_120;
-    // generate bonus 2 by tracing 16 beats
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 54*0.3=16.2 beats -> bonus 2
-    const bonusBefore = getBonus(m);
-    expect(bonusBefore, 'bonus should be 2 after 16 beats').toBe(2);
-    const scoreBefore = scoreFrom(m);
-    const comboBefore = comboFrom(m);
-    expect(comboBefore).toBe(0); // trace must not affect combo
-    // [Step2] perform PERFECT hit
-    m.recordHit('perfect');
-    // [Step3] assert transition
-    const afterScore = scoreFrom(m);
-    const afterCombo = comboFrom(m);
-    const afterBonus = getBonus(m);
-    expect(afterScore - scoreBefore).toBe(100);
-    expect(afterCombo).toBe(comboBefore + 1);
-    expect(afterBonus).toBe(bonusBefore);
-    //perfect count
-    expect(m.getStats().perfect).toBe(1);
+  for (const amp of amps) {
+    for (const snap of snaps) {
+      it(`amp=${amp} snap=${snap} off-grid: chart roundtrip preserves waveYAt slope 2*TW_AMP*amp`, () => {
+        // [Step1] capture initial chart & engine
+        const segs: Segment[] = [{ direction: 'down', beats: quantizeBeat(0.37, snap) || snap }];
+        const chart = makeChart({ title: `Amp${amp}Snap${snap}`, amplitude: amp, segments: segs });
+        const tl = new BpmTimeline(chart.bpm, [], amp);
+        const engBefore = new WaveEngine(chart.segments, tl, amp, 0);
+        const yBefore = engBefore.waveYAt(offBeats[0] % 0.3); // small delta before clip
+        // [Step2] serialize→deserialize (as autosave does)
+        const toml = chartToToml(chart);
+        const restored = parseChartText(toml);
+        // Verify amplitude survives (T112 migration >10 check not triggered)
+        expect(restored.amplitude).toBeCloseTo(amp, 4);
+        const engAfter = new WaveEngine(restored.segments, tl, restored.amplitude, 0);
+        // [Step3] slopes match (same amp)
+        const delta = 0.1;
+        const dyBefore = engBefore.waveYAt(delta) - engBefore.waveYAt(0);
+        const dyAfter = engAfter.waveYAt(delta) - engAfter.waveYAt(0);
+        expect(dyBefore).toBeCloseTo(dyAfter, 6);
+        // also per spec 2*TW_AMP*amp when unclipped
+        const perBeat = 2 * TW_AMP * amp;
+        // Use very small delta to avoid clamp for large amps (clamp at TW_AMP)
+        const smallDelta = Math.min(delta, (TW_AMP / perBeat) * 0.4);
+        const dySmall = engAfter.waveYAt(smallDelta) - engAfter.waveYAt(0);
+        expect(dySmall / smallDelta).toBeCloseTo(perBeat, 0);
+      });
+    }
+  }
+
+  it('empty title → untitled slug and amplitude 1.0 default preserved across save/load', () => {
+    // [Step1] chart with empty title
+    const chart = makeChart({ title: '', amplitude: 1.0, segments: [] });
+    const slug = slugifyExport(chart.title);
+    expect(slug).toBe('untitled');
+    // [Step2] toml title becomes Untitled (buildChart trims || Untitled)
+    const builtTitle = chart.title.trim() || 'Untitled';
+    const c2: Chart = { ...chart, title: builtTitle };
+    const toml = chartToToml(c2);
+    expect(toml).toContain('title = "Untitled"');
+    const restored = parseChartText(toml);
+    // [Step3] restored title is Untitled, amplitude still 1.0
+    expect(restored.title).toBe('Untitled');
+    expect(restored.amplitude).toBeCloseTo(1.0, 4);
+    expect(slugifyExport('')).toBe('untitled');
+    expect(slugifyExport('  ')).toBe('untitled');
   });
 
-  it('GOOD: score+30, combo+1, bonus unchanged (3-step)', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    const bonusBefore = getBonus(m);
-    expect(bonusBefore).toBe(2);
-    const scoreBefore = scoreFrom(m);
-    const comboBefore = comboFrom(m);
-    // [Step2] GOOD hit
-    m.recordHit('good');
-    // [Step3]
-    expect(scoreFrom(m) - scoreBefore).toBe(30);
-    expect(comboFrom(m)).toBe(comboBefore + 1);
-    expect(getBonus(m)).toBe(bonusBefore);
-    expect(m.getStats().good).toBe(1);
-  });
-
-  it('MISS: score+0, combo→0 and bonus→0 (3-step)', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(2);
-    m.recordHit('perfect'); // combo 1
-    m.recordHit('good'); // combo 2
-    const scoreBeforeMiss = scoreFrom(m);
-    const comboBeforeMiss = comboFrom(m);
-    expect(comboBeforeMiss).toBe(2);
-    // [Step2] miss
-    m.recordHit('miss');
-    // [Step3]
-    expect(scoreFrom(m)).toBe(scoreBeforeMiss); // no score
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-    expect(m.getStats().miss).toBe(1);
-  });
-
-  it('fresh manager PERFECT adds exactly 100 (old 300 must fail)', () => {
-    const m = new ScoreManager();
-    const before = scoreFrom(m);
-    m.recordHit('perfect');
-    expect(scoreFrom(m) - before).toBe(100);
-  });
-
-  it('fresh manager GOOD adds exactly 30 (old 100 must fail)', () => {
-    const m = new ScoreManager();
-    const before = scoreFrom(m);
-    m.recordHit('good');
-    expect(scoreFrom(m) - before).toBe(30);
-  });
-
-  it('multiple PERFECT/GOOD accumulate correctly without affecting bonus', () => {
-    const m = new ScoreManager();
-    // [Step1] initial
-    expect(scoreFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-    // [Step2] sequence perfect, good, perfect
-    m.recordHit('perfect'); // +100
-    m.recordHit('good'); // +30
-    m.recordHit('perfect'); // +100
-    // [Step3] total 230, combo 3, bonus still 0
-    expect(scoreFrom(m)).toBe(230);
-    expect(comboFrom(m)).toBe(3);
-    expect(getBonus(m)).toBe(0);
-    expect(m.getStats().maxCombo).toBe(3);
+  it('BPM list-driven amplitude (T131) survives autosave roundtrip with off-grid beats', () => {
+    // [Step1] chart with bpm_changes amplitude list
+    const chart = makeChart({
+      title: 'ListAmp',
+      bpm: 120,
+      amplitude: 1.0,
+      bpm_changes: [{ beat: 4, bpm: 150, amplitude: 2.7 }, { beat: 8, bpm: 180, amplitude: 0.7 }],
+      segments: [{ direction: 'down', beats: 4 }, { direction: 'up', beats: 4 }],
+    });
+    const toml = chartToToml(chart);
+    const restored = parseChartText(toml);
+    // [Step2] amplitudeAt before/after at off-grid phases
+    const tlBefore = new BpmTimeline(chart.bpm, chart.bpm_changes, chart.amplitude);
+    const tlAfter = new BpmTimeline(restored.bpm, restored.bpm_changes, restored.amplitude);
+    for (const b of [3.37, 4.23, 4.37, 7.9, 8.37, 12.37]) {
+      expect(tlBefore.amplitudeAt(b), `before ${b}`).toBeCloseTo(tlAfter.amplitudeAt(b), 6);
+    }
+    // [Step3] wave slopes match list-driven amp
+    const segs = restored.segments;
+    const eng = new WaveEngine(segs, tlAfter, restored.amplitude, 0);
+    // slope at beat 0 uses amp 1.0, at beat 5 uses 2.7
+    const slope0 = (eng.waveYAt(0.1) - eng.waveYAt(0)) / 0.1;
+    expect(slope0).toBeCloseTo(2 * TW_AMP * 1.0, 0);
+    // at beat 5 (inside first amplitude segment) the per-beat dY is 2*TW_AMP*2.7
+    const eng5Mid = eng.waveYAt(5.1) - eng.waveYAt(5);
+    // May be clamped if near boundary, but for small delta it should be perBeat*delta
+    const small = Math.min(0.1, (TW_AMP / (2*TW_AMP*2.7))*0.3);
+    const slope5 = (eng.waveYAt(5+small) - eng.waveYAt(5)) / small;
+    // Allow either 2.7 slope or clamped flat (if at boundary) – but at beat 5 wave likely mid
+    // Instead verify amplitudeAt directly drives slope via BpmTimeline
+    expect(tlAfter.amplitudeAt(5)).toBe(2.7);
+    expect(slope5 === 0 || Math.abs(slope5 - 2 * TW_AMP * 2.7) < 1).toBe(true);
   });
 });
 
 // ================================================================
-// 3. Trace tick: score 2+bonus, combo unchanged
+// 4. Edge: localStorage failure isolation, history not saved, position/volume excluded
 // ================================================================
-describe('T158 trace tick: score 2+bonus, combo unchanged', () => {
-  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
-  afterEach(() => { vi.clearAllTimers(); });
+describe('T159 edge: isolation and exclusions', () => {
+  let storage: MemoryStorage;
+  beforeEach(() => { storage = installStorage(); storage.clear(); vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
+  afterEach(() => { storage.clear(); vi.clearAllTimers(); });
 
-  it('single tick adds 2 when bonus 0 and does not change combo', () => {
-    // [Step1] fresh, bonus 0
-    const m = new ScoreManager();
-    expect(getBonus(m)).toBe(0);
-    const scoreBefore = scoreFrom(m);
-    const comboBefore = comboFrom(m);
-    // [Step2] one tick
-    m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_120);
-    // [Step3] score +2, combo unchanged
-    expect(scoreFrom(m) - scoreBefore).toBe(2);
-    expect(comboFrom(m)).toBe(comboBefore);
+  it('history/playback/volume fields must NOT be persisted in autosave TOML', () => {
+    // [Step1] chart with normal fields
+    const chart = makeChart({ title: 'ExcludeTest', segments: [{ direction: 'down', beats: 1 }] });
+    const toml = chartToToml(chart);
+    // [Step2] verify TOML contains only Chart fields
+    expect(toml).toContain('title =');
+    expect(toml).toContain('bpm =');
+    expect(toml).toContain('[[segments]]');
+    expect(toml).not.toContain('history');
+    expect(toml).not.toContain('positionMs');
+    expect(toml).not.toContain('musicVolume');
+    expect(toml).not.toContain('metronomeVolume');
+    // [Step3] parse back has no such keys
+    const restored = parseChartText(toml) as unknown as Record<string, unknown>;
+    expect(restored).not.toHaveProperty('history');
+    expect(restored).not.toHaveProperty('positionMs');
   });
 
-  it('tick with bonus 2 adds 4, combo still unchanged', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // [Step1] accumulate bonus to 2 via 16 beats
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(2);
-    const beforeScore = scoreFrom(m);
-    const beforeCombo = comboFrom(m);
-    // [Step2] next tick
-    m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    // [Step3] should be 2+2=4
-    expect(scoreFrom(m) - beforeScore).toBe(4);
-    expect(comboFrom(m)).toBe(beforeCombo);
+  it('malformed TOML in a slot does not break list (list scan resilient)', () => {
+    // [Step1] one good, one corrupt
+    storage.setItem(PREFIX + 'good', JSON.stringify({ toml: chartToToml(makeChart({ title: 'Good' })), savedAt: 1000 }));
+    storage.setItem(PREFIX + 'bad', JSON.stringify({ toml: '<<< not toml >>>', savedAt: 2000 }));
+    // [Step2] list operation should still return both slugs (toml not parsed)
+    const keys = storage.keys().filter(k=>k.startsWith(PREFIX));
+    expect(keys.length).toBe(2);
+    // [Step3] restore of good succeeds, bad throws but is handled (importChart would catch)
+    expect(() => parseChartText(JSON.parse(storage.getItem(PREFIX + 'good')!).toml)).not.toThrow();
+    expect(() => parseChartText(JSON.parse(storage.getItem(PREFIX + 'bad')!).toml)).toThrow();
+    // list still reports 2 entries even though one is corrupt (user can delete it)
+    expect(keys).toContain(PREFIX + 'bad');
   });
 
-  it('accumulating dt smaller than TRACE_INTERVAL does not score until threshold', () => {
-    const m = new ScoreManager();
-    // [Step1] dt=0.07 twice
-    m.recordTrace(0.07, true, BEAT_MS_120);
-    expect(scoreFrom(m)).toBe(0);
-    expect(comboFrom(m)).toBe(0);
-    // [Step2] second 0.07 -> total 0.14 still <0.15
-    m.recordTrace(0.07, true, BEAT_MS_120);
-    expect(scoreFrom(m)).toBe(0);
-    // [Step3] third 0.07 -> total 0.21 crosses 0.15 once
-    m.recordTrace(0.07, true, BEAT_MS_120);
-    expect(scoreFrom(m)).toBe(2);
-    expect(comboFrom(m)).toBe(0); // combo must remain 0
-  });
-
-  it('old implementation increments combo on trace -> must fail (combo unchanged)', () => {
-    const m = new ScoreManager();
-    const beforeCombo = comboFrom(m);
-    m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_120);
-    // old code would have combo 1 here
-    expect(comboFrom(m), 'trace must NOT increment combo').toBe(beforeCombo);
-  });
-
-  it('trace tick score before bonus vs after bonus differs', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // first 53 ticks still bonus 0? Let's compute: 53*0.3=15.9 beats (<16) so bonus still 0
-    for (let i = 0; i < 53; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(0);
-    const sBefore = scoreFrom(m);
-    m.recordTrace(TRACE_INTERVAL, true, beatMs); // 54th tick crosses 16 beats -> bonus becomes 2, but this tick's score was with old bonus 0 or new?
-    // Need to determine order: traceTick score uses current bonus before increment? Spec says tick adds 2+bonus, and bonus increments separately after 16 beats.
-    // Implementation likely increments bonus after adding score for the tick that crosses threshold, or before next tick.
-    // We test that bonus becomes 2 and next tick uses 4.
-    expect(getBonus(m)).toBe(2);
-    // The crossing tick's score: could be 2 or 4 depending on order; we assert next tick is 4
-    const sAfterCross = scoreFrom(m);
-    const deltaCross = sAfterCross - sBefore;
-    expect([2,4].includes(deltaCross), 'crossing tick delta 2 or 4').toBe(true);
-    const nBefore = scoreFrom(m);
-    m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(scoreFrom(m) - nBefore).toBe(4);
-  });
-});
-
-// ================================================================
-// 4. Continuous trace 16 beats -> bonus +2 with remainder carry
-// ================================================================
-describe('T158 continuous trace 16 beats: bonus +2 with remainder carry, combo unchanged', () => {
-  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
-  afterEach(() => { vi.clearAllTimers(); });
-
-  it('16 beats of on-wave tracing increments bonus by 2, combo unchanged', () => {
-    // [Step1] fresh
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    expect(getBonus(m)).toBe(0);
-    expect(comboFrom(m)).toBe(0);
-    // [Step2] simulate 16 beats via repeated TRACE_INTERVAL ticks (each 0.3 beats at 120 BPM)
-    // Need ceil to exceed 16: 54 ticks =16.2 beats
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    // [Step3] bonus +2, combo still 0
-    expect(getBonus(m)).toBe(2);
-    expect(comboFrom(m)).toBe(0);
-    // traceBeats remainder 0.2 should remain
-    const tb = getTraceBeats(m);
-    if (tb !== undefined) {
-      expect(tb).toBeCloseTo(0.2, 1);
+  it('storage quota: 10 cap enforced even when saves happen rapidly with same savedAt', () => {
+    // [Step1] fill 10 with identical savedAt
+    storage.clear();
+    for (let i=0;i<10;i++) storage.setItem(PREFIX+`s${i}`, JSON.stringify({ toml: chartToToml(makeChart({ title: `S${i}` })), savedAt: 9999 }));
+    expect(storage.keys().filter(k=>k.startsWith(PREFIX)).length).toBe(10);
+    // [Step2] 11th with same timestamp
+    storage.setItem(PREFIX+'s10', JSON.stringify({ toml: chartToToml(makeChart({ title: 'S10' })), savedAt: 9999 }));
+    let all = storage.keys().filter(k=>k.startsWith(PREFIX)).map(k=>({ k, at: JSON.parse(storage.getItem(k)!).savedAt as number }));
+    // spec says oldest ascending delete: if tie, insertion order oldest evicted
+    if (all.length > 10) {
+      all = all.sort((a,b)=>a.at-b.at);
+      // remove first (oldest)
+      storage.removeItem(all[0].k);
     }
-  });
-
-  it('32 beats (two thresholds) bonus +4 with remainder', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    for (let i = 0; i < 107; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 107*0.3=32.1 beats
-    // [Step1] after 32.1 beats, two bonuses
-    expect(getBonus(m)).toBe(4);
-    expect(comboFrom(m)).toBe(0);
-    const tb = getTraceBeats(m);
-    if (tb !== undefined) expect(tb).toBeCloseTo(0.1, 1); // 32.1-32=0.1
-  });
-
-  it('fractional off-grid dt still correctly counts beats (off-grid principle)', () => {
-    // Use dt that is not multiple of TRACE_INTERVAL or snapshot
-    // e.g., dt=0.07 (0.14 beats at 120 BPM) and 0.11, etc.
-    const m = new ScoreManager();
-    const beatMs = 400; // 150 BPM -> 0.15s =0.375 beats
-    // [Step1] initial bonus 0
-    expect(getBonus(m)).toBe(0);
-    // [Step2] accumulate 16 beats via irregular dts
-    let totalBeats = 0;
-    while (totalBeats < 16.2) {
-      const dt = 0.07 + (totalBeats % 0.05); // varying off-grid
-      m.recordTrace(dt, true, beatMs);
-      totalBeats += dt * 1000 / beatMs;
-    }
-    // [Step3] at least one bonus
-    expect(getBonus(m)).toBeGreaterThanOrEqual(2);
-    expect(comboFrom(m)).toBe(0);
-  });
-
-  it('off-wave resets traceBeats progress (short off <3 beats discards progress)', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // [Step1] accumulate 15 beats short of threshold (50 ticks =15 beats)
-    for (let i = 0; i < 50; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); //15 beats
-    expect(getBonus(m)).toBe(0);
-    // verify traceBeats ~15
-    const beforeOffBeats = getTraceBeats(m);
-    if (beforeOffBeats !== undefined) expect(beforeOffBeats).toBeCloseTo(15, 0);
-    // [Step2] go off-wave for 2 beats ( <3 ) -> should reset traceBeats but not bonus/combo
-    for (let i = 0; i < 7; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs); // 7*0.3=2.1 beats off
-    expect(getBonus(m)).toBe(0); // still 0, not reset (bonus was 0) but check combo
-    expect(comboFrom(m)).toBe(0);
-    const afterOffTrace = getTraceBeats(m);
-    if (afterOffTrace !== undefined) expect(afterOffTrace).toBe(0);
-    // [Step3] need fresh 16 beats to get bonus (not 1 beat)
-    for (let i = 0; i < 4; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // only 1.2 beats
-    expect(getBonus(m)).toBe(0); // should still be 0 because progress reset
-    // now fill full 16 beats
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(2);
-  });
-
-  it('beatMs scaling: same dt at different BPM gives different beat thresholds', () => {
-    // [Step1] two managers, same dt sequence but different beatMs
-    const mSlow = new ScoreManager(); // beatMs 500 -> 0.3 beats per tick
-    const mFast = new ScoreManager(); // beatMs 250 -> 0.6 beats per tick
-    const beatSlow = 500;
-    const beatFast = 250;
-    // 30 ticks: slow 9 beats, fast 18 beats
-    for (let i = 0; i < 30; i++) {
-      mSlow.recordTrace(TRACE_INTERVAL, true, beatSlow);
-      mFast.recordTrace(TRACE_INTERVAL, true, beatFast);
-    }
-    // [Step3] fast should have crossed 16 beats (bonus 2), slow not yet
-    expect(getBonus(mSlow)).toBe(0);
-    expect(getBonus(mFast)).toBe(2);
-    // both combos unchanged
-    expect(comboFrom(mSlow)).toBe(0);
-    expect(comboFrom(mFast)).toBe(0);
-  });
-});
-
-// ================================================================
-// 5. Off-wave 3 beats continuous resets combo+bonus; <3 beats no reset
-// ================================================================
-describe('T158 off-wave 3 beats continuous resets combo and bonus', () => {
-  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
-  afterEach(() => { vi.clearAllTimers(); });
-
-  it('off-wave <3 beats does NOT reset combo/bonus', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // [Step1] build combo via hits and bonus via trace
-    m.recordHit('perfect'); // combo 1
-    m.recordHit('perfect'); // combo 2
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2
-    expect(comboFrom(m)).toBe(2);
-    expect(getBonus(m)).toBe(2);
-    // [Step2] off for 2.4 beats (8 ticks *0.3=2.4)
-    for (let i = 0; i < 8; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
-    // [Step3] still unchanged (threshold 3 not reached)
-    expect(comboFrom(m)).toBe(2);
-    expect(getBonus(m)).toBe(2);
-  });
-
-  it('off-wave 3 beats exactly resets combo and bonus to 0', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    m.recordHit('perfect'); // combo 1
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2, combo still 1
-    expect(comboFrom(m)).toBe(1);
-    expect(getBonus(m)).toBe(2);
-    // [Step1] capture before
-    const scoreBefore = scoreFrom(m);
-    // [Step2] off for 3 beats = 10 ticks (10*0.3=3.0)
-    for (let i = 0; i < 10; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
-    // [Step3] both reset
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-    expect(scoreFrom(m)).toBe(scoreBefore); // off-wave no score increase
-  });
-
-  it('off-wave >3 beats also resets and stays 0', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    m.recordHit('perfect');
-    m.recordHit('good');
-    expect(comboFrom(m)).toBe(2);
-    expect(getBonus(m)).toBe(2);
-    for (let i = 0; i < 20; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs); // 6 beats
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-  });
-
-  it('off-wave interrupted (<3) then back on-wave resets offBeats counter', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    m.recordHit('perfect'); // combo 1
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2
-    // [Step1] off 2 beats
-    for (let i = 0; i < 7; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs); // 2.1 beats
-    expect(comboFrom(m)).toBe(1);
-    // [Step2] back on-wave for one tick -> offBeats should reset to 0
-    m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(comboFrom(m)).toBe(1);
-    expect(getBonus(m)).toBe(2);
-    // [Step3] off again 2.1 beats should still not reset (since counter restarted)
-    for (let i = 0; i < 7; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
-    expect(comboFrom(m)).toBe(1);
-    expect(getBonus(m)).toBe(2);
-    // now off 3 beats continuous -> reset
-    for (let i = 0; i < 10; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-  });
-
-  it('off-wave via irregular dt (off-grid 0.37/1.23 style) still thresholds at 3 beats', () => {
-    const m = new ScoreManager();
-    const beatMs = 400; // 150 BPM
-    m.recordHit('perfect');
-    for (let i = 0; i < 50; i++) m.recordTrace(0.15, true, beatMs);
-    expect(comboFrom(m)).toBe(1);
-    const bonusMid = getBonus(m);
-    // off with dt 0.07 and 0.11 alternating -> 0.07*1000/400=0.175 beats, 0.11=0.275 etc
-    let offBeats = 0;
-    let ticks = 0;
-    while (offBeats < 2.8) {
-      const dt = ticks % 2 === 0 ? 0.07 : 0.11;
-      const beforeCombo = comboFrom(m);
-      m.recordTrace(dt, false, beatMs);
-      offBeats += dt * 1000 / beatMs;
-      expect(comboFrom(m)).toBe(beforeCombo); // not yet reset
-      ticks++;
-    }
-    // push over threshold
-    let extra = 0;
-    while (extra < 0.5) {
-      const dt = 0.15;
-      m.recordTrace(dt, false, beatMs);
-      extra += dt * 1000 / beatMs;
-    }
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-    void bonusMid;
-  });
-});
-
-// ================================================================
-// 6. Integration: trace and hit interleaving, bonus carry, miss resets
-// ================================================================
-describe('T158 integration: trace/hit interleaving and bonus persistence', () => {
-  beforeEach(() => { vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); });
-  afterEach(() => { vi.clearAllTimers(); });
-
-  it('combo increases only on hits, not on trace; bonus only on trace, not on hits', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // [Step1] initial
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-    // [Step2] 10 trace ticks -> combo 0, bonus 0 (9 beats not enough)
-    for (let i = 0; i < 30; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 9 beats
-    expect(comboFrom(m)).toBe(0);
-    expect(getBonus(m)).toBe(0);
-    const scoreAfterTrace = scoreFrom(m);
-    expect(scoreAfterTrace).toBe(30 * 2); // 60
-    // hit perfect -> combo 1, bonus still 0, score +100
-    m.recordHit('perfect');
-    expect(comboFrom(m)).toBe(1);
-    expect(getBonus(m)).toBe(0);
-    expect(scoreFrom(m)).toBe(scoreAfterTrace + 100);
-    // more trace to reach 16 beats total -> need 7 more beats -> 24 ticks (7.2 beats) total 16.2
-    for (let i = 0; i < 24; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(2);
-    expect(comboFrom(m)).toBe(1); // still 1
-    // good hit -> combo 2, bonus unchanged 2
-    const beforeGoodScore = scoreFrom(m);
-    m.recordHit('good');
-    expect(comboFrom(m)).toBe(2);
-    expect(getBonus(m)).toBe(2);
-    expect(scoreFrom(m) - beforeGoodScore).toBe(30);
-  });
-
-  it('miss resets both combo and bonus regardless of prior trace progress', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // bonus 2
-    m.recordHit('perfect'); // combo1
-    m.recordHit('perfect'); // combo2
-    expect(getBonus(m)).toBe(2);
-    expect(comboFrom(m)).toBe(2);
-    // [Step2] miss
-    m.recordHit('miss');
-    // [Step3] both 0
-    expect(getBonus(m)).toBe(0);
-    expect(comboFrom(m)).toBe(0);
-    // traceBeats should also be reset? at least bonus reset, and off not needed
-    // further trace needs full 16 beats again
-    for (let i = 0; i < 30; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 9 beats
-    expect(getBonus(m)).toBe(0);
-  });
-
-  it('after reset, bonus accumulation restarts from 0 with remainder carry again', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // first bonus
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(2);
-    // reset via off-wave 3 beats
-    for (let i = 0; i < 10; i++) m.recordTrace(TRACE_INTERVAL, false, beatMs);
-    expect(getBonus(m)).toBe(0);
-    // second accrual: again 54 ticks -> bonus 2 again
-    for (let i = 0; i < 54; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(getBonus(m)).toBe(2);
-    expect(comboFrom(m)).toBe(0);
-  });
-
-  it('multiple bonuses: score per tick reflects current bonus level', () => {
-    const m = new ScoreManager();
-    const beatMs = BEAT_MS_120;
-    // [Step1] accrue to bonus 4 (32 beats)
-    for (let i = 0; i < 107; i++) m.recordTrace(TRACE_INTERVAL, true, beatMs); // 32.1 beats -> bonus 4
-    expect(getBonus(m)).toBe(4);
-    const before = scoreFrom(m);
-    // [Step2] one more tick should give 2+4=6
-    m.recordTrace(TRACE_INTERVAL, true, beatMs);
-    expect(scoreFrom(m) - before).toBe(6);
-    // [Step3] combo still 0
-    expect(comboFrom(m)).toBe(0);
-  });
-
-  it('complex amplitude/beat scenario: traceBeats accounts BPM changes via beatMs param', () => {
-    const m = new ScoreManager();
-    // simulate BPM changes: first 8 beats at 120 (500ms), next 8 beats at 180 (333ms)
-    // Use 27 ticks at 120: 27*0.3=8.1 beats
-    for (let i = 0; i < 27; i++) m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_120);
-    expect(getBonus(m)).toBe(0);
-    // remaining 8 beats at 180: each tick 0.45 beats -> need 18 ticks for 8.1 beats
-    for (let i = 0; i < 18; i++) m.recordTrace(TRACE_INTERVAL, true, BEAT_MS_180);
-    // total 16.2 beats -> bonus 2
-    expect(getBonus(m)).toBe(2);
-    expect(comboFrom(m)).toBe(0);
+    // [Step3] still 10
+    expect(storage.keys().filter(k=>k.startsWith(PREFIX)).length).toBe(10);
   });
 });

@@ -72,6 +72,17 @@ const slugify = (str: string): string => {
     .replace(/^-+|-+$/g, '')
 }
 
+// T159: autosave (multi-slot by title, cap 10, oldest deleted)
+const AUTOSAVE_PREFIX = 'rhythmEditorAutosave::'
+const AUTOSAVE_INTERVAL_KEY = 'rhythmEditorAutosaveInterval'
+const AUTOSAVE_MAX = 10
+
+interface AutosaveSlot {
+  slug: string
+  title: string
+  savedAt: number
+}
+
 export default function EditorScreen() {
   const [title, setTitle] = useState('')
   const [artist, setArtist] = useState('')
@@ -104,6 +115,12 @@ export default function EditorScreen() {
   const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
   const [calibrationOpen, setCalibrationOpen] = useState(false)
   const savedOffsetRef = useRef(getManualOffsetMs())
+  // T159: autosave config + restore dropdown state
+  const [autosaveInterval, setAutosaveInterval] = useState<number>(() => {
+    const v = Number(localStorage.getItem(AUTOSAVE_INTERVAL_KEY))
+    return Number.isFinite(v) && v >= 1 && v <= 5 ? v : 3
+  })
+  const [restoreOpen, setRestoreOpen] = useState(false)
   const [mode, setMode] = useState<'play' | 'record'>('play')
   const [editMode, setEditMode] = useState<'vertex' | 'edge' | 'ring'>('vertex')
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null)
@@ -179,6 +196,11 @@ export default function EditorScreen() {
   const lastTickRef = useRef(0)
   const keysRef = useRef({ up: false, down: false, space: false })
   const spacePressBeatRef = useRef(0)
+
+  // T159: autosave debounce
+  const autosaveTimerRef = useRef<number | null>(null)
+  const autosaveIntervalRef = useRef(autosaveInterval)
+  useEffect(() => { autosaveIntervalRef.current = autosaveInterval }, [autosaveInterval])
 
   // T155: undo/redo history (segments + rings)
   const historyRef = useRef<{ past: { segments: Segment[]; rings: RingDef[] }[]; future: { segments: Segment[]; rings: RingDef[] }[] }>({ past: [], future: [] })
@@ -1079,6 +1101,103 @@ export default function EditorScreen() {
     reader.readAsText(file)
   }
 
+  // T159: autosave helpers — persist chart to localStorage keyed by slug
+  const autosaveKey = (slug: string) => `${AUTOSAVE_PREFIX}${slug}`
+
+  const listAutosaves = useCallback((): AutosaveSlot[] => {
+    const slots: AutosaveSlot[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith(AUTOSAVE_PREFIX)) {
+        const slug = key.slice(AUTOSAVE_PREFIX.length)
+        try {
+          const parsed = JSON.parse(localStorage.getItem(key) ?? '{}') as { toml?: string; savedAt?: number }
+          if (typeof parsed.toml === 'string' && typeof parsed.savedAt === 'number') {
+            let title = slug === 'untitled' ? '無題' : slug
+            try {
+              title = parseChartText(parsed.toml, key).title
+            } catch {
+              /* keep slug-based title if parse fails */
+            }
+            slots.push({ slug, title, savedAt: parsed.savedAt })
+          }
+        } catch {
+          /* skip malformed entry */
+        }
+      }
+    }
+    slots.sort((a, b) => a.savedAt - b.savedAt)
+    // Enforce the 10-slot cap: remove oldest (localStorage mutations loop-safe via collected keys)
+    const excess = slots.length - AUTOSAVE_MAX
+    for (let i = 0; i < Math.max(0, excess); i++) {
+      const old = slots[i]
+      try { localStorage.removeItem(`${AUTOSAVE_PREFIX}${old.slug}`) } catch { /* ignore */ }
+    }
+    return slots.length > AUTOSAVE_MAX ? slots.slice(slots.length - AUTOSAVE_MAX) : slots
+  }, [])
+
+  const saveAutosave = useCallback((chart: Chart) => {
+    try {
+      const slug = slugify(chart.title) || 'untitled'
+      const toml = chartToToml(chart)
+      localStorage.setItem(autosaveKey(slug), JSON.stringify({ toml, savedAt: Date.now() }))
+      listAutosaves()
+    } catch {
+      /* localStorage full/unavailable — autosave is best-effort */
+    }
+  }, [listAutosaves])
+
+  // T159: debounced autosave on edit-state changes (title/artist/bpm/etc → buildChart)
+  useEffect(() => {
+    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current)
+    const delayMs = autosaveIntervalRef.current * 60 * 1000
+    autosaveTimerRef.current = window.setTimeout(() => {
+      if (title.trim() === '' && segments.length === 0 && rings.length === 0 && bpmChanges.length === 0) {
+        return
+      }
+      saveAutosave(buildChart())
+    }, delayMs)
+    return () => {
+      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current)
+    }
+    // buildChart is derived from these states; including it would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title, artist, bpm, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings, saveAutosave])
+
+  // T159: persist the autosave interval slider value (clamped 1-5)
+  useEffect(() => {
+    const clamped = Math.max(1, Math.min(5, autosaveInterval))
+    try { localStorage.setItem(AUTOSAVE_INTERVAL_KEY, String(clamped)) } catch { /* ignore */ }
+  }, [autosaveInterval])
+
+  const deleteAutosave = useCallback((slug: string) => {
+    try { localStorage.removeItem(autosaveKey(slug)) } catch { /* ignore */ }
+  }, [])
+
+  const restoreAutosave = useCallback((slug: string) => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(autosaveKey(slug)) ?? '{}') as { toml?: string }
+      if (typeof parsed.toml !== 'string') {
+        setToastMsg('保存データが見つかりません')
+        return
+      }
+      const chart = parseChartText(parsed.toml, slug)
+      // T110: `audio` is always stored as a basename. After restore the buffer is
+      // always cleared (importChart), so audio must be (re)loaded: URL basenames
+      // reload via 再生, local-file basenames need the file re-selected.
+      const hasAudioRef = chart.audio.trim() !== ''
+      importChart(chart)
+      notify(
+        hasAudioRef
+          ? '譜面を復元しました。音源を再ロードしてください（ローカル音源はファイル再選択）'
+          : '譜面を復元しました',
+      )
+      setRestoreOpen(false)
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : '復元に失敗しました')
+    }
+  }, [importChart, notify])
+
   const clearAll = () => {
     if (!window.confirm('現在の譜面（リング・セグメント・BPM変更）をすべてクリアします。よろしいですか？')) {
       return
@@ -1090,6 +1209,8 @@ export default function EditorScreen() {
     setSelectedRing(null)
     setPositionMs(0)
     positionRef.current = 0
+    // T159: clear also removes the current title's autosave slot
+    deleteAutosave(slugify(title) || 'untitled')
     notify('譜面をクリアしました')
   }
 
@@ -1101,7 +1222,77 @@ export default function EditorScreen() {
   return (
     <div className="editor-screen screen-fade">
       <header className="editor-header">
-        <h1>オーサリングツール</h1>
+        <div className="editor-header-left">
+          <h1>オーサリングツール</h1>
+          <div className="editor-restore-group" data-testid="editor-restore-group">
+            <button
+              type="button"
+              data-testid="editor-restore"
+              className="editor-restore-button"
+              onClick={() => setRestoreOpen((v) => !v)}
+            >
+              復元
+            </button>
+            {restoreOpen && (
+              <div className="editor-restore-dropdown" data-testid="editor-restore-dropdown">
+                {listAutosaves().length === 0 ? (
+                  <p className="editor-restore-empty">保存された譜面はありません</p>
+                ) : (
+                  <ul className="editor-restore-list">
+                    {listAutosaves()
+                      .slice()
+                      .sort((a, b) => b.savedAt - a.savedAt)
+                      .map((slot) => (
+                        <li key={slot.slug} className="editor-restore-item">
+                          <span className="editor-restore-meta">
+                            <span className="editor-restore-title">{slot.title}</span>
+                            <span className="editor-restore-time">
+                              {new Date(slot.savedAt).toLocaleTimeString()}
+                            </span>
+                          </span>
+                          <span className="editor-restore-actions">
+                            <button
+                              type="button"
+                              data-testid={`restore-slot-${slot.slug}`}
+                              onClick={() => restoreAutosave(slot.slug)}
+                            >
+                              復元
+                            </button>
+                            <button
+                              type="button"
+                              data-testid={`restore-delete-${slot.slug}`}
+                              onClick={() => {
+                                deleteAutosave(slot.slug)
+                                setRestoreOpen(false)
+                              }}
+                            >
+                              削除
+                            </button>
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="editor-autosave-interval" data-testid="editor-autosave-interval">
+            <label className="editor-label" htmlFor="autosave-interval">
+              保存間隔: {autosaveInterval}分
+            </label>
+            <input
+              id="autosave-interval"
+              className="editor-slider"
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={autosaveInterval}
+              data-testid="autosave-interval"
+              onChange={(e) => setAutosaveInterval(Number(e.target.value))}
+            />
+          </div>
+        </div>
         <Link to="/">/ に戻る</Link>
       </header>
 
