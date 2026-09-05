@@ -149,7 +149,7 @@ export class Renderer {
       const radius = 14 + 50 * progress;
 
       ctx.strokeStyle = ring.hit ? COLORS.positive : COLORS.text;
-      ctx.globalAlpha = ring.resolved && !ring.hit ? 0.25 : 1;
+      ctx.globalAlpha = ring.resolved && !ring.hit ? 0.25 : Math.pow(1 - progress, 1.6);
       ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.arc(x, safe(ring.targetY, CANVAS_HEIGHT / 2), radius, 0, Math.PI * 2);

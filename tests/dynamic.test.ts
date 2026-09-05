@@ -1,13 +1,47 @@
 /**
  * @vitest-environment node
- * T163 Unit Tests: Cursor continuous snap (pull towards wave value every tick).
+ * T164 Unit Tests: Ring opacity animation with power easing (Math.pow(1 - progress, 1.6)).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Cursor } from '../src/game/cursor';
-import { WaveEngine, TW_CENTER_Y } from '../src/game/waveEngine';
+import { Renderer } from '../src/game/renderer';
+import { WaveEngine } from '../src/game/waveEngine';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
+import { Cursor } from '../src/game/cursor';
+import { ScoreManager } from '../src/game/score';
+import type { RingState } from '../src/types';
 
-describe('T163: Cursor continuous snap (pull towards wave every tick)', () => {
+function createMockCtx(strokeAlphas: number[]) {
+  let currentAlpha = 1;
+  return {
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    font: '',
+    textAlign: 'left',
+    textBaseline: 'top',
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    arc: vi.fn(),
+    stroke: vi.fn(() => {
+      strokeAlphas.push(currentAlpha);
+    }),
+    fill: vi.fn(),
+    fillRect: vi.fn(),
+    fillText: vi.fn(),
+    measureText: vi.fn(() => ({ width: 0 })),
+    lineCap: 'butt',
+    lineJoin: 'miter',
+    set globalAlpha(val: number) {
+      currentAlpha = val;
+    },
+    get globalAlpha() {
+      return currentAlpha;
+    },
+  } as unknown as CanvasRenderingContext2D;
+}
+
+describe('T164: Ring opacity animation with power easing (Math.pow(1 - progress, 1.6))', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -15,59 +49,131 @@ describe('T163: Cursor continuous snap (pull towards wave every tick)', () => {
     vi.useRealTimers();
   });
 
-  it('should continuously pull cursor towards nowWaveY every update tick with PULL_STRENGTH 0.04-0.05 (3-step)', () => {
-    // [Step1] Capture initial state
+  it('should render rings with low opacity (close to 0) at spawnTime (progress=1.0) using power easing', () => {
+    const renderer = new Renderer();
+    const bpmTimeline = new BpmTimeline(120, []);
+    const waveEngine = new WaveEngine([{ direction: 'up', beats: 4 }], bpmTimeline);
     const cursor = new Cursor(1.0, 0);
-    cursor.y = 200; // arbitrary initial position
-    const initialY = cursor.y;
-    const nowWaveY = 300;
+    const score = new ScoreManager();
 
-    // [Step2] Perform update tick with nowWaveY argument
-    // cursor.update(dt, upPressed, downPressed, beatMs, nowWaveY)
-    cursor.update(0.016, false, false, 500, nowWaveY);
+    const spawnTime = 237.5;
+    const hitTime = 1237.5;
+    const rings: RingState[] = [
+      { id: 1, spawnTime, hitTime, targetY: 300, resolved: false, hit: false }
+    ];
 
-    // [Step3] Assert resulting transition: cursor.y should move towards nowWaveY by PULL_STRENGTH (0.04 - 0.05)
-    const expectedDelta = (nowWaveY - initialY);
-    const pulledY = initialY + expectedDelta * 0.045; // midpoint of 0.04 and 0.05
-    expect(cursor.y).toBeGreaterThan(initialY);
-    expect(cursor.y).toBeLessThan(nowWaveY);
-    expect(cursor.y).toBeCloseTo(pulledY, 1);
+    const strokeAlphas: number[] = [];
+    const mockCtx = createMockCtx(strokeAlphas);
+
+    renderer.render(mockCtx, {
+      waveEngine,
+      cursor,
+      rings,
+      score,
+      songTimeMs: spawnTime,
+      bpmTimeline,
+    });
+
+    const ringAlpha = strokeAlphas.find(a => a < 1.0) ?? strokeAlphas[0];
+    expect(ringAlpha).toBeLessThan(0.05);
+    expect(ringAlpha).toBeCloseTo(0, 2);
   });
 
-  it('should apply continuous snap immediately after up/down key operation (off-grid fractional timing & complex amplitude)', () => {
-    // [Step1] Initial state with complex amplitude (e.g. 1.3)
-    const amp = 1.3;
-    const cursor = new Cursor(amp, 0);
-    cursor.y = 250;
-    const initialY = cursor.y;
-    const nowWaveY = 200;
-    const beatMs = 450; // off-grid beat ms
+  it('should follow power easing (Math.pow(1 - progress, 1.6)) progressively as ring approaches hitTime (off-grid timing)', () => {
+    const renderer = new Renderer();
+    const bpmTimeline = new BpmTimeline(120, []);
+    const waveEngine = new WaveEngine([{ direction: 'down', beats: 4 }], bpmTimeline);
+    const cursor = new Cursor(1.0, 0);
+    const score = new ScoreManager();
 
-    // [Step2] Perform update with upPressed = true (movement + continuous snap)
-    cursor.update(0.033, true, false, beatMs, nowWaveY);
+    const spawnTime = 100.0;
+    const hitTime = 1100.0;
+    const rings: RingState[] = [
+      { id: 2, spawnTime, hitTime, targetY: 300, resolved: false, hit: false }
+    ];
 
-    // [Step3] Assert transition: movement and snap are combined
-    expect(cursor.y).toBeLessThan(initialY);
+    const strokeAlphas: number[] = [];
+    const mockCtx = createMockCtx(strokeAlphas);
+
+    renderer.render(mockCtx, {
+      waveEngine,
+      cursor,
+      rings,
+      score,
+      songTimeMs: 600.0,
+      bpmTimeline,
+    });
+
+    const expectedAlpha = Math.pow(0.5, 1.6);
+    const ringAlpha = strokeAlphas.find(a => Math.abs(a - expectedAlpha) < 0.01) ?? strokeAlphas[strokeAlphas.length - 2];
+    expect(ringAlpha).toBeCloseTo(expectedAlpha, 2);
+    expect(ringAlpha).toBeGreaterThan(0.2);
+    expect(ringAlpha).toBeLessThan(0.5);
   });
 
-  it('should smoothly pull cursor across multiple consecutive update ticks monotonically towards waveY', () => {
-    // [Step1] Initial state far from waveY
+  it('should reach full opacity (1.0) when songTimeMs reaches hitTime (progress = 0.0)', () => {
+    const renderer = new Renderer();
+    const bpmTimeline = new BpmTimeline(120, []);
+    const waveEngine = new WaveEngine([{ direction: 'up', beats: 4 }], bpmTimeline);
     const cursor = new Cursor(1.0, 0);
-    cursor.y = 150;
-    const nowWaveY = 350;
+    const score = new ScoreManager();
 
-    const positions: number[] = [cursor.y];
+    const spawnTime = 0.0;
+    const hitTime = 1000.0;
+    const rings: RingState[] = [
+      { id: 3, spawnTime, hitTime, targetY: 300, resolved: false, hit: false }
+    ];
 
-    // [Step2] Run 5 consecutive updates
-    for (let i = 0; i < 5; i++) {
-      cursor.update(0.016, false, false, 500, nowWaveY);
-      positions.push(cursor.y);
-    }
+    const strokeAlphas: number[] = [];
+    const mockCtx = createMockCtx(strokeAlphas);
 
-    // [Step3] Assert monotonic approach to nowWaveY
-    for (let i = 1; i < positions.length; i++) {
-      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
-      expect(positions[i]).toBeLessThanOrEqual(nowWaveY);
-    }
+    renderer.render(mockCtx, {
+      waveEngine,
+      cursor,
+      rings,
+      score,
+      songTimeMs: hitTime,
+      bpmTimeline,
+    });
+
+    const ringAlpha = strokeAlphas[strokeAlphas.length - 2];
+    expect(ringAlpha).toBeCloseTo(1.0, 2);
+  });
+
+  it('should independently calculate opacity for multiple dense/overlapping rings based on each ring spawnTime (off-grid timing)', () => {
+    const renderer = new Renderer();
+    const bpmTimeline = new BpmTimeline(120, []);
+    const waveEngine = new WaveEngine([{ direction: 'up', beats: 4 }], bpmTimeline);
+    const cursor = new Cursor(1.0, 0);
+    const score = new ScoreManager();
+
+    const rings: RingState[] = [
+      { id: 4, spawnTime: 100.0, hitTime: 1100.0, targetY: 300, resolved: false, hit: false },
+      { id: 5, spawnTime: 450.3, hitTime: 1450.7, targetY: 300, resolved: false, hit: false }
+    ];
+
+    const strokeAlphas: number[] = [];
+    const mockCtx = createMockCtx(strokeAlphas);
+
+    renderer.render(mockCtx, {
+      waveEngine,
+      cursor,
+      rings,
+      score,
+      songTimeMs: 750.5,
+      bpmTimeline,
+    });
+
+    const ringStrokeAlphas = strokeAlphas.filter(a => a < 1.0);
+    expect(ringStrokeAlphas.length).toBe(2);
+    const alphaA = ringStrokeAlphas[0];
+    const alphaB = ringStrokeAlphas[1];
+
+    const expectedAlphaA = Math.pow(1 - 0.3495, 1.6);
+    const expectedAlphaB = Math.pow(1 - 0.69992, 1.6); // (1450.7 - 750.5) / 1000.4 ≈ 0.69992
+
+    expect(alphaA).toBeCloseTo(expectedAlphaA, 2);
+    expect(alphaB).toBeCloseTo(expectedAlphaB, 2);
+    expect(alphaA).toBeGreaterThan(alphaB);
   });
 });
