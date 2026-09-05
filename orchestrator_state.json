@@ -1188,7 +1188,7 @@
         "coder": "ses_f8de3dfc3ffeAo0mZbpqzXsqFc",
         "postmortem": "ses_f8debf372ffeohYgRIdKMD9Hbk"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "coder",
       "last_postmortem_at": 1788620728.5954266
     }
