@@ -11,12 +11,13 @@ const EMPTY_STATS: ScoreStats = {
   combo: 0,
   maxCombo: 0,
   perfect: 0,
+  great: 0,
   good: 0,
   miss: 0,
 }
 
 function getRank(stats: ScoreStats): Rank {
-  const total = stats.perfect + stats.good + stats.miss
+  const total = stats.perfect + stats.great + stats.good + stats.miss
   if (total === 0) return 'D'
   const perfectRatio = stats.perfect / total
   if (perfectRatio >= 0.95) return 'S'
@@ -77,6 +78,10 @@ export default function ResultScreen() {
         <div className="result-stat perfect">
           <span className="result-stat-label">PERFECT</span>
           <span className="result-stat-value">{stats.perfect}</span>
+        </div>
+        <div className="result-stat great">
+          <span className="result-stat-label">GREAT</span>
+          <span className="result-stat-value">{stats.great}</span>
         </div>
         <div className="result-stat good">
           <span className="result-stat-label">GOOD</span>

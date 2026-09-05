@@ -56,8 +56,10 @@ function resultColor(result: HitResult): string {
   switch (result) {
     case 'perfect':
       return COLORS.positive;
-    case 'good':
+    case 'great':
       return COLORS.accentSub;
+    case 'good':
+      return COLORS.warning;
     default:
       return COLORS.danger;
   }
@@ -217,7 +219,7 @@ export class Renderer {
       ctx.globalAlpha = alpha;
       ctx.fillStyle = resultColor(e.result);
       const label =
-        e.result === 'perfect' ? 'PERFECT!' : e.result === 'good' ? 'GOOD' : 'MISS';
+        e.result === 'perfect' ? 'PERFECT!' : e.result === 'great' ? 'GREAT' : e.result === 'good' ? 'GOOD' : 'MISS';
       ctx.fillText(label, TW_JUDGE_X, safe(e.y, CANVAS_HEIGHT / 2) - 40 - age * 0.03);
     }
     ctx.globalAlpha = 1;

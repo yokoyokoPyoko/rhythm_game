@@ -25,6 +25,6 @@ export interface RingState {
   holding?: boolean;
   holdCompleted?: boolean;
 }
-export type HitResult = 'perfect' | 'good' | 'miss';
+export type HitResult = 'great' | 'perfect' | 'good' | 'miss';
 export type GameMode = 'select' | 'playing' | 'result' | 'editor' | 'calibration';
 export interface HitJudgement { result: HitResult; errorMs: number; }

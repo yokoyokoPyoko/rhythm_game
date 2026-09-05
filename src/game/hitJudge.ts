@@ -1,6 +1,7 @@
-import type { HitJudgement, RingState } from '../types';
+import type { HitJudgement, HitResult, RingState } from '../types';
 
 const PERFECT_MS = 50;
+const GREAT_MS = 100;
 const PERFECT_Y = 30;
 const HIT_Y = 60;
 
@@ -28,13 +29,15 @@ export function judgeHit(
   const hitCandidates = candidates.filter((c) => c.yDist < HIT_Y);
 
   let selected: { ring: RingState; err: number; yDist: number };
-  let result: 'perfect' | 'good' | 'miss';
+  let result: HitResult;
 
   if (hitCandidates.length > 0) {
     hitCandidates.sort((a, b) => a.err - b.err);
     selected = hitCandidates[0];
     if (selected.err < PERFECT_MS && selected.yDist < PERFECT_Y) {
       result = 'perfect';
+    } else if (selected.err < GREAT_MS && selected.yDist < HIT_Y) {
+      result = 'great';
     } else {
       result = 'good';
     }

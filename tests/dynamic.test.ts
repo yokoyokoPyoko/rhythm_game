@@ -1,115 +1,136 @@
 /**
  * @vitest-environment node
- * T161 復元ドロップダウンメニューの見切れ修正（右寄せ→左基準展開） — Vitest node acceptance test
- * Verifies behavior/internal state, never surface-only DOM presence.
- * 3-step state-transition pattern, pure computed values, off-grid phases, complex amplitudes.
+ * T162 Unit Tests: Score adjustment, Great judgment, and Stats update.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
-import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
-import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { quantizeBeat } from '../src/chart/quantize';
-import { Cursor } from '../src/game/cursor';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { judgeHit } from '../src/game/hitJudge';
+import { ScoreManager } from '../src/game/score';
+import type { RingState } from '../src/types';
 
-vi.useFakeTimers();
+describe('T162: Hit Judgment & Scoring Expansion (Perfect=50, Great=30, Good=10)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-const CENTER = TW_CENTER_Y;
-const TOP = TW_CENTER_Y - TW_AMP;
-const BOTTOM = TW_CENTER_Y + TW_AMP;
-
-function isSnapAligned(beats: number, snap: number): boolean {
-  const rem = ((beats % snap) + snap) % snap;
-  return rem < 1e-6 || Math.abs(rem - snap) < 1e-6;
-}
-
-function extractBlock(css: string, selector: string, len = 300): string {
-  const idx = css.indexOf(selector);
-  if (idx === -1) return '';
-  return css.slice(idx, idx + len);
-}
-
-beforeEach(() => {
-  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-});
-
-afterEach(() => {
-  vi.clearAllTimers();
-});
-
-describe('T161 復元ドロップダウンメニューの見切れ修正（右寄せ→左基準展開）', () => {
-  describe('1. CSS rule .editor-restore-dropdown uses left: 0 instead of right: 0', () => {
-    it('verifies that .editor-restore-dropdown has left: 0 and lacks right: 0', () => {
-      // [Step 1] Capture Initial State: read src/index.css
-      const cssPath = path.join(process.cwd(), 'src/index.css');
-      const css = fs.readFileSync(cssPath, 'utf-8');
-      expect(css.length).toBeGreaterThan(0);
-
-      // [Step 2] Perform Analysis / Interaction: locate .editor-restore-dropdown block
-      const dropdownIdx = css.indexOf('.editor-restore-dropdown');
-      expect(dropdownIdx, '.editor-restore-dropdown must be defined in index.css').toBeGreaterThan(-1);
-
-      const block = extractBlock(css, '.editor-restore-dropdown', 400);
-
-      // [Step 3] Assert Resulting Transition: contains left: 0 and does not contain right: 0
-      expect(block).toMatch(/left\s*:\s*0\s*;/);
-      expect(block).not.toMatch(/right\s*:\s*0\s*;/);
+  describe('judgeHit with Great category', () => {
+    it('should judge PERFECT when timing error < 50ms and Y distance < 30px', () => {
+      // [Step1] Initial ring state
+      const rings: RingState[] = [
+        { id: 1, spawnTime: 0, hitTime: 1000, targetY: 300, resolved: false, hit: false }
+      ];
+      // [Step2] Press at 1020ms (error = 20ms < 50ms), cursorY = 310 (dist = 10px < 30px), beatMs = 500 (window = 200ms)
+      const judgment = judgeHit(1020, 310, rings, 500);
+      // [Step3] Assert result
+      expect(judgment).not.toBeNull();
+      expect(judgment?.result).toBe('perfect');
+      expect(judgment?.errorMs).toBe(20);
+      expect(rings[0].resolved).toBe(true);
+      expect(rings[0].hit).toBe(true);
     });
 
-    it('verifies EditorScreen.tsx structure for restore dropdown group', () => {
-      // [Step 1] Capture source of EditorScreen.tsx
-      const srcPath = path.join(process.cwd(), 'src/screens/EditorScreen.tsx');
-      const src = fs.readFileSync(srcPath, 'utf-8');
-      expect(src.length).toBeGreaterThan(1000);
+    it('should judge GREAT when timing error is between 50ms and 100ms and Y distance < 60px (off-grid / boundary validation)', () => {
+      // [Step1] Initial ring state
+      const rings: RingState[] = [
+        { id: 2, spawnTime: 0, hitTime: 1000, targetY: 300, resolved: false, hit: false }
+      ];
+      // [Step2] Press at 1075ms (error = 75ms, which is 50ms <= err < 100ms), cursorY = 345 (dist = 45px < 60px)
+      const judgment = judgeHit(1075, 345, rings, 500);
+      // [Step3] Assert result
+      expect(judgment).not.toBeNull();
+      expect(judgment?.result).toBe('great');
+      expect(judgment?.errorMs).toBe(75);
+      expect(rings[0].resolved).toBe(true);
+      expect(rings[0].hit).toBe(true);
+    });
 
-      // [Step 2] Locate restore group and dropdown elements
-      const hasRestoreGroup = src.includes('editor-restore-group') || src.includes('editor-restore');
-      expect(hasRestoreGroup, 'EditorScreen must reference restore group/dropdown classes').toBe(true);
+    it('should judge GOOD when timing error is >= 100ms (and < window) or Y distance >= 30px (up to 60px)', () => {
+      // [Step1] Initial ring state
+      const rings: RingState[] = [
+        { id: 3, spawnTime: 0, hitTime: 1000, targetY: 300, resolved: false, hit: false }
+      ];
+      // [Step2] Press at 1120ms (error = 120ms >= 100ms, but within window 200ms), cursorY = 320 (dist = 20px < 60px)
+      const judgment = judgeHit(1120, 320, rings, 500);
+      // [Step3] Assert result
+      expect(judgment).not.toBeNull();
+      expect(judgment?.result).toBe('good');
+      expect(judgment?.errorMs).toBe(120);
+      expect(rings[0].resolved).toBe(true);
+      expect(rings[0].hit).toBe(true);
+    });
 
-      // [Step 3] Assert correct state toggle for restore dropdown
-      expect(src).toMatch(/restoreOpen|restoreDropdown|setRestoreOpen/);
+    it('should judge MISS when Y distance >= 60px or timing error >= window', () => {
+      // [Step1] Initial ring state
+      const rings: RingState[] = [
+        { id: 4, spawnTime: 0, hitTime: 1000, targetY: 300, resolved: false, hit: false }
+      ];
+      // [Step2] Press at 1010ms (error = 10ms), but cursorY = 370 (dist = 70px >= 60px)
+      const judgment = judgeHit(1010, 370, rings, 500);
+      // [Step3] Assert result
+      expect(judgment).not.toBeNull();
+      expect(judgment?.result).toBe('miss');
+      expect(rings[0].resolved).toBe(true);
+      expect(rings[0].hit).toBe(false);
     });
   });
 
-  describe('2. Complex Amplitudes and Off-Grid Numeric Consistency (T127/T161 compliance)', () => {
-    const complexAmps = [0.7, 1.3, 2.7, 3.4] as const;
-    const offGridBeats = [0.37, 1.23, 0.63, 2.37] as const;
+  describe('ScoreManager with Perfect(50), Great(30), Good(10) and stats update', () => {
+    it('should award 50 points for perfect, 30 for great, 10 for good, and update respective stats (3-step)', () => {
+      // [Step1] Capture initial state
+      const sm = new ScoreManager();
+      const initialStats = sm.getStats();
+      expect(initialStats.score).toBe(0);
+      expect(initialStats.perfect).toBe(0);
+      expect(initialStats.great).toBe(0);
+      expect(initialStats.good).toBe(0);
+      expect(initialStats.miss).toBe(0);
+      expect(initialStats.combo).toBe(0);
 
-    for (const amp of complexAmps) {
-      for (const b of offGridBeats) {
-        it(`amp=${amp} off-grid beat=${b}: WaveEngine slope and Cursor update maintain exact numeric consistency`, () => {
-          // [Step 1] Capture Initial State: setup timeline and engine with complex amp
-          const timeline = new BpmTimeline(120, [{ beat: 2, bpm: 150, amplitude: amp }], 1.0);
-          const resolvedAmp = timeline.amplitudeAt(b);
-          expect(resolvedAmp).toBe(b >= 2 ? amp : 1.0);
+      // [Step2] Perform perfect hit
+      sm.recordHit('perfect');
+      // [Step3] Assert perfect transition
+      let stats = sm.getStats();
+      expect(stats.score).toBe(50);
+      expect(stats.perfect).toBe(1);
+      expect(stats.combo).toBe(1);
 
-          const snap = 0.25;
-          const quantizedBeats = quantizeBeat(b, snap) || snap;
-          const segs = [{ direction: 'down' as const, beats: quantizedBeats }];
+      // [Step2] Perform great hit
+      sm.recordHit('great');
+      // [Step3] Assert great transition
+      stats = sm.getStats();
+      expect(stats.score).toBe(50 + 30); // 80
+      expect(stats.great).toBe(1);
+      expect(stats.combo).toBe(2);
 
-          // [Step 2] Perform Computation: WaveEngine points and waveYAt
-          const engine = new WaveEngine(segs, timeline, 1.0, 0);
-          const pts = engine.getPoints();
-          expect(pts.length).toBe(segs.length + 1);
+      // [Step2] Perform good hit
+      sm.recordHit('good');
+      // [Step3] Assert good transition
+      stats = sm.getStats();
+      expect(stats.score).toBe(80 + 10); // 90
+      expect(stats.good).toBe(1);
+      expect(stats.combo).toBe(3);
+    });
 
-          const yVal = engine.waveYAt(b * 0.1);
+    it('should reset combo and preserve stats on miss', () => {
+      // [Step1] Initial state with some hits
+      const sm = new ScoreManager();
+      sm.recordHit('perfect');
+      sm.recordHit('great');
+      expect(sm.getStats().combo).toBe(2);
+      expect(sm.getStats().score).toBe(80);
 
-          // [Step 3] Assert Resulting Transition: finite numeric values within bounds and snap alignment
-          expect(Number.isFinite(yVal)).toBe(true);
-          expect(yVal).toBeGreaterThanOrEqual(TOP);
-          expect(yVal).toBeLessThanOrEqual(BOTTOM);
-          expect(isSnapAligned(quantizedBeats, snap)).toBe(true);
+      // [Step2] Record miss
+      sm.recordHit('miss');
 
-          // Verify Cursor update consistency
-          const cursor = new Cursor(amp, 0);
-          cursor.setAmplitude(resolvedAmp);
-          const startY = cursor.y;
-          cursor.update(0.5, false, true, 500);
-          expect(Number.isFinite(cursor.y)).toBe(true);
-          expect(cursor.y).toBeGreaterThanOrEqual(TOP);
-          expect(cursor.y).toBeLessThanOrEqual(BOTTOM);
-        });
-      }
-    }
+      // [Step3] Assert stats after miss
+      const stats = sm.getStats();
+      expect(stats.combo).toBe(0);
+      expect(stats.miss).toBe(1);
+      expect(stats.perfect).toBe(1);
+      expect(stats.great).toBe(1);
+      expect(stats.score).toBe(80); // score remains
+    });
   });
 });

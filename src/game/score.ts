@@ -1,7 +1,8 @@
 import type { HitResult } from '../types';
 
-const PERFECT_SCORE = 100;
-const GOOD_SCORE = 30;
+const PERFECT_SCORE = 50;
+const GREAT_SCORE = 30;
+const GOOD_SCORE = 10;
 const TRACE_INTERVAL = 0.15;
 const TRACE_BASE_SCORE = 2;
 const TRACE_BONUS_STEP_BEATS = 16;
@@ -14,6 +15,7 @@ export interface ScoreStats {
   combo: number;
   maxCombo: number;
   perfect: number;
+  great: number;
   good: number;
   miss: number;
 }
@@ -25,6 +27,7 @@ export class ScoreManager {
   private combo = 0;
   private maxCombo = 0;
   private perfect = 0;
+  private great = 0;
   private good = 0;
   private miss = 0;
   private traceAccumulator = 0;
@@ -37,6 +40,11 @@ export class ScoreManager {
       case 'perfect':
         this.perfect++;
         this.score += PERFECT_SCORE;
+        this.incrementCombo();
+        break;
+      case 'great':
+        this.great++;
+        this.score += GREAT_SCORE;
         this.incrementCombo();
         break;
       case 'good':
@@ -88,13 +96,14 @@ export class ScoreManager {
       combo: this.combo,
       maxCombo: this.maxCombo,
       perfect: this.perfect,
+      great: this.great,
       good: this.good,
       miss: this.miss,
     };
   }
 
   getRank(): Rank {
-    const total = this.perfect + this.good + this.miss;
+    const total = this.perfect + this.great + this.good + this.miss;
     if (total === 0) return 'D';
     const perfectRatio = this.perfect / total;
     if (perfectRatio >= 0.95) return 'S';

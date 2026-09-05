@@ -9,7 +9,7 @@ import { Renderer, type JudgementEvent } from '../../game/renderer'
 import { RingSpawner } from '../../game/ringSpawner'
 import { ScoreManager } from '../../game/score'
 import { WaveEngine } from '../../game/waveEngine'
-import type { Chart, RingDef, RingState, Segment } from '../../types'
+import type { Chart, HitResult, RingDef, RingState, Segment } from '../../types'
 
 const CAL_BPM = 120
 const METRONOME_TICK_MS = 25
@@ -68,7 +68,7 @@ interface CalibrationModalProps {
 }
 
 interface LastJudgement {
-  result: 'perfect' | 'good' | 'miss'
+  result: HitResult
   errorMs: number
 }
 
@@ -124,7 +124,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     }, METRONOME_TICK_MS)
   }, [audioMgr, stopMetronome])
 
-  const journal = useCallback((result: 'perfect' | 'good' | 'miss', errorMs: number) => {
+  const journal = useCallback((result: HitResult, errorMs: number) => {
     const now = songNow()
     judgementEventsRef.current.push({ result, y: cursorRef.current.y, at: now })
     scoreRef.current.recordHit(result)
@@ -304,7 +304,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
   const lastLabel =
     lastJudgement === null
       ? '—'
-      : `${lastJudgement.result === 'perfect' ? 'PERFECT' : lastJudgement.result === 'good' ? 'GOOD' : 'MISS'} (${lastJudgement.errorMs >= 0 ? '+' : ''}${lastJudgement.errorMs}ms)`
+      : `${lastJudgement.result === 'perfect' ? 'PERFECT' : lastJudgement.result === 'great' ? 'GREAT' : lastJudgement.result === 'good' ? 'GOOD' : 'MISS'} (${lastJudgement.errorMs >= 0 ? '+' : ''}${lastJudgement.errorMs}ms)`
 
   return (
     <div className="calibration-overlay" data-testid="editor-calibration-modal">
