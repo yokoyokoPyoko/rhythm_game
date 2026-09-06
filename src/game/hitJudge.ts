@@ -10,8 +10,9 @@ export function judgeHit(
   cursorY: number,
   rings: RingState[],
   currentBeatMs: number,
+  windowMsOverride?: number,
 ): HitJudgement | null {
-  const windowMs = currentBeatMs * 0.4;
+  const windowMs = windowMsOverride ?? currentBeatMs * 0.4;
 
   const candidates: { ring: RingState; err: number; yDist: number }[] = [];
   for (const ring of rings) {
