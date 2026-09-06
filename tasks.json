@@ -1037,5 +1037,23 @@
     ],
     "type": "feat",
     "test": true
+  },
+  {
+    "id": "T172",
+    "desc": "キャリブレーション判定表示のY距離・丸め修正（GREAT(+40)問題）。背景: Perfectは誤差<50msかつY<30pxのため+40msでもY30〜60pxならGREAT正当。表示がmsのみで誤解を招く。誤差は生float、MISSはjournal('miss',0)の偽装+0ms。修正: CalibrationModal.tsxのみ(判定ロジック不変)。lastLabelをGREAT (+40ms, ΔY 35px)形式にし誤差は整数丸め。MISS時は誤差欄--表示。完了条件: (1) Y要因が目視判別可能 (2) MISSで+0msが出ない (3) tsc --noEmit。",
+    "depends_on": [
+      "T171"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T173",
+    "desc": "ゲーム画面の判定テキストに誤差表示を追加（T172の本編側）。背景: renderer.tsの判定テキストは現状ラベル名のみでJudgementEventにerrorMsがなく生float問題自体が存在しない。修正: renderer.ts＋GameScreen.tsxの表示配線のみ(ロジック不変)。JudgementEventにerrorMs:number|null(+任意yDist)を追加。handleHitでjudgement.errorMsを渡し期限切れMISSはnull。drawJudgementsでerrorMs!==nullの場合のみGREAT +40ms形式で整数丸め表示(YあればΔY併記)、MISSはラベルのみ。完了条件: (1) 本編判定テキストに整数丸め誤差が表示され生floatや偽装0が出ない (2) MISS時はラベルのみ (3) tsc --noEmit。",
+    "depends_on": [
+      "T172"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]

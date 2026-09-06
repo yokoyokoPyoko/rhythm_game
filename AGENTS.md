@@ -1978,3 +1978,34 @@ const minorStep =
 **完了条件**:
 1. 対応環境で開始オフセットにデバイス遅延が反映され、非対応環境では0開始のまま動作すること。
 2. `tsc --noEmit` エラーなし。
+
+---
+
+### [T172] キャリブレーション判定表示のY距離・丸め修正（GREAT(+40)問題）
+
+**背景**: Perfect条件は「誤差<50ms かつ Y<30px」（`hitJudge.ts:38`）。+40msでもYが30〜60pxならGREATが正当だが、`calibration-last` はmsしか表示しないため「タイミング合ってるのに」と誤解を招く。加えて誤差が生float表示、期限切れMISSが `journal('miss', 0)` の偽装 `(+0ms)` になる。
+
+**修正**（`CalibrationModal.tsx` のみ。判定ロジックは変更しない）:
+- `judgeHit` の返却にY距離（`yDist`）を含めるか、`handleHit` 側で `|cursorY - ring.targetY|` 相当を算出し、`lastLabel` を `GREAT (+40ms, ΔY 35px)` 形式にする。誤差は整数丸め。なお `handleHit` 側算出を選べば `hitJudge.ts`・`HitJudgement` 型は完全無変更で済む（推奨）。`judgeHit` 返却方式を選ぶ場合は型追加のみ許容し、判定ロジック自体は変えないこと。
+- 期限切れMISSは誤差欄を `--` 表示にする（偽装0を渡さない。`journal` に `errorMs: number | null` を許容するか、MISS専用ラベル分岐）。
+
+**完了条件**:
+1. `GREAT (+40ms, ΔY 35px)` のようにY要因が目視で判別できること。
+2. MISS時に `(+0ms)` と表示されないこと。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T173] ゲーム画面の判定テキストに誤差表示を追加（T172の本編側）
+
+**背景**: `renderer.ts` の判定テキストは現状ラベル名（`PERFECT! / GREAT / GOOD / MISS`）のみで、`JudgementEvent` に `errorMs` フィールドがなく、生float問題自体が存在しない。T172と同等の情報（ms・ΔY）を本編にも出す場合は明示的な追加が必要。
+
+**修正**（判定ロジックは変更しない。`src/game/renderer.ts`＋`src/screens/GameScreen.tsx` の表示配線のみ）:
+- `JudgementEvent` に `errorMs: number | null`（＋任意で `yDist: number | null`）を追加。
+- `GameScreen.tsx` の `handleHit` で `judgement.errorMs`（整数丸めは描画側）を渡し、期限切れMISSは `null` を渡す（偽装0を出さない）。
+- `renderer.ts` の `drawJudgements` で `errorMs !== null` の場合のみ `GREAT +40ms` 形式で整数丸め表示（Y距離がある場合は `, ΔY 35px` を併記）。MISS（`null`）はラベルのみ。
+
+**完了条件**:
+1. 本編の判定テキストに整数丸めの誤差（`+40ms` 形式）が表示され、生floatや偽装0が出ないこと。
+2. MISS時はラベルのみで誤差が出ないこと。
+3. `tsc --noEmit` エラーなし。

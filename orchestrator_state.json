@@ -1315,7 +1315,7 @@
     },
     "T171": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1788657767.544595,
       "cycles": 1,
       "sessions": {
@@ -1323,7 +1323,13 @@
         "coder": "ses_f8baef97dffemtmqI1A1al9FLz",
         "reviewer": "ses_f8ba839afffe80obrstoFwcpKD"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788658317.1252007
+    },
+    "T172": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788660436.225911
     }
   },
   "consecutive_no_action": 0
