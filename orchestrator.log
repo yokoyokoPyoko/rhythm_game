@@ -8558,3 +8558,6 @@ src/screens/editor/CalibrationModal.tsx(315,22): error TS2454: Variable 'resetCo
 2026-09-06 23:46:07,268 [INFO] Persisted session ses_f88d10c4effeOoJOhsECzq7mci for task=T183, role=reviewer
 2026-09-06 23:46:07,268 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: All requirements for T183 (leftward inertia for cursor particles) have been verified in src/game/renderer.ts.
 2026-09-06 23:46:07,269 [INFO] [T183] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-09-06 23:46:07,310 [INFO] [T183] Building docs/ dist for GitHub Pages...
+2026-09-06 23:46:11,755 [INFO] [T183] Pushing latest build to GitHub...
+2026-09-06 23:46:13,620 [INFO] [T183] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
