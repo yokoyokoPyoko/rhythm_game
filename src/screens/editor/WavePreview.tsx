@@ -1039,18 +1039,15 @@ export default function WavePreview({
         e.preventDefault()
         return
       }
-      // T154: vertex mode empty drag = vertex creation (preview → commit on mouseup)
-      {
-        const x = e.clientX - rect.left
-        const clickBeat = xToBeatLocal(x, rect.width)
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
-        const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
-        const pts = engineTmp.getPoints()
-        let k = 0
-        for (let i = 0; i < pts.length - 1; i++) {
-          if (clickBeat >= pts[i].beat - 1e-6) k = i
-        }
-        vertexCreateRef.current = { anchorSeg: k, anchorBeat: clickBeat }
+      // T181: click empty in vertex mode clears selection and pans
+      onSelectSegment?.(null)
+      onSelectVertices?.([])
+      panRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startBeat: geoRef.current.viewStart,
+        viewBeats: geoRef.current.viewBeats,
+        moved: false,
       }
       e.preventDefault()
       return
