@@ -1246,7 +1246,7 @@
         "coder": "ses_f8bfa01cbffey0ya9ZRBXOycup",
         "postmortem": "ses_f8cc199b8ffeGAMgjgKPXY2hZh"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "qa",
       "last_postmortem_at": 1788639920.857412,
       "finished": 1788639920.865847
