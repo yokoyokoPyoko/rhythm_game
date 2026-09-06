@@ -33,10 +33,14 @@ describe('T181: Vertex mode empty drag pan (no vertex creation on blank space) &
       expect(src.length).toBeGreaterThan(1000);
 
       // [Step 2: Inspect vertex mode handling in handleMouseDown]
-      const vertexModeBlockIdx = src.indexOf("editMode === 'vertex'");
+      const handleMouseDownIdx = src.indexOf('handleMouseDown');
+      expect(handleMouseDownIdx).not.toBe(-1);
+      const modeSpecificIdx = src.indexOf('Mode-specific hit testing', handleMouseDownIdx);
+      expect(modeSpecificIdx).not.toBe(-1);
+      const vertexModeBlockIdx = src.indexOf("if (editMode === 'vertex')", modeSpecificIdx);
       expect(vertexModeBlockIdx).not.toBe(-1);
 
-      const vertexModeSnippet = src.slice(vertexModeBlockIdx, vertexModeBlockIdx + 500);
+      const vertexModeSnippet = src.slice(vertexModeBlockIdx, vertexModeBlockIdx + 700);
 
       // [Step 3: Assert Resulting Transition (TDD Red -> Green)]
       // Requirement for T181: When vHit < 0 in vertex mode, empty drag must set panRef.current and NOT vertexCreateRef.current
