@@ -1261,7 +1261,7 @@
         "qa": "ses_f8be0a126ffeqJ9szq5GpaCUa7",
         "coder": "ses_f8bdeed57ffeAqmNLMm846Kz0t"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
