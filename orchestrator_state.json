@@ -1407,18 +1407,18 @@
       "finished": 1788679186.4089549
     },
     "T177": {
-      "attempts": 8,
+      "attempts": 9,
       "status": "running",
       "started": 1788681723.330014,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_f8a3eb821ffe54PCTsmCw1vAh7",
-        "postmortem": "ses_f8a3c88ddffeELYzIbmrqhSIZQ",
+        "qa": "ses_f8a37f14effeh11wiztBQEsNYz",
+        "postmortem": "ses_f8a38c800ffeUGhnSagQUd9yeG",
         "coder": "ses_f8a3bd29cffeF87ydhpTdB67Nx"
       },
-      "last_retry_from": "coder",
-      "last_postmortem_at": 1788682180.324719,
-      "gate_b_golden": false
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788682434.651861,
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
