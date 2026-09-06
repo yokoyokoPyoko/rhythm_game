@@ -265,15 +265,6 @@ export class Renderer {
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
     this.drawJudgements(ctx, events, songTimeMs);
-    this.drawFlash(ctx);
-  }
-
-  private drawFlash(ctx: CanvasRenderingContext2D): void {
-    if (this.flashAlpha <= 0) return;
-    ctx.fillStyle = this.flashColor;
-    ctx.globalAlpha = this.flashAlpha;
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    ctx.globalAlpha = 1;
   }
 
   private drawBackground(ctx: CanvasRenderingContext2D): void {
