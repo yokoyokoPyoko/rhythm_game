@@ -1322,7 +1322,7 @@
         "qa": "ses_f8bb05531ffe48jz9Dhl6q44ed",
         "coder": "ses_f8baef97dffemtmqI1A1al9FLz"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
