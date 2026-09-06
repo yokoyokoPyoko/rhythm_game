@@ -1055,5 +1055,23 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T174",
+    "desc": "キャリブレーション判定表示のΔY計測バグ修正。背景: T172でhandleHit内にΔY計算を追加したが、judgeHit()が直後にヒットリングをresolved=trueにするためその後の未解決ループで今叩いたリングが除外され次のリングのY距離が誤計算される。修正: CalibrationModal.tsxのみ(判定ロジック不変)。handleHitでjudgeHit呼出し前に対象リングのtargetYを保持するか直前解決リングを特定し、cursorYとの実差分をjournalに渡す。完了条件: (1) リング直上で叩いた際にΔYが実距離(0〜数px)と一致して表示される (2) tsc --noEmit。",
+    "depends_on": [
+      "T173"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T175",
+    "desc": "描画側への音声遅延オフセット適用（目押し・耳押しの完全同期）。背景: T167で判定側をpressTime=songTimeMs-manualOffsetMsに移行したが描画は生クロックのままだったため、音声遅延のある環境で音が届いた時点でリングが判定線を通過して見えていた。修正: GameScreen.tsx・CalibrationModal.tsx(またはrenderer.ts)で描画に渡す曲時刻を音声遅延に合わせたrenderTimeMs=songTimeMs-manualOffsetMsに統一。完了条件: (1) manualOffset設定時、リングが判定線TW_JUDGE_Xに達する瞬間と音が一致して同期する (2) 見た目で判定線に合わせて叩いたときに誤差0ms(PERFECT)になる (3) tsc --noEmit。",
+    "depends_on": [
+      "T174"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]

@@ -155,6 +155,17 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       // only. Error = tapRaw - (hitTime + manualOffset). Passing the shifted tap
       // time keeps hitJudge's errorMs = pressTimeMs - hitTime aligned to that.
       const pressTime = songTimeMs - getManualOffsetMs()
+      let targetY = cursorRef.current.y
+      let bestErr = Infinity
+      for (const ring of ringsRef.current) {
+        if (ring.resolved) continue
+        if (ring.type === 'hold' && ring.hit) continue
+        const err = Math.abs(pressTime - ring.hitTime)
+        if (err < bestErr) {
+          bestErr = err
+          targetY = ring.targetY
+        }
+      }
       const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs)
       if (judgement) {
         scoreRef.current.recordHit(judgement.result)
@@ -162,6 +173,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           result: judgement.result,
           y: cursorRef.current.y,
           at: songTimeMs,
+          errorMs: Math.round(judgement.errorMs),
+          yDist: Math.round(Math.abs(cursorRef.current.y - targetY)),
         })
       }
     } catch {
@@ -344,12 +357,12 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               ring.resolved = true
               ring.holdCompleted = true
               scoreRef.current.recordHit('perfect')
-              judgementEventsRef.current.push({ result: 'perfect', y: ring.targetY, at: songTimeMs })
+              judgementEventsRef.current.push({ result: 'perfect', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
             } else if (!keysRef.current.space) {
               ring.holding = false
               ring.resolved = true
               scoreRef.current.recordHit('miss')
-              judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs })
+              judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
             }
             continue
           }
@@ -357,7 +370,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           if (songTimeMs - getManualOffsetMs() > ring.hitTime + windowMs) {
             ring.resolved = true
             scoreRef.current.recordHit('miss')
-            judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs })
+            judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
           }
         }
       }

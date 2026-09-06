@@ -28,6 +28,8 @@ export interface JudgementEvent {
   result: HitResult;
   y: number;
   at: number;
+  errorMs: number | null;
+  yDist?: number | null;
 }
 
 export interface Particle {
@@ -425,7 +427,18 @@ export class Renderer {
       ctx.fillStyle = resultColor(e.result);
       const label =
         e.result === 'perfect' ? 'PERFECT!' : e.result === 'great' ? 'GREAT' : e.result === 'good' ? 'GOOD' : 'MISS';
-      ctx.fillText(label, TW_JUDGE_X, safe(e.y, CANVAS_HEIGHT / 2) - 40 - age * 0.03);
+      let text = label;
+      if (e.result === 'miss') {
+        text = `${label} --`;
+      } else if (e.errorMs !== null) {
+        const ms = Math.round(e.errorMs);
+        const sign = ms >= 0 ? '+' : '';
+        text = `${label} ${sign}${ms}ms`;
+        if (e.yDist != null) {
+          text += `, ΔY ${Math.round(e.yDist)}px`;
+        }
+      }
+      ctx.fillText(text, TW_JUDGE_X, safe(e.y, CANVAS_HEIGHT / 2) - 40 - age * 0.03);
     }
     ctx.globalAlpha = 1;
     ctx.textAlign = 'left';

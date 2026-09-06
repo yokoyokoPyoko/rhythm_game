@@ -201,7 +201,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
 
   const journal = useCallback((result: HitResult, errorMs: number | null, yDist = 0) => {
     const now = songNow()
-    judgementEventsRef.current.push({ result, y: cursorRef.current.y, at: now })
+    judgementEventsRef.current.push({ result, y: cursorRef.current.y, at: now, errorMs, yDist })
     scoreRef.current.recordHit(result)
     lastJudgementRef.current = { result, errorMs, yDist }
     setLastJudgement({ result, errorMs, yDist })

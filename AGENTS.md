@@ -2009,3 +2009,31 @@ const minorStep =
 1. 本編の判定テキストに整数丸めの誤差（`+40ms` 形式）が表示され、生floatや偽装0が出ないこと。
 2. MISS時はラベルのみで誤差が出ないこと。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T174] キャリブレーション判定表示のΔY計測バグ修正
+
+**背景**: T172で `handleHit` 内に `ΔY` 計算を追加したが、`judgeHit()` が呼び出し直後にヒットしたリングを `resolved = true` に更新してしまう。その直後の `for (const ring of ringsRef.current)` ループで `if (ring.resolved) continue` しているため、今叩いたリングが除外され、未来の未解決リング（次のリング）との Y 距離が誤って計算・表示されてしまう。
+
+**修正**（`CalibrationModal.tsx` のみ。判定ロジックは変更しない）:
+- `CalibrationModal.tsx` の `handleHit` において、`judgeHit` を呼ぶ前に候補リング（タイミング誤差最小の未解決リング）の `targetY` を保持するか、または今回ヒットしたリングを特定して、その `ring.targetY` と `cursorRef.current.y` の差分を計算して `journal` に渡す。
+
+**完了条件**:
+1. リング直上でキーを押した際、`ΔY` が 0〜数px の実距離と一致して表示されること（次のリングのY距離が誤表示されないこと）。
+2. `tsc --noEmit` エラーなし。
+
+---
+
+### [T175] 描画側への音声遅延オフセット適用（目押し・耳押しの完全同期）
+
+**背景**: T167で判定側を `pressTime = songTimeMs - getManualOffsetMs()` に移行したが、描画（リングの流れる位置・波形）は `songTimeMs`（生クロック）のまま描画されている。そのため、端末の音声遅延がある環境では、音が耳に届いた時点でリングがすでに判定線を通り過ぎて見えていた（視覚と聴覚の乖離）。
+
+**修正**（`GameScreen.tsx`, `CalibrationModal.tsx` または `renderer.ts`）:
+- リング・波形の描画（`renderer.render`）に渡す曲時刻を、音声出力遅延に合わせた可聴基準時刻 `renderTimeMs = songTimeMs - getManualOffsetMs()` に統一する（あるいは描画計算側で `manualOffsetMs` を反映）。
+- これにより、リングが判定線（`TW_JUDGE_X`）に重なるタイミングと音が耳に届くタイミングが一致し、判定線に合わせてキーを押した瞬間に誤差 0ms（PERFECT）となる。
+
+**完了条件**:
+1. `manualOffset` 設定時、リングが判定線 `TW_JUDGE_X` に到達する瞬間と、クリック音/楽曲の音が一致して同期すること。
+2. 見た目で判定線にリングが重なった瞬間に押したとき、`errorMs` が 0ms 近辺（PERFECT）になること。
+3. `tsc --noEmit` エラーなし。
