@@ -43,13 +43,7 @@ export interface Particle {
   alpha: number;
 }
 
-export interface FlashState {
-  alpha: number;
-  color: string;
-  active: boolean;
-}
 
-const FLASH_DURATION = 0.14;
 const GREAT_BURST_COUNT = 12;
 const GOOD_BURST_COUNT = 6;
 
@@ -103,22 +97,10 @@ export class Renderer {
   private spawnAccumulator = 0;
   private prevCursorY = CANVAS_HEIGHT / 2;
   private lastSongTimeMs = 0;
-  private flashAlpha = 0;
-  private flashFrom = 0;
-  private flashElapsed = 0;
-  private flashColor = '#ffffff';
   private seenJudgements = new WeakSet<object>();
 
   getParticles(): Particle[] {
     return this.particles;
-  }
-
-  getFlashState(): FlashState {
-    return {
-      alpha: this.flashAlpha,
-      color: this.flashColor,
-      active: this.flashFrom > 0 && this.flashAlpha > 0,
-    };
   }
 
   triggerHit(result: HitResult, posX?: number | { x?: number; y?: number }, posY?: number): void {
@@ -152,18 +134,6 @@ export class Renderer {
         alpha: 1,
       });
     }
-
-    if (result === 'perfect') {
-      this.flashColor = '#ffffff';
-      this.flashFrom = 0.4;
-      this.flashAlpha = this.flashFrom;
-      this.flashElapsed = 0;
-    } else if (result === 'great') {
-      this.flashColor = COLORS.accentSub;
-      this.flashFrom = 0.25;
-      this.flashAlpha = this.flashFrom;
-      this.flashElapsed = 0;
-    }
   }
 
   update(dt: number, params: UpdateParams): void {
@@ -177,16 +147,6 @@ export class Renderer {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.alpha = Math.max(0, 1 - p.life / p.maxLife);
-    }
-
-    if (this.flashFrom > 0) {
-      this.flashElapsed += dt;
-      this.flashAlpha = Math.max(0, this.flashFrom * (1 - this.flashElapsed / FLASH_DURATION));
-      if (this.flashAlpha <= 0) {
-        this.flashAlpha = 0;
-        this.flashFrom = 0;
-        this.flashElapsed = 0;
-      }
     }
 
     const { cursor, score: _score, isTracing, cursorVelocity } = params;
