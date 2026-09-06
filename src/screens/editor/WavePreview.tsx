@@ -216,9 +216,19 @@ export default function WavePreview({
     const foundRings: number[] = []
     const foundSegs: number[] = []
     if (editMode === 'ring') {
+      const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+      const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
+      const fieldH = rectH - RULER_H
+      const centerY = RULER_H + fieldH / 2
+      const maxAmp = (fieldH - 24) / 2
+      const minAmpV = Math.max(8, 0.2 * rectH)
+      const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmpV))
+      const mapYLocal = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
+
       rings.forEach((r, i) => {
         const rx = beatToXLocal(r.beat, rectW)
-        if (rx >= minX - 35 && rx <= maxX + 35) foundRings.push(i)
+        const ry = mapYLocal(engine.waveYAt(r.beat))
+        if (rx >= minX - 25 && rx <= maxX + 25 && ry >= minY - 20 && ry <= maxY + 20) foundRings.push(i)
       })
     } else {
       const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
@@ -509,12 +519,7 @@ export default function WavePreview({
       const isHighlighted = isSelected || isHovered
       const ry = mapY(engine.waveYAt(r.beat))
       const isHold = r.type === 'hold'
-      ctx.strokeStyle = isHighlighted ? SELECT_COLOR : 'rgba(251,191,36,0.75)'
-      ctx.lineWidth = isHighlighted ? 2 : 1
-      ctx.beginPath()
-      ctx.moveTo(rx, RULER_H)
-      ctx.lineTo(rx, cssH)
-      ctx.stroke()
+
 
       if (isHold && Number.isFinite(r.duration) && r.duration! > 0) {
         const tailBeat = r.beat + r.duration!
@@ -841,23 +846,36 @@ export default function WavePreview({
     }
   }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, onSelectVertices, selectedVertices, rings, findItemsInRect])
 
-  const nearestRingIndex = (clientX: number): number => {
+  const nearestRingIndex = (clientX: number, clientY: number): number => {
     const canvas = canvasRef.current
     if (!canvas) return -1
     const rect = canvas.getBoundingClientRect()
     const clickX = clientX - rect.left
+    const clickY = clientY - rect.top
     const g = geoRef.current
+    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const renderSegs = multiDragSegments ?? dragPreview ?? segments
+    const engine = new WaveEngine(renderSegs, timeline, EDITOR_BASE_AMP, Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0)
+    const centerY = RULER_H + (rect.height - RULER_H) / 2
+    const fieldH = rect.height - RULER_H
+    const maxAmp = (fieldH - 24) / 2
+    const minAmp = Math.max(8, 0.2 * rect.height)
+    const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
+    const mapY = (y: number) => centerY + ((y - TW_CENTER_Y) / TW_AMP) * dispAmp
+
     let nearest = -1
     let nearestDist = Infinity
     rings.forEach((r, i) => {
-      const rx = ((r.beat - g.viewStart) / g.viewBeats) * rect.width
-      const d = Math.abs(rx - clickX)
+      const beatOff = selectedRings.includes(i) ? ringDragOffset : 0
+      const rx = ((r.beat + beatOff - g.viewStart) / g.viewBeats) * rect.width
+      const ry = mapY(engine.waveYAt(r.beat))
+      const d = Math.hypot(rx - clickX, ry - clickY)
       if (d < nearestDist) {
         nearestDist = d
         nearest = i
       }
     })
-    return nearestDist < 35 ? nearest : -1
+    return nearestDist < 25 ? nearest : -1
   }
 
   const nearestVertexIndex = (clientX: number, clientY: number): number => {
@@ -979,7 +997,8 @@ export default function WavePreview({
       let onSel = false
       let vHit = -1
       if (editMode === 'ring') {
-        onSel = nearestRingIndex(e.clientX) >= 0 && selectedRings.includes(nearestRingIndex(e.clientX))
+        const h = nearestRingIndex(e.clientX, e.clientY)
+        onSel = h >= 0 && selectedRings.includes(h)
       } else if (editMode === 'vertex') {
         vHit = nearestVertexIndex(e.clientX, e.clientY)
         onSel = vHit >= 0 && (selectedVertices.includes(vHit) || selectedSegments.includes(vHit === 0 ? 0 : vHit - 1) || (selectedSegment === (vHit === 0 ? 0 : vHit - 1)))
@@ -1071,7 +1090,7 @@ export default function WavePreview({
     }
 
     // ring mode: isolated layer for add/drag/delete (T142: left-click only for select/drag)
-    const hit = nearestRingIndex(e.clientX)
+    const hit = nearestRingIndex(e.clientX, e.clientY)
     if (hit >= 0) {
       if (e.button === 0) {
         onSelectRing?.(hit)
@@ -1098,7 +1117,7 @@ export default function WavePreview({
 
     if (editMode === 'ring') {
       panRef.current = null
-      const hit = nearestRingIndex(e.clientX)
+      const hit = nearestRingIndex(e.clientX, e.clientY)
       if (hit < 0) {
         const beat = quantizeBeat(xToBeatLocal(e.clientX - rect.left, rect.width), safeSnap)
         const snapped = Math.round(beat / safeSnap) * safeSnap
@@ -1158,20 +1177,8 @@ export default function WavePreview({
       return
     }
     if (editMode === 'ring') {
-      // Inline nearestRingIndex with 35px threshold
-      const canvas = canvasRef.current
-      if (!canvas) return
-      const g = geoRef.current
-      const rect = canvas.getBoundingClientRect()
-      const clickX = e.clientX - rect.left
-      let hit = -1
-      let nearestDist = Infinity
-      rings.forEach((r, i) => {
-        const rx = ((r.beat - g.viewStart) / g.viewBeats) * rect.width
-        const d = Math.abs(rx - clickX)
-        if (d < nearestDist) { nearestDist = d; hit = i }
-      })
-      if (nearestDist < 35) onDeleteRing?.(hit)
+      const hit = nearestRingIndex(e.clientX, e.clientY)
+      if (hit >= 0) onDeleteRing?.(hit)
       return
     }
     if ((editMode !== 'vertex' && editMode !== 'edge') || !onSegmentsChange || vertexCreateRef.current) return
@@ -1228,7 +1235,7 @@ export default function WavePreview({
     if (dragRef.current || vertexDragRef.current || vertexCreateRef.current || edgeDragRef.current || panRef.current || rubberRef.current || multiDragRef.current) return
     // Hover interlink: detect nearest ring/edge/vertex under cursor and notify parent for list highlight
     if (editMode === 'ring') {
-      const ringHit = nearestRingIndex(e.clientX)
+      const ringHit = nearestRingIndex(e.clientX, e.clientY)
       if (ringHit >= 0) {
         onHoverRing?.(ringHit)
         onHoverSegment?.(null)
