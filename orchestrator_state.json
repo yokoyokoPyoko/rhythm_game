@@ -1504,7 +1504,7 @@
         "qa": "ses_f88d61eb8ffeBAMCqcOto6w22B",
         "coder": "ses_f88d45f61ffeLAnzvw7Dj25wQ6"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
