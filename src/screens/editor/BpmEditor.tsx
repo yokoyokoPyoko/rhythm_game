@@ -30,6 +30,8 @@ interface BpmEditorProps {
   onScrollSpeedChange: (val: number) => void
   startPosition: number
   onStartPositionChange: (val: number) => void
+  endBeat?: number
+  onEndBeatChange: (val: number | undefined) => void
 }
 
 export default function BpmEditor({
@@ -43,6 +45,8 @@ export default function BpmEditor({
   onScrollSpeedChange,
   startPosition,
   onStartPositionChange,
+  endBeat,
+  onEndBeatChange,
 }: BpmEditorProps) {
   const tapTimesRef = useRef<number[]>([])
   const [tapCount, setTapCount] = useState(0)
@@ -159,6 +163,26 @@ export default function BpmEditor({
         <span className="editor-hint" style={{display: 'block', marginTop: '4px'}}>
           現在値: {Number.isFinite(startPosition) ? startPosition.toFixed(1) : '0.0'}
         </span>
+      </div>
+
+      <div className="editor-field">
+        <label className="editor-label" htmlFor="end-beat">
+          楽曲終了位置 (ビート)
+        </label>
+        <input
+          id="end-beat"
+          className="editor-input"
+          type="number"
+          min={0}
+          step={1}
+          value={endBeat !== undefined && Number.isFinite(endBeat) ? endBeat : ''}
+          placeholder="自動 (最後のリング + 2秒)"
+          onChange={(e) => {
+            const v = Number(e.target.value)
+            onEndBeatChange(Number.isFinite(v) && v >= 0 ? v : undefined)
+          }}
+          data-testid="end-beat"
+        />
       </div>
 
       <div className="editor-field">

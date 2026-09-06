@@ -20,6 +20,9 @@ export function chartToToml(chart: Chart): string {
   lines.push(`scroll_speed = ${fmt(chart.scroll_speed)}`)
   lines.push(`amplitude = ${fmt(chart.amplitude)}`)
   lines.push(`start_position = ${fmt(chart.start_position)}`)
+  if (typeof chart.end_beat === 'number' && Number.isFinite(chart.end_beat) && chart.end_beat >= 0) {
+    lines.push(`end_beat = ${fmt(chart.end_beat)}`)
+  }
 
   if (chart.bpm_changes.length === 0) {
     lines.push(`bpm_changes = []`)

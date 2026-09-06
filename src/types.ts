@@ -11,6 +11,7 @@ export interface Chart {
   scroll_speed: number;
   amplitude: number;
   start_position: number;
+  end_beat?: number;
   bpm_changes: BpmChange[]; segments: Segment[]; rings: RingDef[];
 }
 export interface SongEntry {

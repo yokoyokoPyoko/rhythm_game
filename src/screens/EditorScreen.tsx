@@ -97,6 +97,7 @@ export default function EditorScreen() {
   const [error, setError] = useState<string | null>(null)
   const [snap, setSnap] = useState(0.25)
   const [startPosition, setStartPosition] = useState(0.0)
+  const [endBeat, setEndBeat] = useState<number | undefined>(undefined)
   const [rings, setRings] = useState<RingDef[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
   const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
@@ -212,6 +213,7 @@ export default function EditorScreen() {
     const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
     const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
     const safeStartPosition = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
+    const safeEndBeat = endBeat !== undefined && Number.isFinite(endBeat) && endBeat >= 0 ? endBeat : undefined
     const safeBpm = bpm > 0 ? bpm : 120
     return {
       title: title.trim() || 'Untitled',
@@ -222,11 +224,12 @@ export default function EditorScreen() {
       scroll_speed: safeScroll,
       amplitude: safeAmp,
       start_position: safeStartPosition,
+      end_beat: safeEndBeat,
       bpm_changes: bpmChanges,
       segments,
       rings,
     }
-  }, [bpm, title, artist, url, audioOffset, scrollSpeed, amplitude, startPosition, bpmChanges, segments, rings])
+  }, [bpm, title, artist, url, audioOffset, scrollSpeed, amplitude, startPosition, endBeat, bpmChanges, segments, rings])
 
   const saveCurrent = useCallback((chart: Chart) => {
     try {
@@ -1111,6 +1114,7 @@ export default function EditorScreen() {
     setScrollSpeed(chart.scroll_speed)
     setAmplitude(chart.amplitude)
     setStartPosition(chart.start_position ?? 0.0)
+    setEndBeat(chart.end_beat)
     setBpmChanges(chart.bpm_changes)
     setSegments(chart.segments)
     setRings(chart.rings)
@@ -1530,6 +1534,8 @@ export default function EditorScreen() {
               onScrollSpeedChange={setScrollSpeed}
               startPosition={startPosition}
               onStartPositionChange={setStartPosition}
+              endBeat={endBeat}
+              onEndBeatChange={setEndBeat}
             />
           </section>
 
