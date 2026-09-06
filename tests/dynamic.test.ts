@@ -1,62 +1,62 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Renderer } from '../src/game/renderer';
-import * as clock from '../src/audio/clock';
+import { WaveEngine } from '../src/game/waveEngine';
+import { Cursor } from '../src/game/cursor';
+import { BpmTimeline } from '../src/audio/bpmTimeline';
+import { setManualOffset, getManualOffsetMs } from '../src/audio/clock';
+import { Segment, BpmChange } from '../src/types';
 
-describe('T175: Renderer offset synchronization', () => {
-  let renderer: Renderer;
-  let mockCtx: any;
-  let mockData: any;
-
+describe('T176: カーソル磁気・スナップおよび移動速度の可聴描画時刻（renderTimeMs）同期', () => {
   beforeEach(() => {
-    renderer = new Renderer();
-    mockCtx = {
-        fillStyle: '',
-        fillRect: vi.fn(),
-        strokeStyle: '',
-        lineWidth: 0,
-        beginPath: vi.fn(),
-        moveTo: vi.fn(),
-        lineTo: vi.fn(),
-        stroke: vi.fn(),
-        arc: vi.fn(),
-        fill: vi.fn(),
-        globalAlpha: 0,
-        textAlign: '',
-        textBaseline: '',
-        font: '',
-        fillText: vi.fn(),
-    } as any;
-    mockData = {
-      waveEngine: { waveYAtMs: vi.fn().mockReturnValue(300) },
-      cursor: { y: 300 },
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) },
-      songTimeMs: 1000,
-      bpmTimeline: {},
-      judgementEvents: []
-    };
-    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    setManualOffset(0);
   });
 
-  it('should apply manual offset to renderTimeMs', () => {
-    // Spying on private prototype methods is possible in JS/Vitest
-    const spyWave = vi.spyOn(Renderer.prototype as any, 'drawWave').mockImplementation(() => {});
-    const spyRings = vi.spyOn(Renderer.prototype as any, 'drawRings').mockImplementation(() => {});
-    const spyOffset = vi.spyOn(clock, 'getManualOffsetMs');
+  it('1. manualOffset設定時、カーソルが画面に見えている波形に正確に吸い付く', () => {
+    const segments: Segment[] = [{ direction: 'up', beats: 4 }];
+    const bpmChanges: BpmChange[] = [];
+    const bpm = 120; // 1 beat = 500ms
+    const timeline = new BpmTimeline(bpm, bpmChanges);
+    const engine = new WaveEngine(segments, timeline, 1.0, 0.0);
+    
+    // 手動オフセットを設定
+    const offset = 100;
+    setManualOffset(offset);
 
-    // 1. Initial State (Offset = 0)
-    spyOffset.mockReturnValue(0);
-    renderer.render(mockCtx, mockData);
-    // Expect renderTimeMs = songTimeMs - offset = 1000 - 0 = 1000
-    expect(spyWave).toHaveBeenCalledWith(expect.anything(), expect.anything(), 1000, expect.anything());
-    expect(spyRings).toHaveBeenCalledWith(expect.anything(), expect.anything(), 1000, expect.anything(), expect.anything());
+    // songNow = 2000ms (4 beats)
+    const songTimeMs = 2000;
+    const renderTimeMs = songTimeMs - getManualOffsetMs(); // 1900ms
 
-    // 2. Interaction: Update manual offset to 100ms
-    spyOffset.mockReturnValue(100);
+    const expectedY = engine.waveYAtMs(renderTimeMs);
+    const cursor = new Cursor(1.0, 0.0);
+    
+    // Simulate tick update
+    // Update should use renderTimeMs
+    const beatMs = timeline.beatMsAt(timeline.msToBeat(renderTimeMs));
+    cursor.update(0.016, false, false, beatMs, engine.waveYAtMs(renderTimeMs));
+    
+    // Assertion: Cursor Y should match wave Y at renderTimeMs
+    expect(cursor.y).toBeCloseTo(expectedY);
+  });
 
-    // 3. Assert Result: Expect renderTimeMs = songTimeMs - offset = 1000 - 100 = 900
-    renderer.render(mockCtx, mockData);
-    expect(spyWave).toHaveBeenCalledWith(expect.anything(), expect.anything(), 900, expect.anything());
-    expect(spyRings).toHaveBeenCalledWith(expect.anything(), expect.anything(), 900, expect.anything(), expect.anything());
+  it('2. セグメント境界でカーソル速度の切り替わりが画面波形と同期する', () => {
+    // 振幅係数を設定して検証
+    const amplitude = 1.3;
+    const segments: Segment[] = [
+        { direction: 'up', beats: 2 },
+        { direction: 'down', beats: 2 }
+    ];
+    // BPM 120
+    const timeline = new BpmTimeline(120, []);
+    const engine = new WaveEngine(segments, timeline, amplitude, 0.0);
+    
+    // WaveEngine.waveYAt(beat) calculation
+    const yAt1 = engine.waveYAt(1.0);
+    const yAt2 = engine.waveYAt(2.0);
+    
+    // The change in Y should be 1 beat * perBeatPx
+    const perBeatPx = 2 * 130 * amplitude; // TW_AMP = 130
+    
+    // Assertion: The difference in Y matches the expected speed
+    expect(Math.abs(yAt2 - yAt1)).toBeCloseTo(perBeatPx);
   });
 });

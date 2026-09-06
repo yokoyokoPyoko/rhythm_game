@@ -282,17 +282,18 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         return
       }
       const songTimeMs = songNow()
+      const renderTimeMs = songTimeMs - getManualOffsetMs()
+      const currentBeat = timeline.msToBeat(renderTimeMs)
+      const currentBeatMs = timeline.beatMsAt(currentBeat)
 
       ringsRef.current = spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
 
-      const currentBeat = timeline.msToBeat(songTimeMs)
-      const currentBeatMs = timeline.beatMsAt(currentBeat)
       cursorRef.current.setAmplitude(timeline.amplitudeAt(currentBeat))
-       cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs, wave.waveYAtMs(songTimeMs))
+       cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs, wave.waveYAtMs(renderTimeMs))
 
       const beatFloor = Math.floor(currentBeat)
       if (beatFloor !== prevBeatFloor) {
-        cursorRef.current.pullTowards(wave.waveYAtMs(songTimeMs), 0.28)
+        cursorRef.current.pullTowards(wave.waveYAtMs(renderTimeMs), 0.28)
         prevBeatFloor = beatFloor
       }
 
@@ -311,7 +312,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         (e) => songTimeMs - e.at < JUDGEMENT_LIFETIME_MS,
       )
 
-      const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
+      const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE
       scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       renderer.render(ctx2d, {
         waveEngine: wave,

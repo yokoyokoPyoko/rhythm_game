@@ -325,10 +325,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           songTimeMs = 0
         }
       }
+      const renderTimeMs = songTimeMs - getManualOffsetMs()
 
       ringsRef.current = spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
 
-      const currentBeat = timeline.msToBeat(songTimeMs)
+      const currentBeat = timeline.msToBeat(renderTimeMs)
       const currentBeatMs = timeline.beatMsAt(currentBeat)
       // T131: time-varying amplitude — cursor speed follows the bpm_changes amplitude list
       cursorRef.current.setAmplitude(timeline.amplitudeAt(currentBeat))
@@ -337,13 +338,13 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
          keysRef.current.up,
          keysRef.current.down,
          currentBeatMs,
-         wave.waveYAtMs(songTimeMs),
+         wave.waveYAtMs(renderTimeMs),
        )
       // T119: wave attraction assist — on 1-beat boundary crossing, pull cursor toward wave
       if (startedRef.current) {
         const currentBeatFloor = Math.floor(currentBeat)
         if (currentBeatFloor !== prevBeatFloor) {
-          const targetY = wave.waveYAtMs(songTimeMs)
+          const targetY = wave.waveYAtMs(renderTimeMs)
           cursorRef.current.pullTowards(targetY, 0.28)
           prevBeatFloor = currentBeatFloor
         }
@@ -380,7 +381,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       )
 
       if (startedRef.current) {
-        const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(songTimeMs)) < TW_TOLERANCE
+        const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE
         scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       }
 
