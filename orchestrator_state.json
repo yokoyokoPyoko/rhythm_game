@@ -1473,7 +1473,7 @@
         "coder": "ses_f88fab4f2ffex7xo5zfOBnucsE",
         "postmortem": "ses_f89b4043cffe7I00NIdDUIuWGc"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "coder",
       "last_postmortem_at": 1788691165.720983
     }
