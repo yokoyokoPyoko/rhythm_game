@@ -1443,19 +1443,49 @@ def check_gate_c_code_review(
     head_hash: str,
     state: dict[str, Any] | None = None,
     fresh_sessions: bool = False,
+    is_red_audit: bool = False,
 ) -> GateResult:
-    gate_name = "Gate C (Code Review)"
+    gate_name = "Gate C (Already Implemented Audit)" if is_red_audit else "Gate C (Code Review)"
     # 変更されたファイルリストを取得
     _, changed_files_out, _ = run_cmd_pgid_stream(["git", "diff", "--name-only", f"{head_hash}..HEAD"])
     changed_files = [f for f in changed_files_out.splitlines() if f.strip().startswith("src/")]
 
-    if not changed_files:
-        return GateResult(gate_name, False, "No src code changes found")
-
     spec = extract_compact_spec(task.id)
-    prompt = f"""You are an Uncompromising Senior Code Auditor and Lead Architect reviewing the implementation for task {task.id} ({task.desc}).
+    is_zero_coder = not changed_files
+
+    if is_zero_coder:
+        # 差分がない場合、仕様書やタスク説明文から検査対象の src/ ファイルを抽出
+        candidate_matches = re.findall(r"src/[a-zA-Z0-9_/.-]+\.tsx?", spec + "\n" + task.desc)
+        candidate_files = [f for f in dict.fromkeys(candidate_matches) if (ROOT / f).is_file()]
+        if not candidate_files:
+            # フォールバック: 直近のコミットで変更された src/ ファイル
+            _, recent_out, _ = run_cmd_pgid_stream(["git", "diff", "--name-only", "HEAD~3..HEAD"])
+            candidate_files = [f for f in recent_out.splitlines() if f.strip().startswith("src/") and (ROOT / f.strip()).is_file()]
+        if not candidate_files:
+            return GateResult(gate_name, False, "No src code changes found and no candidate source files identified in spec")
+        changed_files = candidate_files
+
+    if is_zero_coder or is_red_audit:
+        audit_mode_header = f"""🚨 CRITICAL ZERO-CODER / PRE-IMPLEMENTATION AUDIT (READ CAREFULLY):
+All automated tests for task {task.id} PASSED, BUT THERE ARE ZERO NEW CODE CHANGES in src/ during this task.
+
+In most cases, this is almost certainly a FALSE-POSITIVE (擬陽性) caused by superficial, weak, or placeholder test assertions.
+HOWEVER, to avoid breaking already working code or duplicate effort, it is also possible that this feature was ALREADY IMPLEMENTED in a previous task/commit.
+
+YOUR SKEPTICAL AUDIT MISSION:
+Assume this is a FALSE-POSITIVE unless you find indisputable, concrete proof in the source files.
+1. USE THE `read` TOOL to examine the source files: {", ".join(changed_files)}
+2. Check EVERY requirement in the Specification: Does the existing source code genuinely and completely implement this exact logic?
+3. If ANY requirement is missing, incomplete, or if the test passed only because of weak assertions -> IMMEDIATELY REJECT with verdict "FAIL" (Score < 50) and declare it a False-Positive.
+4. ONLY if the source code genuinely contains the complete, working implementation fulfilling ALL requirements -> verdict "PASS" (Score >= 80) with comment "Verified that this feature is genuinely ALREADY IMPLEMENTED in the existing codebase."
+"""
+    else:
+        audit_mode_header = f"""You are an Uncompromising Senior Code Auditor and Lead Architect reviewing the implementation for task {task.id} ({task.desc}).
 
 Specification & Requirements (each requirement bullet must be verified in the code):
+"""
+
+    prompt = f"""{audit_mode_header}
 {spec}
 
 FILES TO INSPECT:
@@ -1474,7 +1504,7 @@ Output JSON only with this schema:
   "score": 90,
   "verdict": "PASS",
   "evidence": [
-    {{"requirement": "<verbatim requirement>", "status": "MET", "proof": "src/chart/loader.ts: added audio_offset parsing logic"}}
+    {{"requirement": "<verbatim requirement>", "status": "MET", "proof": "src/screens/GameScreen.tsx: line 384 uses renderTimeMs for isOnWave"}}
   ],
   "comment": "all requirements verified by reading source code"
 }}
@@ -1486,11 +1516,11 @@ If ANY requirement is missing or incomplete:
   "evidence": [
     {{"requirement": "<missing requirement>", "status": "UNMET", "proof": "not found in source code"}}
   ],
-  "comment": "missing implementation for requirement X"
+  "comment": "missing implementation for requirement X (or rejected as false-positive)"
 }}
 """
 
-    log.info("[%s] Dispatching Gate C Code Reviewer (model=%s, files=%d)...", task.id, reviewer_model, len(changed_files))
+    log.info("[%s] Dispatching Gate C Code Reviewer (model=%s, files=%d, zero_coder_audit=%s)...", task.id, reviewer_model, len(changed_files), is_zero_coder or is_red_audit)
     rev_title = f"[{task.id}] CodeReview {uuid.uuid4().hex[:8]}"
     code, out = run_opencode_with_retry(
         reviewer_model, prompt, timeout=None, label=f"CodeReviewer({task.id})", variant="max",
@@ -1861,7 +1891,7 @@ def exec_task(task: Task, state: dict[str, Any], models: FlowModels, args: argpa
                     if ga_result.ok:
                         # Run strict Zero-Coder Gate C review (video for playwright, git diff code review for vitest)
                         if tr == "vitest":
-                            gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions)
+                            gc_audit = check_gate_c_code_review(task, models.reviewer, head_hash, state=state, fresh_sessions=fresh_sessions, is_red_audit=True)
                         else:
                             gc_audit = check_gate_c(task, models.reviewer, is_red_audit=True)
                         if gc_audit.ok:
