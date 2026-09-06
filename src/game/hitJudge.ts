@@ -10,16 +10,16 @@ export function judgeHit(
   cursorY: number,
   rings: RingState[],
   currentBeatMs: number,
-  windowMsOverride?: number,
+  windowMs?: number,
 ): HitJudgement | null {
-  const windowMs = windowMsOverride ?? currentBeatMs * 0.4;
+  const win = windowMs ?? currentBeatMs * 0.4;
 
   const candidates: { ring: RingState; err: number; yDist: number }[] = [];
   for (const ring of rings) {
     if (ring.resolved) continue;
     if (ring.type === 'hold' && ring.hit) continue;
     const err = Math.abs(pressTimeMs - ring.hitTime);
-    if (err < windowMs) {
+    if (err < win) {
       const yDist = Math.abs(cursorY - ring.targetY);
       candidates.push({ ring, err, yDist });
     }

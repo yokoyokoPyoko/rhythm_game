@@ -22,7 +22,7 @@ const DEFAULT_TOTAL_BEATS = 24000
 // T168: calibration-only wide judgement window. Ring spacing is 4 beats = 2000ms
 // at BPM 120, so half (1000ms) is the hard upper bound; 750ms fits high-latency
 // (200ms+) PCs without stealing toward the neighbouring ring.
-const CALIBRATION_WINDOW_MS = 750
+const CALIBRATION_WIDE_WINDOW_MS = 750
 
 /**
  * T133: Build the ProSeka-style infinite-loop practice chart.
@@ -152,7 +152,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       // Error = tapRaw - (hitTime + manualOffset); passing the shifted tap time
       // keeps hitJudge's errorMs aligned so ,. adjustments reflect linearly.
       const pressTime = songTimeMs - getManualOffsetMs()
-      const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs, CALIBRATION_WINDOW_MS)
+      const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs, CALIBRATION_WIDE_WINDOW_MS)
       if (judgement) {
         journal(judgement.result, judgement.errorMs)
       }
@@ -207,7 +207,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         if (ring.resolved) continue
         // T168: use the same wide window for the miss deadline so a delayed tap
         // (200ms+ latency) still reaches the nearest ring before it is expired.
-        if (songTimeMs - getManualOffsetMs() > ring.hitTime + CALIBRATION_WINDOW_MS) {
+        if (songTimeMs - getManualOffsetMs() > ring.hitTime + CALIBRATION_WIDE_WINDOW_MS) {
           ring.resolved = true
           journal('miss', 0)
         }
