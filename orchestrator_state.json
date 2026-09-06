@@ -1376,10 +1376,17 @@
     },
     "T175": {
       "status": "running",
-      "attempts": 0,
-      "cycles": 0,
-      "sessions": {},
-      "started": 1788673482.4897318
+      "attempts": 5,
+      "cycles": 2,
+      "sessions": {
+        "qa": "ses_f8aaa7a8dffeKf1AE6sXOxyub0",
+        "coder": "ses_f8aaa27e6ffeh8MvoQ3aDSLi5O",
+        "postmortem": "ses_f8aad4a10ffeQ4pXTvC4r7pFol"
+      },
+      "started": 1788673482.4897318,
+      "gate_b_golden": false,
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1788674928.4226665
     }
   },
   "consecutive_no_action": 0

@@ -1,4 +1,5 @@
 import type { BpmTimeline } from '../audio/bpmTimeline';
+import { getManualOffsetMs } from '../audio/clock';
 import type { HitResult, RingState } from '../types';
 import type { Cursor } from './cursor';
 import type { ScoreManager } from './score';
