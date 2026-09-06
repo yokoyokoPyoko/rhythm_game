@@ -1,8 +1,8 @@
 {
   "started_at": 1787099390.9580224,
   "models": {
-    "coder": "opencode/big-pickle",
-    "qa": "opencode/muse-spark-1.2-contributor-free",
+    "coder": "google/gemini-3.1-flash-lite",
+    "qa": "google/gemini-3.1-flash-lite",
     "reviewer": "google/gemini-3.1-flash-lite",
     "postmortem": "opencode/nemotron-3-ultra-free"
   },
@@ -1359,12 +1359,12 @@
       "finished": 1788663915.919053
     },
     "T174": {
-      "attempts": 3,
+      "attempts": 4,
       "status": "running",
-      "started": 1788668729.241367,
+      "started": 1788668799.4141376,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_f8b4516a5ffe1FvOdhgFdzZh0q",
+        "qa": null,
         "postmortem": "ses_f8b460cbbffe8POzBR4eNeZIMT",
         "coder": "ses_f8b43030bffeJdrJvN1qWFyyT2"
       },
