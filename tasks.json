@@ -1100,5 +1100,59 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T179",
+    "desc": "エディット画面のリング縦線除去＆リング当たり判定の2D円形化。要求: リングごとの黄色い縦線描画を削除。当たり判定も縦線部分を除去し半径25px以内の2D円形判定に変更。修正: src/screens/editor/WavePreview.tsxで縦線stroke()削除、nearestRingIndexに2D距離Math.hypot(rx-clickX, ry-clickY)<25適用、findItemsInRectでリングY範囲チェック。完了条件: (1) 縦線が描画されない (2) リング本体の円付近でのみ操作できる (3) tsc --noEmit。",
+    "depends_on": [
+      "T178"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T180",
+    "desc": "リングと波形頂点の描画順序変更（頂点円をリングの手前に表示）。要求: リング配置の黄色い円を波形頂点の白い円（ハンドル）より後ろに表示。修正: src/screens/editor/WavePreview.tsxのrenderCanvasでリング描画後に頂点ハンドル（editMode==='vertex'の円描画）を行うよう変更。完了条件: (1) 波形頂点の円がリング円より前面に重ねて描画される (2) tsc --noEmit。",
+    "depends_on": [
+      "T179"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T181",
+    "desc": "頂点モード空ドラッグの頂点作成削除＆スクロール（Pan）動作化。要求: 頂点モードで空白領域をドラッグした際に誤って頂点が作られスクロールできない問題を修正。修正: src/screens/editor/WavePreview.tsxのhandleMouseDownでvHit<0のときvertexCreateRefを設定せずpanRef.currentを設定してタイムライン横スクロール（Pan）を開始。完了条件: (1) 空白領域ドラッグで頂点が作成されず画面がスクロール(Pan)する (2) ダブルクリック追加は維持 (3) tsc --noEmit。",
+    "depends_on": [
+      "T180"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T182",
+    "desc": "画面背景フラッシュ演出の削除。要求: 判定ヒット時（PERFECT/GREAT）の画面全体のフラッシュ演出（白/ティアカラー全画面背景描画）を削除。修正: src/game/renderer.tsで画面背景フラッシュオーバーレイ(ctx.fillRect)を削除。完了条件: (1) PERFECT/GREAT判定時に画面背景フラッシュが発生しない (2) 判定テキストやパーティクルは維持 (3) tsc --noEmit。",
+    "depends_on": [
+      "T181"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T183",
+    "desc": "カーソルパーティクルの進行方向慣性エフェクト（左流れ化）。要求: プレイヤー玉が右へ波形を進む想定に合わせ発生パーティクルに左方向（負のX速度vx<0）の慣性を持たせる。修正: src/game/renderer.tsで発生パーティクルの初期vxを負の値にし左へたなびいて消えるよう変更。完了条件: (1) パーティクルが左方向へ流れる (2) tsc --noEmit。",
+    "depends_on": [
+      "T182"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T184",
+    "desc": "楽曲終了位置（end_beat）の指定・保存・判定対応。要求: 譜面ごとに楽曲の終了位置（終了ビート）を指定できるようにする。修正: src/types.tsのChartにend_beat?:number追加。loader.ts/serialize.tsでTOML入出力対応。BpmEditor.tsxに「楽曲終了位置 (ビート)」入力欄追加。GameScreen.tsxでchart.end_beat指定時にtimeline.beatToMs(chart.end_beat)で楽曲終了判定。完了条件: (1) エディタでend_beatを設定・保存・読み込みできる (2) プレイ時end_beatで曲終了しリザルト遷移する (3) tsc --noEmit。",
+    "depends_on": [
+      "T183"
+    ],
+    "type": "feat",
+    "test": true
   }
 ]
