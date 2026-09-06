@@ -1418,7 +1418,7 @@
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788679243.8213842,
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
