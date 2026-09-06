@@ -116,7 +116,8 @@ interface CalibrationModalProps {
 
 interface LastJudgement {
   result: HitResult
-  errorMs: number
+  errorMs: number | null
+  yDist: number
 }
 
 const offsetText = (v: number) => `${v >= 0 ? '+' : ''}${v}ms`
@@ -198,12 +199,12 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     }, METRONOME_TICK_MS)
   }, [audioMgr, stopMetronome])
 
-  const journal = useCallback((result: HitResult, errorMs: number) => {
+  const journal = useCallback((result: HitResult, errorMs: number | null, yDist = 0) => {
     const now = songNow()
     judgementEventsRef.current.push({ result, y: cursorRef.current.y, at: now })
     scoreRef.current.recordHit(result)
-    lastJudgementRef.current = { result, errorMs }
-    setLastJudgement({ result, errorMs })
+    lastJudgementRef.current = { result, errorMs, yDist }
+    setLastJudgement({ result, errorMs, yDist })
   }, [])
 
   const handleHit = useCallback(() => {
@@ -219,7 +220,22 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       const pressTime = songTimeMs - getManualOffsetMs()
       const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs, CALIBRATION_WIDE_WINDOW_MS)
       if (judgement) {
-        journal(judgement.result, judgement.errorMs)
+        // T172: compute the Y distance to the ring judgeHit resolved (the
+        // timing-closest unresolved ring, mirroring judgeHit's selection) so
+        // the label can explain Y-driven misses/GREATs via ΔY. No hitJudge
+        // changes are needed.
+        let yDist = 0
+        let bestErr = Infinity
+        for (const ring of ringsRef.current) {
+          if (ring.resolved) continue
+          if (ring.type === 'hold' && ring.hit) continue
+          const err = Math.abs(pressTime - ring.hitTime)
+          if (err < bestErr) {
+            bestErr = err
+            yDist = Math.abs(cursorRef.current.y - ring.targetY)
+          }
+        }
+        journal(judgement.result, judgement.errorMs, yDist)
         // T170: coarse mode collects one timing sample per tap. The offset is
         // never mutated here — the sample counter effect applies the average
         // when CALIBRATION_SAMPLE_COUNT taps have been recorded.
@@ -286,7 +302,8 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         // (200ms+ latency) still reaches the nearest ring before it is expired.
         if (songTimeMs - getManualOffsetMs() > ring.hitTime + CALIBRATION_WIDE_WINDOW_MS) {
           ring.resolved = true
-          journal('miss', 0)
+          // T172: expired rings have no measurable error — show `--`, never a fake +0ms.
+          journal('miss', null)
         }
       }
 
@@ -438,10 +455,19 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     })
   }, [audioMgr])
 
+  // T172: show both the (integer-rounded) timing error and the Y distance so
+  // Y-driven GREATs/MISSes are visually explainable. Expired rings carry no
+  // measurable error — rendered as `--` instead of a fake +0ms.
+  const judgementName = useCallback(
+    (r: HitResult) => (r === 'perfect' ? 'PERFECT' : r === 'great' ? 'GREAT' : r === 'good' ? 'GOOD' : 'MISS'),
+    [],
+  )
   const lastLabel =
     lastJudgement === null
       ? '—'
-      : `${lastJudgement.result === 'perfect' ? 'PERFECT' : lastJudgement.result === 'great' ? 'GREAT' : lastJudgement.result === 'good' ? 'GOOD' : 'MISS'} (${lastJudgement.errorMs >= 0 ? '+' : ''}${lastJudgement.errorMs}ms)`
+      : `${judgementName(lastJudgement.result)} (${
+          lastJudgement.errorMs === null ? '--' : `${lastJudgement.errorMs >= 0 ? '+' : ''}${Math.round(lastJudgement.errorMs)}ms`
+        }, ΔY ${Math.round(lastJudgement.yDist)}px)`
 
   return (
     <div className="calibration-overlay" data-testid="editor-calibration-modal">
