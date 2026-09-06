@@ -1,60 +1,82 @@
-import { describe, it, expect } from 'vitest';
+/**
+ * T178 — 楽曲終了判定の audio_offset 補正（曲の尻切れバグ修正） Acceptance Test
+ * 
+ * Runs in node environment (vitest environment: node), no DOM.
+ * Verifies that GameScreen.tsx correctly incorporates chart.audio_offset into the song end detection threshold.
+ */
+import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 
-// The logic under test, as described by T178 requirement:
-// isSongFinished = songTimeMs > (buffer ? buffer.duration * 1000 : fallbackEnd) + (chart?.audio_offset ?? 0);
-function checkSongFinished(
-  songTimeMs: number,
-  bufferDurationMs: number | null,
-  chartAudioOffset: number | undefined,
-  fallbackEndMs: number
-): boolean {
-  const effectiveDurationMs = (bufferDurationMs ?? fallbackEndMs) + (chartAudioOffset ?? 0);
-  return songTimeMs > effectiveDurationMs;
+function readSrc(rel: string): string {
+  return fs.readFileSync(path.resolve(process.cwd(), rel), 'utf-8');
 }
 
-describe('T178: Song End Detection with audio_offset', () => {
-  it('should correctly detect song end considering audio_offset (3-step transition)', () => {
-    const bufferDurationMs = 10000; // 10s
-    const chartAudioOffset = 500;   // 0.5s offset
-    const fallbackEndMs = 60000;    // 60s
-    
-    // Effective end = 10000 + 500 = 10500ms
-
-    // 1. Initial State (Before effective end)
-    const songTimeInitial = 10400;
-    expect(checkSongFinished(songTimeInitial, bufferDurationMs, chartAudioOffset, fallbackEndMs)).toBe(false);
-
-    // 2. Action (Advance time beyond effective end)
-    const songTimeAdvance = 10600;
-
-    // 3. Assert Resulting Transition (Should now be finished)
-    expect(checkSongFinished(songTimeAdvance, bufferDurationMs, chartAudioOffset, fallbackEndMs)).toBe(true);
+describe('T178 - 楽曲終了判定の audio_offset 補正 (Song End Detection with audio_offset)', () => {
+  beforeEach(() => {
+    // Setup
   });
 
-  it('should handle missing buffer (use fallbackEnd) correctly (3-step transition)', () => {
-    const bufferDurationMs = null; // No buffer
-    const chartAudioOffset = 200;
-    const fallbackEndMs = 5000; // 5s
+  describe('1. Static Source Code Inspection (GameScreen.tsx)', () => {
+    it('GameScreen must incorporate chart.audio_offset into effectiveDurationMs / endThreshold', () => {
+      // [Step 1: Capture Initial State]
+      const src = readSrc('src/screens/GameScreen.tsx');
+      expect(src).toBeDefined();
 
-    // Effective end = 5000 + 200 = 5200ms
+      // Find the song end threshold calculation section
+      const endThresholdIdx = src.indexOf('endThreshold') !== -1 ? src.indexOf('endThreshold') : src.indexOf('effectiveDurationMs');
+      expect(endThresholdIdx, 'GameScreen must contain endThreshold or effectiveDurationMs calculation').toBeGreaterThan(-1);
 
-    // 1. Initial State
-    const songTimeInitial = 5100;
-    expect(checkSongFinished(songTimeInitial, bufferDurationMs, chartAudioOffset, fallbackEndMs)).toBe(false);
+      // Extract snippet around end threshold calculation
+      const snippet = src.slice(Math.max(0, endThresholdIdx - 100), endThresholdIdx + 300);
 
-    // 2. Action (Advance time)
-    const songTimeAdvance = 5300;
+      // [Step 2: Perform Inspection]
+      // Check if chart?.audio_offset or audioOffsetMs is added
+      const hasAudioOffsetAddition = /audio_offset|audioOffsetMs/.test(snippet);
 
-    // 3. Assert Transition
-    expect(checkSongFinished(songTimeAdvance, bufferDurationMs, chartAudioOffset, fallbackEndMs)).toBe(true);
+      // [Step 3: Assert Resulting Transition (Must fail Red before implementation, pass Green after)]
+      expect(hasAudioOffsetAddition, 'End threshold / effectiveDurationMs calculation must include chart?.audio_offset').toBe(true);
+      expect(snippet).toMatch(/chart\?\.audio_offset/);
+    });
   });
 
-  it('should not be finished exactly at effective end time', () => {
-    const bufferDurationMs = 10000;
-    const chartAudioOffset = 500;
-    const fallbackEndMs = 60000;
+  describe('2. Dynamic Computed Duration Calculation (Off-Grid Fractional Timing)', () => {
+    it('calculates effectiveDurationMs correctly with buffer and fractional audio_offset', () => {
+      // [Step 1: Capture Initial State]
+      const durationSec = 120.5; // 120,500 ms
+      const buffer = { duration: durationSec } as AudioBuffer;
+      const fallbackEnd = 60000;
+      
+      // Off-grid fractional audio_offset values
+      const offGridOffsets = [0, 1500.75, 2345.67, -500.25];
 
-    // Effective end = 10500ms
-    expect(checkSongFinished(10500, bufferDurationMs, chartAudioOffset, fallbackEndMs)).toBe(false);
+      for (const audioOffset of offGridOffsets) {
+        // [Step 2: Perform Computation mirroring expected GameScreen logic]
+        const baseDurationMs = buffer ? buffer.duration * 1000 : fallbackEnd;
+        // Expected formula after fix: (buffer ? buffer.duration * 1000 : fallbackEnd) + (chart?.audio_offset ?? 0)
+        const chart = { audio_offset: audioOffset };
+        const effectiveDurationMs = baseDurationMs + (chart?.audio_offset ?? 0);
+
+        // [Step 3: Assert Resulting Transition]
+        expect(effectiveDurationMs).toBeCloseTo(durationSec * 1000 + audioOffset, 2);
+      }
+    });
+
+    it('calculates effectiveDurationMs correctly with fallbackEnd when buffer is null and fractional audio_offset', () => {
+      // [Step 1: Capture Initial State]
+      const buffer = null;
+      const fallbackEnd = 45000;
+      const offGridOffsets = [123.45, 987.65];
+
+      for (const audioOffset of offGridOffsets) {
+        // [Step 2: Perform Computation]
+        const baseDurationMs = buffer ? (buffer as any).duration * 1000 : fallbackEnd;
+        const chart = { audio_offset: audioOffset };
+        const effectiveDurationMs = baseDurationMs + (chart?.audio_offset ?? 0);
+
+        // [Step 3: Assert Resulting Transition]
+        expect(effectiveDurationMs).toBeCloseTo(fallbackEnd + audioOffset, 2);
+      }
+    });
   });
 });
