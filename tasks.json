@@ -992,5 +992,50 @@
     ],
     "type": "feat",
     "test": true
+  },
+  {
+    "id": "T167",
+    "desc": "オフセットの刺激→判定への移設（manualOffsetは判定側のみ）。確定モデル: audioOffsetは音楽頭出し用で刺激側に残し、manualOffset(端末音声遅延L)は判定側だけに適用。修正: metronome.tsのschedule内offsetSeconds()加算撤廃、GameScreen.playMusic/EditorScreen.playFromはaudioOffsetのみに戻す、CalibrationModal/GameScreenのhandleHit(+miss期限・journal.at)をtap-(hitTime+manual)に統一、ヒント文更新、保存値の符号移行(旧-L→新+L)を反転か再計測案内で統一。完了条件: (1) クリック固定のまま,.調整がcalibration-last誤差に線形反映(低遅延PCの合わせフロー維持) (2) audioOffset頭出しは従来通り(T135/T143回帰なし) (3) tsc --noEmit。",
+    "depends_on": [
+      "T166"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T168",
+    "desc": "キャリブレーション専用の広い判定ウィンドウ（200ms超遅延PC対応）。背景: 200ms超遅延PCで現行window(beatMs*0.4=±200ms)では測定不能。修正: CalibrationModal.tsxのみ(T167移設後が前提)。judgeHitに任意windowMs引数追加か最近傍直指定ラッパーで±750ms適用。上限<1000ms（リング間隔2000msの半分）。ゲーム本編不変。完了条件: (1) ±500ms級でも最近傍リングに判定が付く (2) 本編window不変 (3) tsc --noEmit。",
+    "depends_on": [
+      "T167"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T169",
+    "desc": "キャリブレーション初回タップ時のオフセットリセット廃止。背景: CalibrationModal.tsx:140-144の初回SpaceでsetManualOffset(0)が走り調整が消える。修正: CalibrationModal.tsxのみ。タップ時リセット廃止。オープン時1回0化か維持のいずれかに統一。savedOffset復元・保存維持。完了条件: (1) 調整後試打で値維持 (2) キャンセルで開始前値復元 (3) tsc --noEmit。",
+    "depends_on": [
+      "T168"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T170",
+    "desc": "粗調整＋微調整の2段階キャリブレーション（8回タップ平均の復活）。背景: ±10msハンティングのみでは200ms超の初期合わせが大変。旧T61方式(×8・最初2破棄・残6平均)は範囲無制限。修正: CalibrationModal.tsxのみ(T167・T168前提)。粗調整モード追加: 強拍に合わせ×8→平均をsetManualOffset反映(T167と同一符号=tap-(hitTime+manual)が0になる向き)。半拍超は最近傍＋アンラップ(±1000ms折返し補正)。後は,.微調整継続。完了条件: (1) ±500ms級が8回で±20ms以内に粗調整 (2) 微調整・保存・キャンセル従来通り (3) tsc --noEmit。",
+    "depends_on": [
+      "T169"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T171",
+    "desc": "outputLatency/baseLatencyの自動初期値化（任意・おまけ）。背景: 取れる環境では粗遅延が分かり手動合わせの出発点を小さくできる。修正: CalibrationModal.tsxオープン時初期値のみ(T167の符号manual*=+Lと同一向き)。ctx.outputLatency/baseLatency合計msを加算。不可環境は0。完了条件: (1) 対応環境で反映・非対応で0開始 (2) tsc --noEmit。",
+    "depends_on": [
+      "T170"
+    ],
+    "type": "feat",
+    "test": true
   }
 ]
