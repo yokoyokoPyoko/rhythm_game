@@ -1407,9 +1407,18 @@
       "finished": 1788679186.4089549
     },
     "T177": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1788679186.4113004
+      "started": 1788679186.4113004,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f8a689ea0ffeAlfAWX22PxwYt7",
+        "postmortem": "ses_f8a6928fbffehUljYyiMuIWr6i",
+        "coder": "ses_f8a684aaeffeHNk6n6464ZLxiu"
+      },
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788679243.8213842,
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
