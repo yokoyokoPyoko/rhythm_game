@@ -1267,7 +1267,7 @@
     },
     "T168": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788655410.9831295,
       "cycles": 1,
       "sessions": {
@@ -1278,7 +1278,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788655716.0331569
+      "last_postmortem_at": 1788655716.0331569,
+      "finished": 1788655790.8076367
+    },
+    "T169": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788655790.809195
     }
   },
   "consecutive_no_action": 0
