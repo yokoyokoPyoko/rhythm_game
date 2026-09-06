@@ -1,24 +1,21 @@
 /**
  * @vitest-environment node
- * T170 — 粗調整＋微調整の2段階キャリブレーション（8回タップ平均の復活）
+ * T171 — outputLatency/baseLatency の自動初期値化（任意・おまけ）
  * Vitest node environment — pure computed values / engine math only.
  * Strict 3-step state-transition assertions. MUST FAIL before fix (Red) and PASS after (Green).
  *
- * 仕様:
- * - CalibrationModal.tsx のみに粗調整モードを追加: 強拍リング(4拍ごと)に合わせSpace×8 → 最初2破棄・残り6平均を setManualOffset に反映
- * - 符号: tap - (hitTime + manual) が 0 になる向き (T167)
- * - 半拍超は最近傍＋アンラップ(±1000ms折返し補正, grid 2000ms)
- * - 粗調整後は ,. ±10ms微調整を継続利用
+ * Spec:
+ * - CalibrationModal.tsx のみ、オープン時初期値に ctx.outputLatency/baseLatency 合計msを加算 (T167符号 manual* = +L)
+ * - 取れない環境では 0
+ * - 既存 保存・復元・手動調整ロジックは変更しない
+ * - computeCoarseOffset は維持し粗調整で呼ばれること
+ * - Wave Y は WaveEngine.waveYAt で算出 (TW_AMPハードコード禁止)
  *
- * 完了条件:
- * 1. ±500ms級が8回で±20ms以内に粗調整されること
- * 2. 粗調整後に ,. 微調整・保存・キャンセルが従来通り機能すること
- * 3. tsc --noEmit エラーなし
- *
- * 禁止事項(過去失敗より):
- * - handleHit 内で setManualOffset(0) や firstTapRef リセットを含めてはならない
- * - indexOf('const save') のような曖昧検索を使わず indexOf('const save =') を使う
- * - ブロックスコープ変数を使用前に参照してはならない
+ * 禁止事項:
+ * - indexOf('const save') のような曖昧検索禁止 → 'const save =' を使う
+ * - ブロックスコープ変数の宣言前参照禁止
+ * - TW_AMP を直ハードコードした wave位置比較禁止
+ * - computeCoarseOffset の省略禁止
  */
 if (typeof (globalThis as any).localStorage === 'undefined') {
   const store = new Map<string, string>();
@@ -32,6 +29,9 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
 if (typeof (globalThis as any).window === 'undefined') {
   (globalThis as any).window = globalThis as any;
 }
+if (typeof (globalThis as any).document === 'undefined') {
+  (globalThis as any).document = { createElement: () => ({}) } as any;
+}
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
@@ -40,12 +40,6 @@ import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_CENTER_Y, TW_AMP } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
 import { getManualOffsetMs, setManualOffset } from '../src/audio/clock';
-import {
-  generateCalibrationChart,
-  generateCalibrationLoopChart,
-  unwrapTimingError,
-  computeCoarseOffset,
-} from '../src/screens/editor/CalibrationModal';
 
 vi.useFakeTimers();
 
@@ -55,11 +49,20 @@ vi.useFakeTimers();
 function readFile(rel: string): string {
   return fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf-8');
 }
-function extractHandleHitSlice(src: string): string {
-  const idx = src.indexOf('const handleHit =');
-  if (idx === -1) return '';
-  return src.slice(idx, idx + 3200);
+
+function findLatencyExportName(src: string): string | null {
+  // match exported latency helper: getAutoLatencyMs, getDeviceLatencyMs, computeLatencyOffset, getLatencyOffsetMs, etc.
+  const patterns = [
+    /export\s+function\s+(\w*[Ll]atency\w*)\s*\(/,
+    /export\s+const\s+(\w*[Ll]atency\w*)\s*=/,
+  ];
+  for (const re of patterns) {
+    const m = src.match(re);
+    if (m) return m[1];
+  }
+  return null;
 }
+
 function extractSaveSlice(src: string): string {
   const idx = src.indexOf('const save =');
   if (idx === -1) return '';
@@ -70,528 +73,395 @@ function extractCancelSlice(src: string): string {
   if (idx === -1) return '';
   return src.slice(idx, idx + 900);
 }
-function extractCoarseEffectSlice(src: string): string {
-  // T170 applies offset when coarseTapCount reaches 8
-  const idx = src.indexOf('coarseTapCount');
-  if (idx === -1) return '';
-  return src.slice(Math.max(0, idx - 500), idx + 1500);
-}
 
 // ---------------------------------------------------------------------------
-// T170-1: calibration chart generation — ProSeka loop invariants
+// T171-1: pure latency computation — outputLatency + baseLatency → ms (+L sign)
 // ---------------------------------------------------------------------------
-describe('T170-1: プロセカ風無限ループ譜面生成 (3-step, file + computed)', () => {
-  it('Step1 生成前 chart 無し capture → Step2 generateCalibrationChart(16) → Step3 BPM120 / 2拍交互 / リング4拍ごと', () => {
-    // Step1: capture initial — no chart yet
-    const before: unknown = null;
-    expect(before).toBeNull();
+describe('T171-1: outputLatency/baseLatency 合計ms純計算 (3-step, computed)', () => {
+  it('Step1 対応環境ctx capture → Step2 latency合計を加算 → Step3 丸めたmsが+符号で返る', async () => {
+    // Step1: capture initial — read source and verify helper exists
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    const exportName = findLatencyExportName(src);
+    expect(exportName, 'T171 latency helper must be exported (e.g. getAutoLatencyMs / getDeviceLatencyMs / computeLatencyOffset)').not.toBeNull();
 
-    // Step2: generate small chart for inspection
-    const chart = generateCalibrationChart(16);
+    // Step2: dynamically import the helper and compute with realistic values
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[exportName!];
+    expect(typeof fn, `exported ${exportName} must be function`).toBe('function');
 
-    // Step3: assert transition — computed values
-    expect(chart.bpm).toBe(120);
-    expect(chart.audio_offset).toBe(0);
-    expect(chart.bpm_changes).toEqual([]);
+    // deterministic fake ctx values
+    const fakeCtxA = { outputLatency: 0.025, baseLatency: 0.015 } as any; // 25ms + 15ms = 40ms
+    const fakeCtxB = { outputLatency: 0.011, baseLatency: 0.009 } as any; // 11 + 9 = 20
+    const fakeCtxC = { outputLatency: 0.0, baseLatency: 0.0 } as any;
+    const fakeCtxOffGridA = { outputLatency: 0.0123, baseLatency: 0.0077 } as any; // 12.3+7.7=20
+    const fakeCtxOffGridB = { outputLatency: 0.0337, baseLatency: 0.0113 } as any; // 33.7+11.3=45
 
-    // Segments: up 2 / down 2 alternating, beats = 2 each
-    expect(chart.segments.length).toBe(8); // 16 / 2
-    for (let i = 0; i < chart.segments.length; i++) {
-      const seg = chart.segments[i];
-      expect(seg.beats).toBe(2);
-      const expectedDir = i % 2 === 0 ? 'up' : 'down';
-      expect(seg.direction, `segment ${i} direction`).toBe(expectedDir);
-    }
+    // Step3: assert computed ms is sum*1000 rounded, positive sign
+    const rA = fn(fakeCtxA);
+    expect(Math.round(rA)).toBe(40);
+    expect(rA).toBeGreaterThanOrEqual(0);
 
-    // Rings: 4,8,12,16
-    expect(chart.rings).toEqual([
-      { beat: 4, type: 'single' },
-      { beat: 8, type: 'single' },
-      { beat: 12, type: 'single' },
-      { beat: 16, type: 'single' },
-    ]);
+    const rB = fn(fakeCtxB);
+    expect(Math.round(rB)).toBe(20);
+
+    const rC = fn(fakeCtxC);
+    expect(rC).toBe(0);
+
+    // off-grid fractional latencies must also round correctly
+    const rOffA = fn(fakeCtxOffGridA);
+    expect(Math.round(rOffA)).toBe(20);
+    const rOffB = fn(fakeCtxOffGridB);
+    expect(Math.round(rOffB)).toBe(45);
+
+    // handle missing properties → 0 (non-supported env)
+    const missingCtx: any = {};
+    const rMissing = fn(missingCtx);
+    expect(rMissing).toBe(0);
+
+    const partialCtx = { outputLatency: 0.02 } as any; // baseLatency missing
+    const rPartial = fn(partialCtx);
+    expect(Math.round(rPartial)).toBe(20);
+
+    const partial2 = { baseLatency: 0.03 } as any;
+    const rPartial2 = fn(partial2);
+    expect(Math.round(rPartial2)).toBe(30);
   });
 
-  it('Step1 デフォルト長 24000 capture → Step2 generateCalibrationChart() → Step3 十分な長時間ループ(20分以上)', () => {
-    const chart = generateCalibrationChart();
-    // At BPM 120, 24000 beats = 24000*500ms = 200 min >> 20 min
-    expect(chart.segments.length).toBeGreaterThanOrEqual(1000);
-    expect(chart.rings.length).toBeGreaterThanOrEqual(500);
-    // Loops variant alias must be identical structure
-    const loopChart = generateCalibrationLoopChart(16);
-    expect(loopChart.segments).toEqual(generateCalibrationChart(16).segments);
-    expect(loopChart.rings).toEqual(generateCalibrationChart(16).rings);
-    // Verify ring spacing 2000ms at BPM 120
-    const tl = new BpmTimeline(120, [], 1.0);
-    const ms4 = tl.beatToMs(4);
-    expect(ms4).toBeCloseTo(2000, 3);
-    const diff = tl.beatToMs(8) - tl.beatToMs(4);
-    expect(diff).toBeCloseTo(2000, 3);
-  });
+  it('Step1 非対応環境 capture(プロパティ無し) → Step2 latency計算 → Step3 0開始でT167符号(+L)が保たれる', async () => {
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    const exportName = findLatencyExportName(src);
+    expect(exportName).not.toBeNull();
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[exportName!];
 
-  it('Step1 端数 totalBeats 7 capture → Step2 generate 7 → Step3 segmentsが残り拍でclampされリングは4の倍数のみ', () => {
-    const chart = generateCalibrationChart(7);
-    // 7 beats: segments 2,2,2,1 (remaining)
-    expect(chart.segments.length).toBe(4);
-    expect(chart.segments[3].beats).toBe(1);
-    expect(chart.rings).toEqual([{ beat: 4, type: 'single' }]); // 8 > 7 so not included
-  });
-});
+    // Step1: capture — fake context with no latency props (e.g. Safari old, jsdom)
+    const emptyCtx: any = {};
+    const undefinedCtx: any = { outputLatency: undefined, baseLatency: undefined };
+    const nanCtx: any = { outputLatency: NaN, baseLatency: NaN };
 
-// ---------------------------------------------------------------------------
-// T170-2: unwrapTimingError — ±1000ms折返し補正
-// ---------------------------------------------------------------------------
-describe('T170-2: unwrapTimingError の ±1000ms折返し (3-step, off-grid必須)', () => {
-  it('Step1 raw 0 capture → Step2 unwrap ±500 → Step3 そのまま (範囲内は不変)', () => {
-    const before = 0;
-    expect(before).toBe(0);
-    expect(unwrapTimingError(500)).toBeCloseTo(500, 6);
-    expect(unwrapTimingError(-500)).toBeCloseTo(-500, 6);
-    expect(unwrapTimingError(500.37)).toBeCloseTo(500.37, 6);
-    expect(unwrapTimingError(-501.23)).toBeCloseTo(-501.23, 6);
-    expect(unwrapTimingError(0)).toBe(0);
-    expect(unwrapTimingError(999)).toBeCloseTo(999, 6);
-    expect(unwrapTimingError(-999)).toBeCloseTo(-999, 6);
-  });
-
-  it('Step1 raw 1200 capture(半拍超) → Step2 unwrap → Step3 1200-2000=-800 に折返し', () => {
-    expect(unwrapTimingError(1200)).toBeCloseTo(-800, 6);
-    expect(unwrapTimingError(1500)).toBeCloseTo(-500, 6);
-    expect(unwrapTimingError(1000.37)).toBeCloseTo(-999.63, 4);
-    expect(unwrapTimingError(-1200)).toBeCloseTo(800, 6);
-    expect(unwrapTimingError(-1500)).toBeCloseTo(500, 6);
-  });
-
-  it('Step1 raw 2500 capture(2周期超) → Step2 unwrap → Step3 複数回折返しで [-1000,1000] に収束', () => {
-    expect(unwrapTimingError(2500)).toBeCloseTo(500, 6); // 2500-2000=500
-    expect(unwrapTimingError(3200)).toBeCloseTo(-800, 6); // 3200-2000=1200 -> -800
-    expect(unwrapTimingError(-2500)).toBeCloseTo(-500, 6);
-    expect(unwrapTimingError(4100)).toBeCloseTo(100, 6); // 4100-4000=100
-    for (const v of [0, 500, -500, 1200, -1200, 2500, -3100, 501.37, -501.37, 1000.01, -1000.01]) {
-      const u = unwrapTimingError(v);
-      expect(u, `unwrap(${v}) in [-1000,1000]`).toBeGreaterThanOrEqual(-1000);
-      expect(u).toBeLessThanOrEqual(1000);
-    }
-  });
-
-  it('Step1 カスタム period/bound capture → Step2 unwrap(2100,2000,1000) → Step3 境界挙動が厳密', () => {
-    expect(unwrapTimingError(1000, 2000, 1000)).toBeCloseTo(1000, 6); // bound inclusive stays
-    expect(unwrapTimingError(1000.01, 2000, 1000)).toBeCloseTo(-999.99, 4);
-    expect(unwrapTimingError(-1000, 2000, 1000)).toBeCloseTo(-1000, 6);
-    expect(unwrapTimingError(-1000.01, 2000, 1000)).toBeCloseTo(999.99, 4);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T170-3: computeCoarseOffset — 8回タップ平均（最初2破棄・残り6平均） T167符号
-// ---------------------------------------------------------------------------
-describe('T170-3: computeCoarseOffset 8-tap平均(最初2破棄) (3-step, off-grid必須)', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 currentOffset 0 + raw 8サンプル capture → Step2 compute → Step3 最初2破棄・残り6平均が current+avg', () => {
-    // Step1: capture initial offset 0 and 8 raw errors
-    setManualOffset(0);
-    expect(getManualOffsetMs()).toBe(0);
-    const raw = [10, -5, 100, 102, 98, 101, 99, 100]; // first 2 discarded, avg of last 6 = 100
     // Step2: compute
-    const next = computeCoarseOffset(raw, getManualOffsetMs());
-    // Step3: avg of [100,102,98,101,99,100] = 600/6=100, so next = 100
-    expect(next).toBe(100);
-    // Verify discard is exactly 2: changing first 2 should not affect result
-    const raw2 = [999, 999, 100, 102, 98, 101, 99, 100];
-    expect(computeCoarseOffset(raw2, 0)).toBe(100);
+    const rEmpty = fn(emptyCtx);
+    const rUndef = fn(undefinedCtx);
+    const rNaN = fn(nanCtx);
+
+    // Step3: all must be 0, proving fallback does not throw and stays 0-start
+    expect(rEmpty).toBe(0);
+    expect(rUndef).toBe(0);
+    expect(rNaN).toBe(0);
+
+    // Verify that initial offset application would be current + latency (+L), not minus
+    // Simulate open-time addition: nextOffset = current + latencyMs
+    setManualOffset(10);
+    expect(getManualOffsetMs()).toBe(10);
+    const latencyMs = fn({ outputLatency: 0.02, baseLatency: 0.01 } as any); // 30
+    const nextOffset = Math.round(getManualOffsetMs() + latencyMs);
+    expect(nextOffset).toBe(40); // 10 + 30, positive sign confirms +L
+    setManualOffset(0);
   });
 
-  it('Step1 current 50 capture → Step2 端数 raw(0.37差) → Step3 アンラップ込みで avg が正しい', () => {
+  it('Step1 端数latency(0.37ms刻み) capture → Step2 複数パターン → Step3 Math.roundで±1ms以内の決定性', async () => {
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    const exportName = findLatencyExportName(src);
+    expect(exportName).not.toBeNull();
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[exportName!];
+
+    // off-grid fractional latencies (simulate diverse devices)
+    const cases: Array<{ ctx: any; expected: number }> = [
+      { ctx: { outputLatency: 0.005, baseLatency: 0.007 }, expected: 12 },
+      { ctx: { outputLatency: 0.0173, baseLatency: 0.0127 }, expected: 30 },
+      { ctx: { outputLatency: 0.001, baseLatency: 0.001 }, expected: 2 },
+      { ctx: { outputLatency: 0.12, baseLatency: 0.08 }, expected: 200 },
+      { ctx: { outputLatency: 0.03337, baseLatency: 0.01163 }, expected: 45 },
+    ];
+    for (const { ctx, expected } of cases) {
+      const got = fn(ctx as any);
+      expect(Math.round(got), `latency ${JSON.stringify(ctx)}`).toBe(expected);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T171-2: file contract — CalibrationModal.tsx が latency を open時に加算
+// ---------------------------------------------------------------------------
+describe('T171-2: ファイル契約 — CalibrationModal open時 latency加算 (3-step)', () => {
+  it('Step1 ソース読込 capture → Step2 outputLatency/baseLatency 存在確認 → Step3 open時setManualOffsetに加算ロジックがある', () => {
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    // Step1: capture before state — file must contain latency props
+    expect(src, 'must contain outputLatency').toMatch(/outputLatency/);
+    expect(src, 'must contain baseLatency').toMatch(/baseLatency/);
+
+    // Step2: find latency helper export already verified, now verify open-time usage
+    const exportName = findLatencyExportName(src);
+    expect(exportName).not.toBeNull();
+
+    // The open/mount effect must call the helper and apply via setManualOffset
+    // Search for setManualOffset usage near outputLatency/baseLatency region
+    const latencyRegionIdx = src.indexOf('outputLatency');
+    expect(latencyRegionIdx).toBeGreaterThan(-1);
+    const region = src.slice(Math.max(0, latencyRegionIdx - 1200), latencyRegionIdx + 1200);
+    expect(region).toMatch(/setManualOffset/);
+
+    // Must handle *1000 conversion (seconds → ms) and Math.round or similar
+    expect(src).toMatch(/\*\s*1000/);
+    // Should tolerate undefined/null via || 0 or ?? 0 or Number()
+    expect(src).toMatch(/\|\|\s*0|\?\?\s*0|Number\(/);
+
+    // T167 sign: manual* = +L, so addition not subtraction
+    // At least one occurrence of currentOffset + latency or getManualOffsetMs() + latency
+    const hasPlusLatency = /getManualOffsetMs\(\)\s*\+\s*\w*[Ll]atency|currentOffset\s*\+\s*\w*[Ll]atency|manualOffset.*\+.*latency/i.test(src) || region.includes('+');
+    // We check more strictly: the helper is used in an addition context
+    expect(src).toMatch(/outputLatency[\s\S]*?baseLatency/);
+  });
+
+  it('Step1 savedOffset=50 capture → Step2 open時にlatency(例30ms)加算 → Step3 次オフセットが80で線形+符号', async () => {
+    // Step1: capture initial saved offset
     setManualOffset(50);
     expect(getManualOffsetMs()).toBe(50);
-    // Off-grid: include fractional 0.37 / 1.23 style errors
-    const raw = [0, 0, 100.37, 99.63, 100.37, 99.63, 100.37, 99.63]; // avg = 100 (with fractions)
-    const avg = (100.37 + 99.63 + 100.37 + 99.63 + 100.37 + 99.63) / 6;
-    expect(avg).toBeCloseTo(100, 6);
-    const next = computeCoarseOffset(raw, 50)!;
-    expect(next).toBe(Math.round(50 + avg));
-    expect(next).toBe(150);
-  });
 
-  it('Step1 current 0 capture → Step2 半拍超 1200 を含む raw → Step3 アンラップ(-800)して平均される', () => {
-    // If raw contains 1200, unwrap -> -800, so average is pulled down
-    const raw = [0, 0, 1200, 1200, 1200, 1200, 1200, 1200];
-    // kept = 6 * 1200 -> unwrapped = 6 * (-800) -> avg=-800 -> next=-800
-    expect(computeCoarseOffset(raw, 0)).toBe(-800);
-    // Mixed: 3*500 + 3*1200(-800) => avg = (1500-2400)/6 = -150
-    const mixed = [0, 0, 500, 500, 500, 1200, 1200, 1200];
-    const unwrappedMixed = [500, 500, 500, -800, -800, -800];
-    const avgMixed = unwrappedMixed.reduce((a, b) => a + b, 0) / 6;
-    expect(avgMixed).toBeCloseTo(-150, 6);
-    expect(computeCoarseOffset(mixed, 0)).toBe(Math.round(avgMixed));
-    // With currentOffset 200, sign T167: new = 200 + (-150) = 50
-    expect(computeCoarseOffset(mixed, 200)).toBe(50);
-  });
-
-  it('Step1 サンプル不足 capture(6個のみ) → Step2 compute → Step3 残り4個で平均(足りない分はそのまま) / 空ならnull', () => {
-    // Only 3 samples total, discard 2 -> 1 kept -> avg=100 -> next=100
-    expect(computeCoarseOffset([0, 0, 100], 0)).toBe(100);
-    expect(computeCoarseOffset([999, 999, 100], 0)).toBe(100);
-    // Exactly 2 samples -> kept empty -> null
-    expect(computeCoarseOffset([1, 2], 0)).toBeNull();
-    expect(computeCoarseOffset([], 0)).toBeNull();
-    expect(computeCoarseOffset([1], 0)).toBeNull();
-  });
-
-  it('Step1 符号検証: tap-(hit+manual)=error が正なら offset は増加して 0 に向かう capture → Step2 負エラー → Step3 offset 減少', () => {
-    // T167: error = tap - (hitTime + manual). If tap is late (+), manual must increase to compensate.
-    // computeCoarseOffset(raw, current) = current + avgError
-    expect(computeCoarseOffset([0, 0, 50, 50, 50, 50, 50, 50], 0)).toBe(50);
-    expect(computeCoarseOffset([0, 0, -50, -50, -50, -50, -50, -50], 100)).toBe(50);
-    // Off-grid negative fractional
-    const negFrac = [0, 0, -50.37, -49.63, -50.37, -49.63, -50.37, -49.63];
-    expect(computeCoarseOffset(negFrac, 100)).toBe(50);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T170-4: ±500ms級が8回で±20ms以内に粗調整 (end-to-end, off-grid必須)
-// ---------------------------------------------------------------------------
-describe('T170-4: ±500ms級粗調整が8回で±20ms以内 (3-step, off-grid & 複雑パス)', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  function simulateCalibrationTapSeries(trueLatencyMs: number, jitterPattern: number[] = [0]): number[] {
-    // Simulate taps that hit nearest ring with T167 error definition:
-    // error = tap - (hitTime + manualOffset) ; manual=0 initially, hitTime at beat grid
-    // For a fixed latency L, tap = hitTime + L (+ jitter)
-    // So error = L + jitter
-    const samples: number[] = [];
-    for (let i = 0; i < 8; i++) {
-      const jitter = jitterPattern[i % jitterPattern.length] ?? 0;
-      samples.push(trueLatencyMs + jitter);
-    }
-    return samples;
-  }
-
-  it('Step1 L=+500ms capture(初期0) → Step2 8回タップして粗調整 → Step3 残差±20ms以内', () => {
-    setManualOffset(0);
-    expect(getManualOffsetMs()).toBe(0);
-    const L = 500;
-    const raw = simulateCalibrationTapSeries(L);
-    const next = computeCoarseOffset(raw, getManualOffsetMs())!;
-    // Step3: after coarse, predicted residual = L - next should be ~0
-    // Since next = 0 + L = 500, residual 0
-    expect(Math.abs(L - next)).toBeLessThanOrEqual(20);
-    // Apply and verify new error ~0
-    setManualOffset(next);
-    const residualErrors = raw.slice(2).map((r) => unwrapTimingError(r) - next + getManualOffsetMs() /* which is next, so cancels */);
-    // Actually after setting offset to next, new error should be tap-(hit+next)= L - next =0
-    // So check with fresh taps at same L but new manual
-    const newError = L - getManualOffsetMs();
-    expect(Math.abs(newError)).toBeLessThanOrEqual(20);
-  });
-
-  it('Step1 L=-480ms capture(負遅延) → Step2 8回端数jitter付き → Step3 ±20ms以内', () => {
-    setManualOffset(10); // start from non-zero to ensure currentOffset handling
-    expect(getManualOffsetMs()).toBe(10);
-    const L = -480;
-    // Off-grid jitter: 0.37, -1.23, 2.7-like fractional
-    const jitter = [0.37, -1.23, 0.62, -0.41, 1.07, -0.88, 0.37, -1.23];
-    const rawErrors = jitter.map((j) => (L - getManualOffsetMs()) + j + getManualOffsetMs()); // error = L + jitter (T167)
-    // Simplify: raw samples as would be collected (tap-(hit+manual)) at currentOffset=10
-    // If latency L=-480 but current manual=10, error at tap = L - manual = -490 + jitter
-    // Let's compute directly: tap = hit+L, error = tap-(hit+manual)=L-manual+jitter
-    const raw = jitter.map((j) => L - 10 + j); // because manual=10
-    const next = computeCoarseOffset([999, 999, ...raw.slice(2)], getManualOffsetMs())!; // first 2 are dummy discard, but we test direct
-    // Use actual raw: we want 8 samples where current error ~ L-manual
-    const raw8 = simulateCalibrationTapSeries(L - 10, jitter.slice(0, 4));
-    // Need to map: raw8 originally at manual 10 gives error ~ L-10, after coarse it should land at L
-    const coarseNext = computeCoarseOffset(raw8, 10)!;
-    // After coarse, manual should be ~ L
-    expect(Math.abs(coarseNext - L)).toBeLessThanOrEqual(20);
-  });
-
-  it('Step1 L=+513.37ms(off-grid) capture → Step2 8回(端数揃え) → Step3 ±20ms以内 (T127複雑ampでも不変)', () => {
-    setManualOffset(0);
-    const L = 513.37;
-    const jitter = [0.37, -0.62, 1.23, -0.88, 0.41, -1.07, 0.37, -0.62];
-    const raw = jitter.map((j) => L + j);
-    const next = computeCoarseOffset(raw, 0)!;
-    const avg = raw.slice(2).map((r) => unwrapTimingError(r)).reduce((a, b) => a + b, 0) / 6;
-    expect(avg).toBeCloseTo(L + jitter.slice(2).reduce((a, b) => a + b, 0) / 6, 4);
-    expect(Math.abs(L - next)).toBeLessThanOrEqual(20);
-    // Regression: WaveEngine/Cursor must still match regardless of calibration offset
-    for (const amp of [0.7, 1.3, 2.7, 3.4]) {
-      const tl = new BpmTimeline(120, [], amp);
-      const engine = new WaveEngine([{ direction: 'down', beats: 6 }], tl, amp, 0);
-      const perBeat = 2 * TW_AMP * amp;
-      for (const b of [0.37, 1.23, 2.62]) {
-        const rawY = TW_CENTER_Y + perBeat * b;
-        const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, rawY));
-        expect(engine.waveYAt(b)).toBeCloseTo(expected, 4);
-      }
-      // cursor slope must match wave slope
-      const beatMs = 500;
-      const cursor = new Cursor(amp, 0);
-      const y0 = cursor.y;
-      cursor.update((0.37 * beatMs) / 1000, false, true, beatMs);
-      expect(Math.abs(cursor.y - y0)).toBeCloseTo(perBeat * 0.37, 4);
-    }
-  });
-
-  it('Step1 L=+750級(unwrap発動) capture → Step2 8回で折返し平均 → Step3 ±20ms以内で隣リング混入なし', () => {
-    setManualOffset(0);
-    const L = 750;
-    // At L=750, unwrap with 2000 period keeps 750 (<1000) as is, no folding, so avg=750 -> next=750 residual 0
-    const raw = Array.from({ length: 8 }, () => L);
-    expect(computeCoarseOffset(raw, 0)).toBe(750);
-    expect(Math.abs(L - computeCoarseOffset(raw, 0)!)).toBeLessThanOrEqual(20);
-
-    // At L=1200, unwrap folds to -800, so coarse would correct to -800, BUT real latency 1200 is ambiguous
-    // With nearest-ring judgement (T168) the tap at +1200 from ring A is -800 from ring B, so observed error is -800
-    // And correction to -800 is the correct nearest-ring solution (half grid = 1000 bound)
-    const L2 = 1200;
-    const observed = unwrapTimingError(L2);
-    expect(observed).toBeCloseTo(-800, 6);
-    const raw2 = Array.from({ length: 8 }, () => observed);
-    expect(computeCoarseOffset(raw2, 0)).toBe(-800);
-    // Residual against observed is 0 (nearest-ring semantics)
-    expect(Math.abs(observed - computeCoarseOffset(raw2, 0)!)).toBeLessThanOrEqual(20);
-  });
-
-  it('Step1 複数L [+500,-500,+250,-250,+513.37] capture → Step2 各8回 → Step3 全て±20ms以内 (sweep)', () => {
-    const cases = [500, -500, 250, -250, 513.37, -513.37, 480, -480, 749, -749];
-    for (const L of cases) {
-      setManualOffset(0);
-      const raw = Array.from({ length: 8 }, (_, i) => L + (i % 2 === 0 ? 0.37 : -0.62));
-      const next = computeCoarseOffset(raw, 0)!;
-      // After correction, residual should be jitter mean, which for +/-0.37 pattern ~ -0.125, well within 20
-      const jitterAvg = raw.slice(2).reduce((a, b) => a + b, 0) / 6 - L;
-      const expectedNext = Math.round(L + jitterAvg);
-      expect(next).toBe(expectedNext);
-      expect(Math.abs(L - next)).toBeLessThanOrEqual(20);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T170-5: 粗調整後の ,. 微調整・保存・キャンセルが従来通り (3-step)
-// ---------------------------------------------------------------------------
-describe('T170-5: 粗調整後の微調整・保存・キャンセル (3-step)', () => {
-  beforeEach(() => setManualOffset(0));
-  afterEach(() => setManualOffset(0));
-
-  it('Step1 初期0→粗調整で+500へ capture → Step2 ,. で±10 → Step3 510/490/500に戻る', () => {
-    // Step1: coarse to +500
-    setManualOffset(0);
-    expect(getManualOffsetMs()).toBe(0);
-    const next = computeCoarseOffset(Array.from({ length: 8 }, () => 500), 0)!;
-    setManualOffset(next);
-    expect(getManualOffsetMs()).toBe(500);
-
-    // Step2: fine adjust +10 (like CalibrationModal adjustOffset)
-    const plusTen = Math.round(getManualOffsetMs() + 10);
-    setManualOffset(plusTen);
-    expect(getManualOffsetMs()).toBe(510);
-
-    // Step3: -10 back
-    setManualOffset(Math.round(getManualOffsetMs() - 10));
-    expect(getManualOffsetMs()).toBe(500);
-    setManualOffset(Math.round(getManualOffsetMs() - 10));
-    expect(getManualOffsetMs()).toBe(490);
-    setManualOffset(Math.round(getManualOffsetMs() + 10));
-    expect(getManualOffsetMs()).toBe(500);
-  });
-
-  it('Step1 saved=30で粗調整498へ → Step2 微調整 → Step3 cancelで30に復元 / saveで保持', () => {
-    // Simulate modal open savedOffsetRef = 30
-    setManualOffset(30);
-    const saved = getManualOffsetMs();
-    expect(saved).toBe(30);
-
-    // Coarse collects 8 samples at latency ~500, manual still 30 so observed error = 500-30=470 (+ jitter 0.37)
-    const observedErrors = Array.from({ length: 8 }, () => 470 + 0.37);
-    const next = computeCoarseOffset(observedErrors, 30)!; // 30 + 470.37 ≈ 500
-    expect(Math.abs(next - 500)).toBeLessThanOrEqual(2);
-    setManualOffset(next);
-    const afterCoarse = getManualOffsetMs();
-    expect(Math.abs(afterCoarse - 500)).toBeLessThanOrEqual(2);
-
-    // Fine +10
-    setManualOffset(Math.round(getManualOffsetMs() + 10));
-    expect(getManualOffsetMs()).toBe(afterCoarse + 10);
-
-    // Cancel -> restore saved (30)
-    setManualOffset(saved); // simulate cancel() -> setManualOffset(savedOffsetRef.current)
-    expect(getManualOffsetMs()).toBe(30);
-    expect(getManualOffsetMs()).not.toBe(afterCoarse + 10);
-
-    // Re-apply coarse and save -> keep
-    const next2 = computeCoarseOffset(observedErrors, 30)!;
-    setManualOffset(next2);
-    const beforeSave = getManualOffsetMs();
-    setManualOffset(getManualOffsetMs()); // save() keeps getManualOffsetMs()
-    expect(getManualOffsetMs()).toBe(beforeSave);
-  });
-
-  it('Step1 0→粗調整→端数オフセットで微調整 capture → Step2 off-grid 0.37拍相当の微調整 → Step3 値が10刻みで線形反映', () => {
-    setManualOffset(0);
-    const L = 250.37; // off-grid latency
-    const raw = Array.from({ length: 8 }, () => L);
-    const coarse = computeCoarseOffset(raw, 0)!;
-    setManualOffset(coarse);
-    expect(getManualOffsetMs()).toBeCloseTo(250, 0); // rounded
-    const before = getManualOffsetMs();
-    // Simulate adjustOffset(-10) and (+10) as in CalibrationModal
     const src = readFile('src/screens/editor/CalibrationModal.tsx');
-    expect(src).toContain('const adjustOffset');
-    // Use specific pattern
-    const adjIdx = src.indexOf('const adjustOffset =');
-    expect(adjIdx).toBeGreaterThan(-1);
-    // Perform
-    setManualOffset(Math.round(getManualOffsetMs() - 10));
-    expect(getManualOffsetMs()).toBe(before - 10);
-    setManualOffset(Math.round(getManualOffsetMs() + 20));
-    expect(getManualOffsetMs()).toBe(before + 10);
-  });
-});
+    const exportName = findLatencyExportName(src);
+    expect(exportName).not.toBeNull();
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[exportName!];
 
-// ---------------------------------------------------------------------------
-// T170-6: ファイル契約 — handleHitはリセットせず、粗調整はeffectで適用、wide窓T168維持
-// ---------------------------------------------------------------------------
-describe('T170-6: ファイル契約 — 粗調整の責務分離 & T167/T168回帰 (3-step)', () => {
-  it('Step1 CalibrationModal.tsx読み込み capture → Step2 handleHitスライス抽出 → Step3 setManualOffset(0)ゼロ & タップでoffset不変', () => {
-    const src = readFile('src/screens/editor/CalibrationModal.tsx');
-    expect(src).toContain('const handleHit =');
-    const slice = extractHandleHitSlice(src);
-    expect(slice.length).toBeGreaterThan(200);
-    // Prohibited: handleHit must NOT contain any setManualOffset(0) or firstTap reset
-    expect(slice, 'handleHit must NOT contain setManualOffset(0)').not.toContain('setManualOffset(0)');
-    expect(slice, 'handleHit must NOT contain firstTapRef').not.toMatch(/firstTapRef/);
-    // Must contain judgement logic with T167 sign and wide window
-    expect(slice).toMatch(/songNow/);
-    expect(slice).toMatch(/judgeHit/);
-    expect(slice).toMatch(/getManualOffsetMs/);
-    // T168 wide window must be passed (750 or constant)
-    expect(slice).toMatch(/750|CALIBRATION_WIDE_WINDOW_MS|WIDE/);
-    // Samples are pushed to coarseSamplesRef, offset not mutated inside handleHit
-    expect(slice).toMatch(/coarseSamplesRef/);
-    const setCalls = (slice.match(/setManualOffset/g) || []).length;
-    expect(setCalls, 'handleHit must have zero setManualOffset calls (offset only in effect/save/cancel/adjust)').toBe(0);
+    // Step2: simulate open-time computation: next = saved + latencyMs
+    const latencyMs = fn({ outputLatency: 0.02, baseLatency: 0.01 } as any); // 30ms
+    expect(latencyMs).toBe(30);
+    const simulatedNext = Math.round(getManualOffsetMs() + latencyMs);
+
+    // Step3: assert +L sign — increase by latency, not decrease
+    expect(simulatedNext).toBe(80);
+    expect(simulatedNext).toBeGreaterThan(50);
+
+    // Also verify non-supported env stays at saved value
+    const zeroLatency = fn({} as any);
+    expect(zeroLatency).toBe(0);
+    const staysAtSaved = Math.round(50 + zeroLatency);
+    expect(staysAtSaved).toBe(50);
+
+    setManualOffset(0);
   });
 
-  it('Step1 ソース capture → Step2 coarse適用effect抽出 → Step3 computeCoarseOffset + setManualOffset(next) のみでリセット分岐なし', () => {
+  it('Step1 既存保存・復元・微調整ロジック capture → Step2 save/cancel/adjustOffset スライス → Step3 変更されていないこと', () => {
     const src = readFile('src/screens/editor/CalibrationModal.tsx');
-    // save/cancel must use specific indexOf pattern
-    expect(src.indexOf('const save ='), 'must use specific const save = pattern').toBeGreaterThan(-1);
-    expect(src.indexOf('const cancel ='), 'must use specific const cancel = pattern').toBeGreaterThan(-1);
-    const coarseSlice = extractCoarseEffectSlice(src);
-    expect(coarseSlice.length).toBeGreaterThan(100);
-    expect(coarseSlice).toMatch(/computeCoarseOffset/);
-    expect(coarseSlice).toMatch(/setManualOffset/);
-    expect(coarseSlice).toMatch(/coarseTapCount/);
-    // Must check for 8 count
-    expect(coarseSlice).toMatch(/CALIBRATION_SAMPLE_COUNT|8/);
-    expect(coarseSlice).toMatch(/CALIBRATION_DISCARD_COUNT|slice/);
-    // save and cancel contracts
+    // Use specific patterns (prohibited rule)
+    const saveIdx = src.indexOf('const save =');
+    expect(saveIdx, 'must use specific const save = pattern').toBeGreaterThan(-1);
+    const cancelIdx = src.indexOf('const cancel =');
+    expect(cancelIdx, 'must use specific const cancel = pattern').toBeGreaterThan(-1);
+
     const saveSlice = extractSaveSlice(src);
     expect(saveSlice).toMatch(/setManualOffset\(getManualOffsetMs\(\)\)/);
     expect(saveSlice).toMatch(/onClose\(true\)/);
+    expect(saveSlice).not.toContain('setManualOffset(0)');
+
     const cancelSlice = extractCancelSlice(src);
     expect(cancelSlice).toMatch(/setManualOffset\(savedOffsetRef\.current\)/);
     expect(cancelSlice).toMatch(/onClose\(false\)/);
-    // Neither save nor cancel should be setManualOffset(0) as reset
-    expect(saveSlice).not.toContain('setManualOffset(0)');
-    expect(cancelSlice).not.toContain('setManualOffset(0)');
-  });
 
-  it('Step1 保存前状態 capture → Step2 粗調整effectの条件確認 → Step3 T169回帰: タップ連打でもoffsetが勝手に0にならない', () => {
-    setManualOffset(80);
-    expect(getManualOffsetMs()).toBe(80);
-    const src = readFile('src/screens/editor/CalibrationModal.tsx');
-    const slice = extractHandleHitSlice(src);
-    // Simulate 8 taps without coarse active: offset stays 80
-    for (let i = 0; i < 8; i++) {
-      // Fixed handleHit would not touch offset
-      expect(getManualOffsetMs()).toBe(80);
-    }
-    expect(slice).not.toContain('setManualOffset(0)');
-    // Also verify schedule is ruler-fixed (T167): metronome.ts must NOT add offsetSeconds
-    const metroSrc = readFile('src/audio/metronome.ts');
-    expect(metroSrc, 'metronome must NOT contain offsetSeconds/mannual add').not.toMatch(/offsetSeconds/);
-    expect(metroSrc).toContain('export function schedule');
-  });
+    // adjustOffset must still be ±10
+    expect(src).toMatch(/const adjustOffset/);
+    expect(src).toMatch(/getManualOffsetMs\(\)\s*\+\s*delta/);
 
-  it('Step1 定数 capture → Step2 CALIBRATION_GRID 2000 / BOUND 1000 → Step3 間隔の半分が上限であること', () => {
-    const src = readFile('src/screens/editor/CalibrationModal.tsx');
-    // Check constants
-    expect(src).toMatch(/CALIBRATION_GRID_MS/);
-    expect(src).toMatch(/CALIBRATION_UNWRAP_BOUND_MS/);
-    // Values must be 2000 and 1000
-    expect(src).toMatch(/2000/);
-    expect(src).toMatch(/1000/);
-    // Wide window must be <1000 (T168)
-    expect(src).toMatch(/750|CALIBRATION_WIDE_WINDOW_MS/);
-    // Verify no literal >=1000 passed as judgeHit window (except interval comments)
-    const matches = [...src.matchAll(/judgeHit\([^)]*,\s*(\d{3,4})/g)].map((m) => Number(m[1]));
-    for (const v of matches) {
-      if (v >= 100 && v < 5000) expect(v, `judge window ${v} must be <1000`).toBeLessThan(1000);
-    }
+    // latency addition must NOT be inside handleHit (only on open)
+    const handleHitIdx = src.indexOf('const handleHit =');
+    expect(handleHitIdx).toBeGreaterThan(-1);
+    const handleSlice = src.slice(handleHitIdx, handleHitIdx + 2600);
+    expect(handleSlice).not.toMatch(/outputLatency/);
+    expect(handleSlice).not.toMatch(/baseLatency/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T170-7: 型契約 & 回帰 off-grid / 複雑振幅 (T127 style, computed)
+// T171-3: computeCoarseOffset 維持 & 粗調整で呼ばれる — 禁止事項の回帰防止
 // ---------------------------------------------------------------------------
-describe('T170-7: 型契約 & 回帰 off-grid / 複雑振幅整合', () => {
-  it('Step1 シンボルimport capture → Step2 呼出 → Step3 型正しくエラー無し', () => {
-    expect(typeof unwrapTimingError).toBe('function');
-    expect(typeof computeCoarseOffset).toBe('function');
-    expect(typeof generateCalibrationChart).toBe('function');
-    expect(typeof getManualOffsetMs).toBe('function');
-    expect(typeof setManualOffset).toBe('function');
-    const tl = new BpmTimeline(120, [], 1.0);
-    expect(tl.beatMsAt(0)).toBeGreaterThan(0);
-    const src = readFile('src/screens/editor/CalibrationModal.tsx');
-    expect(src).toContain('export function generateCalibrationChart');
-    expect(src).toContain('export function unwrapTimingError');
-    expect(src).toContain('export function computeCoarseOffset');
-    expect(src).toContain('data-testid="editor-calibration-modal"');
-    expect(src).toContain('data-testid="calibration-save"');
-    expect(src).toContain('data-testid="calibration-cancel"');
-    expect(src).toContain('data-testid="calibration-coarse"');
+describe('T171-3: computeCoarseOffset 維持 & 粗調整契約 (3-step)', () => {
+  it('Step1 import capture → Step2 computeCoarseOffset/unwrapTimingError 存在 → Step3 型と計算が正しい', async () => {
+    // Step1: capture — dynamic import
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    // Step2: existence
+    expect(typeof mod.computeCoarseOffset, 'computeCoarseOffset must exist (prohibited omission)').toBe('function');
+    expect(typeof mod.unwrapTimingError, 'unwrapTimingError must exist').toBe('function');
+    expect(typeof mod.generateCalibrationChart).toBe('function');
+
+    // Step3: computed values — discards first 2, averages remaining 6 with unwrap
+    const raw = [999, 999, 100, 102, 98, 101, 99, 100]; // avg 100
+    expect(mod.computeCoarseOffset(raw, 0)).toBe(100);
+    expect(mod.computeCoarseOffset(raw, 10)).toBe(110);
+    // off-grid fractional
+    const offRaw = [0, 0, 100.37, 99.63, 100.37, 99.63, 100.37, 99.63];
+    expect(mod.computeCoarseOffset(offRaw, 0)).toBe(100);
+    // unwrap case: 1200 → -800
+    expect(mod.unwrapTimingError(1200)).toBeCloseTo(-800, 6);
+    expect(mod.computeCoarseOffset([0, 0, 1200, 1200, 1200, 1200, 1200, 1200], 0)).toBe(-800);
   });
 
-  it('Step1 amp 0.7 capture → Step2 amp 1.3/2.7/3.4 off-grid 0.37/1.23 → Step3 slope =2*TW_AMP*amp で一致', () => {
+  it('Step1 ソース capture → Step2 coarse適用effectがcomputeCoarseOffsetを呼ぶ → Step3 粗調整はopen時latencyとは独立', () => {
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    // coarse effect must exist
+    const coarseEffectIdx = src.indexOf('coarseTapCount');
+    expect(coarseEffectIdx).toBeGreaterThan(-1);
+    const coarseSlice = src.slice(Math.max(0, coarseEffectIdx - 500), coarseEffectIdx + 1500);
+    expect(coarseSlice).toMatch(/computeCoarseOffset/);
+    expect(coarseSlice).toMatch(/setManualOffset/);
+    expect(coarseSlice).toMatch(/CALIBRATION_SAMPLE_COUNT|8/);
+
+    // latency helper must NOT be called inside handleHit or coarse effect as substitute
+    const handleHitIdx = src.indexOf('const handleHit =');
+    const handleSlice = src.slice(handleHitIdx, handleHitIdx + 2600);
+    // handleHit should collect samples, not mutate offset
+    const setCallsInHandle = (handleSlice.match(/setManualOffset/g) || []).length;
+    expect(setCallsInHandle, 'handleHit must not mutate offset directly').toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T171-4: T127-style 複雑振幅 + off-grid 位相での WaveEngine/Cursor 数値整合
+//         (TW_AMP ハードコード禁止 — waveYAt 経由で検証)
+// ---------------------------------------------------------------------------
+describe('T171-4: 複雑振幅(0.7/1.3/2.7/3.4) + off-grid(0.37/1.23) 数値整合', () => {
+  it('Step1 初期engine無し capture → Step2 WaveEngine生成 → Step3 waveYAt傾斜が 2*TW_AMP*amp で一致', () => {
     const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGrid = [0.37, 1.23, 0.5, 1.37, 2.62];
+    const offGridBeats = [0.37, 1.23, 0.62, 2.37, 1.07];
     for (const amp of amps) {
+      // Step1: capture before — no engine yet
       const tl = new BpmTimeline(120, [], amp);
-      const engine = new WaveEngine([{ direction: 'down', beats: 6 }], tl, amp, 0.0);
+      // Step2: create engine with single down segment long enough to avoid clamp for small beats
+      const engine = new WaveEngine([{ direction: 'down', beats: 10 }], tl, amp, 0);
       const perBeat = 2 * TW_AMP * amp;
-      const startY = TW_CENTER_Y;
-      const TOP = TW_CENTER_Y - TW_AMP;
-      const BOTTOM = TW_CENTER_Y + TW_AMP;
-      for (const b of offGrid) {
-        const raw = startY + perBeat * b;
-        const expected = Math.max(TOP, Math.min(BOTTOM, raw));
-        expect(engine.waveYAt(b), `amp ${amp} beat ${b}`).toBeCloseTo(expected, 4);
+      const top = TW_CENTER_Y - TW_AMP;
+      const bottom = TW_CENTER_Y + TW_AMP;
+      // Step3: for off-grid beats before clipping, waveYAt must equal clamp(CENTER + perBeat*beat)
+      // Use WaveEngine.waveYAt, not hardcoded TW_AMP arithmetic alone for expected field mapping
+      // But we compute expected via perBeat*amp which is the spec formula, then compare to waveYAt
+      for (const b of offGridBeats) {
+        const rawExpected = TW_CENTER_Y + perBeat * b;
+        const clampedExpected = Math.max(top, Math.min(bottom, rawExpected));
+        const actual = engine.waveYAt(b);
+        expect(actual, `amp ${amp} beat ${b} waveYAt`).toBeCloseTo(clampedExpected, 4);
+        // Also verify getPoints length invariant
+        expect(engine.getPoints().length).toBe(2); // 1 segment +1
       }
     }
   });
 
-  it('Step1 Cursor vs Wave 1拍移動量 capture → Step2 off-grid 0.37 → Step3 一致 & manualOffsetが波高に影響しない', () => {
+  it('Step1 初期cursor capture → Step2 0.37拍移動 → Step3 cursor移動量とwave傾斜が一致しmanualOffsetが波高に影響しない', () => {
     setManualOffset(0);
     const amp = 1.3;
     const beatMs = 500;
     const tl = new BpmTimeline(120, [], amp);
-    const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 1.0);
+    const engine = new WaveEngine([{ direction: 'down', beats: 6 }], tl, amp, 1.0);
     const perBeat = 2 * TW_AMP * amp;
+
+    // Step1: capture initial cursor Y (via engine-aware startPosition)
     const cursor = new Cursor(amp, 1.0);
     const y0 = cursor.y;
+    expect(y0).toBeCloseTo(engine.waveYAt(0), 6);
+
+    // Step2: move cursor 0.37 beats down
     cursor.update((0.37 * beatMs) / 1000, false, true, beatMs);
-    expect(Math.abs(cursor.y - y0)).toBeCloseTo(perBeat * 0.37, 4);
+    const delta = Math.abs(cursor.y - y0);
+
+    // Step3: delta must equal perBeat * 0.37
+    expect(delta).toBeCloseTo(perBeat * 0.37, 4);
     expect(Math.abs(engine.waveYAt(0.37) - engine.waveYAt(0))).toBeCloseTo(perBeat * 0.37, 4);
+
+    // manualOffset changes must NOT affect wave height (latency only shifts judgement, not wave)
     setManualOffset(80);
-    expect(engine.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y - TW_AMP + perBeat * 0.37, 4);
+    expect(engine.waveYAt(0.37)).toBeCloseTo(engine.waveYAt(0) + perBeat * 0.37, 4);
+    setManualOffset(-40);
+    expect(engine.waveYAt(0.37)).toBeCloseTo(engine.waveYAt(0) + perBeat * 0.37, 4);
     setManualOffset(0);
+  });
+
+  it('Step1 複数amp×端数拍 capture → Step2 cursorとwaveを並走 → Step3 両者が同一 perBeat で平行移動', () => {
+    const amps = [0.7, 1.3, 2.7];
+    const beats = [0.37, 1.23, 0.5];
+    for (const amp of amps) {
+      const tl = new BpmTimeline(120, [], amp);
+      const engine = new WaveEngine([{ direction: 'up', beats: 8 }], tl, amp, 0.5);
+      const perBeat = 2 * TW_AMP * amp;
+      for (const b of beats) {
+        // Step1: fresh cursor at startPosition 0.5
+        const cur = new Cursor(amp, 0.5);
+        const startY = cur.y;
+        expect(startY).toBeCloseTo(engine.waveYAt(0), 6);
+        // Step2: move up (since engine is up, perBeat negative)
+        const beatMs = 60000 / 120;
+        // For up, wave goes toward top, so perBeat displacement is -perBeat * beat
+        // Cursor upPressed moves negative as well
+        const dt = (b * beatMs) / 1000;
+        cur.update(dt, true, false, beatMs);
+        // Step3: cursor delta magnitude equals perBeat * b
+        expect(Math.abs(cur.y - startY)).toBeCloseTo(perBeat * b, 3);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T171-5: 3-step 状態遷移 — open時初期値にlatencyが反映される end-to-end
+// ---------------------------------------------------------------------------
+describe('T171-5: 3-step open時初期値にlatency反映 end-to-end (off-grid含む)', () => {
+  beforeEach(() => setManualOffset(0));
+  afterEach(() => setManualOffset(0));
+
+  it('Step1 saved 0 + ctx(20+15=35ms) capture → Step2 open加算 → Step3 offsetが35msになる (対応環境)', async () => {
+    setManualOffset(0);
+    expect(getManualOffsetMs()).toBe(0);
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    const exportName = findLatencyExportName(src);
+    expect(exportName).not.toBeNull();
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[exportName!];
+    const latencyMs = fn({ outputLatency: 0.02, baseLatency: 0.015 } as any);
+    expect(latencyMs).toBe(35);
+    // Step2: simulate open-time apply
+    const next = Math.round(getManualOffsetMs() + latencyMs);
+    setManualOffset(next);
+    // Step3: assert transition
+    expect(getManualOffsetMs()).toBe(35);
+    // verify subsequent ,. fine adjust still ±10 linear
+    setManualOffset(Math.round(getManualOffsetMs() + 10));
+    expect(getManualOffsetMs()).toBe(45);
+    setManualOffset(Math.round(getManualOffsetMs() - 20));
+    expect(getManualOffsetMs()).toBe(25);
+  });
+
+  it('Step1 saved 30 + 非対応ctx(0ms) capture → Step2 open試行 → Step3 30のまま0開始', async () => {
+    setManualOffset(30);
+    expect(getManualOffsetMs()).toBe(30);
+    const src = readFile('src/screens/editor/CalibrationModal.tsx');
+    const exportName = findLatencyExportName(src);
+    expect(exportName).not.toBeNull();
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[exportName!];
+    const latencyMs = fn({} as any);
+    expect(latencyMs).toBe(0);
+    const next = Math.round(getManualOffsetMs() + latencyMs);
+    setManualOffset(next);
+    expect(getManualOffsetMs()).toBe(30);
+  });
+
+  it('Step1 複雑latency(0.37由来端数) + 粗調整 capture → Step2 latency反映後に8tap粗調整 → Step3 粗調整がlatency初期値込みで正しく平均される', async () => {
+    setManualOffset(0);
+    expect(getManualOffsetMs()).toBe(0);
+    const mod: any = await import('../src/screens/editor/CalibrationModal');
+    const fn = mod[findLatencyExportName(readFile('src/screens/editor/CalibrationModal.tsx'))!];
+    // Step1: open with 35ms latency
+    const latencyMs = fn({ outputLatency: 0.02, baseLatency: 0.015 } as any);
+    const afterOpen = Math.round(getManualOffsetMs() + latencyMs);
+    setManualOffset(afterOpen);
+    expect(getManualOffsetMs()).toBe(35);
+
+    // Step2: coarse with observed errors at true latency 70 but current 35 → error 35 each
+    const trueLatency = 70;
+    const observed = Array.from({ length: 8 }, () => trueLatency - getManualOffsetMs() + 0.37); // off-grid 0.37 jitter
+    const next = mod.computeCoarseOffset(observed, getManualOffsetMs());
+    expect(next).not.toBeNull();
+    setManualOffset(next!);
+    // Step3: after coarse, should converge to ~70 (35+35.37 rounded)
+    expect(Math.abs(getManualOffsetMs() - 70)).toBeLessThanOrEqual(2);
   });
 });

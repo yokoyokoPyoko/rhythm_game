@@ -415,6 +415,29 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     return () => window.clearTimeout(t)
   }, [coarseMessage])
 
+  // T171 (bonus): on open, seed the starting offset with the device latency
+  // (outputLatency + baseLatency) so manual tuning starts closer. Only applied
+  // while the saved offset is still 0 (never calibrated) so a previous
+  // session's value is never doubled; unsupported environments add 0.
+  useEffect(() => {
+    void audioMgr.ensure().then(() => {
+      try {
+        const ctx = audioMgr.ctx
+        const latencyMs = computeLatencyOffsetMs({
+          outputLatency: ctx.outputLatency,
+          baseLatency: ctx.baseLatency,
+        })
+        if (latencyMs !== 0 && getManualOffsetMs() === 0) {
+          const seeded = Math.round(getManualOffsetMs() + latencyMs)
+          setManualOffset(seeded)
+          setOffsetMs(seeded)
+        }
+      } catch {
+        // AudioContext unavailable — keep the saved offset unchanged
+      }
+    })
+  }, [audioMgr])
+
   const lastLabel =
     lastJudgement === null
       ? '—'
@@ -467,4 +490,21 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       </div>
     </div>
   )
+}
+
+/**
+ * T171 (bonus): estimate the device audio latency in ms from the AudioContext's
+ * outputLatency / baseLatency (both in seconds). Values that are missing,
+ * undefined or NaN (unsupported environments) contribute 0. The result is
+ * added to the starting offset when the calibration overlay opens (T167 sign:
+ * manual* = +L, i.e. a positive latency raises the offset).
+ */
+export function computeLatencyOffsetMs(ctx: {
+  outputLatency?: number
+  baseLatency?: number
+} | null | undefined): number {
+  if (!ctx) return 0
+  const out = Number(ctx.outputLatency) || 0
+  const base = Number(ctx.baseLatency) || 0
+  return Math.round((out + base) * 1000)
 }
