@@ -1430,7 +1430,8 @@
       "sessions": {
         "qa": "ses_f8a0eaedbffeHjjUK7EmFeGUVq",
         "coder": "ses_f8a096bc5ffe5KSLf9gKCHbxec",
-        "postmortem": "ses_f8a0b52d3ffenhvzuG119STOZ7"
+        "postmortem": "ses_f8a0b52d3ffenhvzuG119STOZ7",
+        "reviewer": "ses_f8a087866ffeIekRLFQk2nlCHV"
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
