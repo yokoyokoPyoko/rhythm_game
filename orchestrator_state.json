@@ -1359,14 +1359,14 @@
       "finished": 1788663915.919053
     },
     "T174": {
-      "attempts": 4,
+      "attempts": 5,
       "status": "running",
       "started": 1788668799.4141376,
       "cycles": 1,
       "sessions": {
-        "qa": null,
+        "qa": "ses_f8b07f4e4ffeF12ptpiKRqRbyi",
         "postmortem": "ses_f8b460cbbffe8POzBR4eNeZIMT",
-        "coder": "ses_f8b43030bffeJdrJvN1qWFyyT2"
+        "coder": "ses_f8b076e54ffeaXK2RTEWYwjEEZ"
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788664795.9317532,
