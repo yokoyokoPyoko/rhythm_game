@@ -1344,7 +1344,7 @@
     },
     "T173": {
       "attempts": 7,
-      "status": "running",
+      "status": "passed",
       "started": 1788661635.7649767,
       "cycles": 2,
       "sessions": {
@@ -1355,7 +1355,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788663669.8537254
+      "last_postmortem_at": 1788663669.8537254,
+      "finished": 1788663915.919053
+    },
+    "T174": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788664085.0992916
     }
   },
   "consecutive_no_action": 0
