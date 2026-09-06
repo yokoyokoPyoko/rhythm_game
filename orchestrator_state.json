@@ -1366,7 +1366,8 @@
       "sessions": {
         "qa": "ses_f8afff538fferzlGldhJ1YyksI",
         "postmortem": "ses_f8b055271ffexwhOqyb3Dmf3de",
-        "coder": "ses_f8b076e54ffeaXK2RTEWYwjEEZ"
+        "coder": "ses_f8b076e54ffeaXK2RTEWYwjEEZ",
+        "reviewer": "ses_f8affbc08ffeWrhaYdOz638L8j"
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788669325.9591537,
