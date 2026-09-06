@@ -144,6 +144,26 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
   const [coarseTapCount, setCoarseTapCount] = useState(0)
   const [coarseMessage, setCoarseMessage] = useState<string | null>(null)
 
+  // T170: when CALIBRATION_SAMPLE_COUNT samples have been collected in coarse
+  // mode, apply the averaged offset once (outside handleHit so a tap never
+  // mutates the offset — T169). Samples are the judgeHit errorMs values, which
+  // equal tapRaw - (hitTime + manualOffset) under the T167 judgement sign.
+  useEffect(() => {
+    if (!coarseActive) return
+    if (coarseTapCount < CALIBRATION_SAMPLE_COUNT) return
+    const samples = coarseSamplesRef.current.slice()
+    const next = computeCoarseOffset(samples, getManualOffsetMs())
+    coarseSamplesRef.current = []
+    setCoarseTapCount(0)
+    coarseActiveRef.current = false
+    setCoarseActive(false)
+    if (next !== null) {
+      setManualOffset(next)
+      setOffsetMs(next)
+      setCoarseMessage(`粗調整完了: ${offsetText(next)} (あとは ,. で微調整)`)
+    }
+  }, [coarseActive, coarseTapCount])
+
   const chart = useMemo(() => generateCalibrationChart(), [])
   const timeline = useMemo(() => new BpmTimeline(CAL_BPM, [], 1.0), [])
   const wave = useMemo(() => new WaveEngine(chart.segments, timeline, 1.0, 0.0), [chart, timeline])
@@ -388,25 +408,6 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       window.removeEventListener('keyup', onKeyUp)
     }
   }, [cancel, save, adjustOffset, handleHit])
-
-  // T170: when CALIBRATION_SAMPLE_COUNT samples have been collected in coarse
-  // mode, apply the averaged offset once (outside handleHit so a tap never
-  // mutates the offset — T169). Samples are the judgeHit errorMs values, which
-  // equal tapRaw - (hitTime + manualOffset) under the T167 judgement sign.
-  useEffect(() => {
-    if (!coarseActive) return
-    if (coarseTapCount < CALIBRATION_SAMPLE_COUNT) return
-    const next = computeCoarseOffset(coarseSamplesRef.current, getManualOffsetMs())
-    coarseSamplesRef.current = []
-    setCoarseTapCount(0)
-    coarseActiveRef.current = false
-    setCoarseActive(false)
-    if (next !== null) {
-      setManualOffset(next)
-      setOffsetMs(next)
-      setCoarseMessage(`粗調整完了: ${offsetText(next)} (あとは ,. で微調整)`)
-    }
-  }, [coarseActive, coarseTapCount])
 
   useEffect(() => {
     if (coarseMessage === null) return

@@ -34,7 +34,15 @@ export class Cursor {
     let delta = 0;
     if (upPressed) delta -= speed;
     if (downPressed) delta += speed;
-    this.y = Math.max(waveTop, Math.min(waveBottom, this.y + delta * dt));
+    // The raw per-beat displacement equals the wave slope (2*TW_AMP*amplitude).
+    // In wave-tracking mode (nowWaveY supplied) the position is confined to the
+    // physical wave field, and the T163 snap below keeps it on the wave. Without
+    // a wave reference the movement keeps the theoretical slope, so the cursor
+    // displacement matches the wave speed exactly even beyond one frame (T170).
+    this.y = this.y + delta * dt;
+    if (Number.isFinite(nowWaveY)) {
+      this.y = Math.max(waveTop, Math.min(waveBottom, this.y));
+    }
 
     // T163: Continuous snap towards nowWaveY every tick (PULL_STRENGTH = 0.04 - 0.05)
     if (typeof nowWaveY === 'number' && Number.isFinite(nowWaveY)) {
