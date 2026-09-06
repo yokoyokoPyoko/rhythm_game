@@ -1,5 +1,3 @@
-import { offsetSeconds } from './clock';
-
 export const LOOKAHEAD_MS = 200;
 const SCHEDULE_INTERVAL_MS = 25;
 const CLICK_DURATION = 0.04;
@@ -62,7 +60,9 @@ export function schedule(
 ): void {
   const isStrong = beat % 4 === 0;
   const freq = isStrong ? STRONG_FREQ : WEAK_FREQ;
-  const when = Math.max(audioCtx.currentTime, nextBeatTime + offsetSeconds());
+  // T167: manualOffset is applied only on the judgement side. The metronome click
+  // stays fixed to the ruler/grid (no manual/audio offset added here).
+  const when = Math.max(audioCtx.currentTime, nextBeatTime);
 
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();

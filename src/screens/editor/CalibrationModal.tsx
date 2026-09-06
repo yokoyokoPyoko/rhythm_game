@@ -144,7 +144,11 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       }
       const songTimeMs = songNow()
       const beatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
-      const judgement = judgeHit(songTimeMs, cursorRef.current.y, ringsRef.current, beatMs)
+      // T167: manualOffset applies on the judgement side only.
+      // Error = tapRaw - (hitTime + manualOffset); passing the shifted tap time
+      // keeps hitJudge's errorMs aligned so ,. adjustments reflect linearly.
+      const pressTime = songTimeMs - getManualOffsetMs()
+      const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs)
       if (judgement) {
         journal(judgement.result, judgement.errorMs)
       }
@@ -198,7 +202,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       for (const ring of ringsRef.current) {
         if (ring.resolved) continue
         const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
-        if (songTimeMs > ring.hitTime + windowMs) {
+        if (songTimeMs - getManualOffsetMs() > ring.hitTime + windowMs) {
           ring.resolved = true
           journal('miss', 0)
         }
@@ -340,7 +344,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
           </button>
         </div>
         <p className="calibration-hint">
-          Space: 判定 / ↑↓: 移動 / ,. ?&lt;&gt; : ±10ms / Enter: 保存して終了 / ESC: キャンセル
+          クリックに合わせて叩き、誤差が0になるよう ,. &lt;&gt; で±10ms調整 / Space: 判定 / ↑↓: 移動 / Enter: 保存して終了 / ESC: キャンセル
         </p>
       </div>
     </div>

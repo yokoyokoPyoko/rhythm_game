@@ -96,7 +96,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     const source = ctx.createBufferSource()
     source.buffer = buffer
     source.connect(ctx.destination)
-    const offsetSec = (audioOffsetMs + getManualOffsetMs()) / 1000
+    // T167: audioOffset is for music head-start only. manualOffset applies on the
+    // judgement side (handleHit), NOT to when the music plays.
+    const offsetSec = audioOffsetMs / 1000
     if (offsetSec >= 0) {
       source.start(ctx.currentTime + offsetSec)
     } else {
@@ -149,7 +151,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       const timeline = timelineRef.current
       if (!timeline) return
       const beatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
-      const judgement = judgeHit(songTimeMs, cursorRef.current.y, ringsRef.current, beatMs)
+      // T167: manualOffset (device audio latency +L) applies on the judgement side
+      // only. Error = tapRaw - (hitTime + manualOffset). Passing the shifted tap
+      // time keeps hitJudge's errorMs = pressTimeMs - hitTime aligned to that.
+      const pressTime = songTimeMs - getManualOffsetMs()
+      const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs)
       if (judgement) {
         scoreRef.current.recordHit(judgement.result)
         judgementEventsRef.current.push({
@@ -334,7 +340,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         for (const ring of ringsRef.current) {
           if (ring.resolved) continue
           if (ring.type === 'hold' && ring.hit && ring.holding) {
-            if (songTimeMs >= (ring.releaseTime ?? ring.hitTime)) {
+            if (songTimeMs - getManualOffsetMs() >= (ring.releaseTime ?? ring.hitTime)) {
               ring.resolved = true
               ring.holdCompleted = true
               scoreRef.current.recordHit('perfect')
@@ -348,10 +354,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             continue
           }
           const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
-          if (songTimeMs > ring.hitTime + windowMs) {
+          if (songTimeMs - getManualOffsetMs() > ring.hitTime + windowMs) {
             ring.resolved = true
             scoreRef.current.recordHit('miss')
-            judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: ring.hitTime + windowMs })
+            judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs })
           }
         }
       }
