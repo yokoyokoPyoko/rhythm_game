@@ -1353,7 +1353,7 @@
         "postmortem": "ses_f8b5c7154ffe3tMQx0Ih2iDQhJ",
         "reviewer": "ses_f8b6793a2ffen7Ed7wVJltEdln"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "coder",
       "last_postmortem_at": 1788663669.8537254
     }
