@@ -399,7 +399,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
 
       const buffer = bufferRef.current
       const fallbackEnd = lastHitTime !== null ? lastHitTime + END_DELAY_MS : 60000
-      const endThreshold = buffer ? buffer.duration * 1000 : fallbackEnd
+      const endThreshold = (buffer ? buffer.duration * 1000 : fallbackEnd) + (chart?.audio_offset ?? 0)
 
       if (!endedRef.current && songTimeMs > endThreshold) {
         endedRef.current = true
