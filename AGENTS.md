@@ -2039,3 +2039,49 @@ const minorStep =
 1. `manualOffset` 設定時、リングが判定線 `TW_JUDGE_X` に到達する瞬間と、クリック音/楽曲の音が一致して同期すること。
 2. `tests/dynamic.test.ts` で `Renderer.render` のリング描画位置が `manualOffsetMs` に応じてシフトすること。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T176] カーソル磁気・スナップおよび移動速度の可聴描画時刻（renderTimeMs）同期
+
+**背景**: T175で画面描画が `renderTimeMs = songTimeMs - getManualOffsetMs()` にシフトされたが、`GameScreen.tsx` / `CalibrationModal.tsx` のゲームループ内で、カーソルの磁気スナップ目標（`wave.waveYAtMs`）や現在ビート（`timeline.msToBeat`）が生の `songTimeMs` を見ていたため、カーソルが画面に見えている波より少し先（未来）の波形に引っ張られていた。
+
+**修正**（`GameScreen.tsx` および `CalibrationModal.tsx`）:
+- ゲームループ（`tick`）内で、`const renderTimeMs = songTimeMs - getManualOffsetMs();` を算出。
+- カーソルの移動計算に渡すビートを `currentBeat = timeline.msToBeat(renderTimeMs)` および `currentBeatMs = timeline.beatMsAt(currentBeat)` に変更。
+- `cursorRef.current.update` に渡す波形高さを `wave.waveYAtMs(renderTimeMs)` に変更。
+- 拍境界の引き寄せ（`pullTowards`）に渡す波形高さを `wave.waveYAtMs(renderTimeMs)` に変更。
+
+**完了条件**:
+1. `manualOffset` 設定時、カーソルが画面に見えている判定線上の波形に正確に吸い付くこと（未来の波形に先行してつられないこと）。
+2. セグメント境界でカーソル速度の切り替わりが画面波形と同時に起こること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T177] スコアトレース判定（isOnWave）の可聴描画時刻（renderTimeMs）同期
+
+**背景**: `GameScreen.tsx` および `CalibrationModal.tsx` のトレース判定（`isOnWave`）が `wave.waveYAtMs(songTimeMs)` を見ていたため、画面上で波に乗っているのにトレースボーナスが入らない、またはパーティクル演出（`isTracing`）とスコア加算が乖離していた。
+
+**修正**（`GameScreen.tsx` および `CalibrationModal.tsx`）:
+- ゲームループ内のトレース判定を `const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE;` に修正する（`renderTimeMs` を使用）。
+
+**完了条件**:
+1. `manualOffset` 設定時、画面上で波に乗っているときに確実にトレースボーナスとコンボが加算されること。
+2. 画面のキラキラ演出（isTracing）とスコア加算のタイミングが一致すること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T178] 楽曲終了判定の audio_offset 補正（曲の尻切れバグ修正）
+
+**背景**: `GameScreen.tsx` の楽曲終了判定（`isSongFinished = songTimeMs > totalDurationMs`）において、楽曲再生開始遅延 `audioOffsetMs` が考慮されていなかった。そのため `audio_offset` が設定された曲では曲の最後が演奏中にもかかわらず強制終了していた。
+
+**修正**（`GameScreen.tsx` のみ）:
+- 楽曲終了判定の合計再生時間に `audio_offset`（`audioOffsetMs = chart?.audio_offset ?? 0`）を加算する:
+  `const effectiveDurationMs = (buffer ? buffer.duration * 1000 : fallbackEnd) + (chart?.audio_offset ?? 0);`
+  `const isSongFinished = songTimeMs > effectiveDurationMs;`
+
+**完了条件**:
+1. `audio_offset` が設定された曲でも、曲の最後まで演奏されてからリザルト画面に遷移すること（曲が途中で切れないこと）。
+2. `tsc --noEmit` エラーなし。

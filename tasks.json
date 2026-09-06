@@ -1073,5 +1073,32 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T176",
+    "desc": "カーソル磁気・スナップおよび移動速度の可聴描画時刻（renderTimeMs）同期。背景: T175で画面描画がrenderTimeMsに移行したがGameScreen/CalibrationModalのカーソル磁気スナップ目標(waveYAtMs)や現在ビートが生songTimeMsを見ていたため未来の波形に引っ張られていた。修正: GameScreen.tsx・CalibrationModal.tsxでrenderTimeMs=songTimeMs-getManualOffsetMs()を算出し、currentBeat・cursor.update・pullTowardsに渡す波形高さをwave.waveYAtMs(renderTimeMs)に変更。完了条件: (1) manualOffset設定時、カーソルが画面に見えている判定線上の波形に正確に吸い付く (2) セグメント境界でカーソル速度切り替わりが画面波形と同期する (3) tsc --noEmit。",
+    "depends_on": [
+      "T175"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T177",
+    "desc": "スコアトレース判定（isOnWave）の可聴描画時刻（renderTimeMs）同期。背景: GameScreen/CalibrationModalのトレース判定がwave.waveYAtMs(songTimeMs)を見ていたため画面上で波に乗っているのにトレースボーナスが入らない/演出と乖離していた。修正: GameScreen.tsx・CalibrationModal.tsxでisOnWave判定をMath.abs(cursorY - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCEに修正。完了条件: (1) manualOffset設定時、画面上で波に乗っているときに確実にトレースボーナスとコンボが加算される (2) パーティクル演出と加算が一致 (3) tsc --noEmit。",
+    "depends_on": [
+      "T176"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T178",
+    "desc": "楽曲終了判定のaudio_offset補正（曲の尻切れバグ修正）。背景: GameScreen.tsxの終了判定isSongFinished=songTimeMs>totalDurationMsで楽曲再生開始遅延audioOffsetMsが考慮されておらず曲のラストが演奏中に強制終了していた。修正: GameScreen.tsxで合計時間にaudio_offsetを加算: (buffer ? buffer.duration*1000 : fallbackEnd) + (chart?.audio_offset ?? 0)。完了条件: (1) audio_offset設定曲でも最後まで演奏されてからリザルト画面に遷移する (2) tsc --noEmit。",
+    "depends_on": [
+      "T177"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]

@@ -8025,3 +8025,4 @@ src/screens/editor/CalibrationModal.tsx(315,22): error TS2454: Variable 'resetCo
 2026-09-06 14:43:43,975 [INFO] Removed dynamic.test.ts
 2026-09-06 14:44:42,489 [INFO] Orchestrator range execution: 1 tasks (from=T175, to=T175, budget=600m)
 2026-09-06 14:44:42,489 [INFO] [T175] --only mode: skipping dependency checks.
+2026-09-06 15:54:31,723 [INFO] Orchestrator range execution: 3 tasks (from=T176, to=T178, budget=600m)
