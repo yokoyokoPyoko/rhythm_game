@@ -860,6 +860,13 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.calibration-coarse {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  min-height: 1.2em;
+}
+
 .calibration-hint {
   color: var(--text-muted);
   font-size: 0.875rem;

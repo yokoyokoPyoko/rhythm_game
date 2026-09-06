@@ -24,6 +24,14 @@ const DEFAULT_TOTAL_BEATS = 24000
 // (200ms+) PCs without stealing toward the neighbouring ring.
 const CALIBRATION_WIDE_WINDOW_MS = 750
 
+// T170: coarse calibration — revived old T61 8-tap average flow.
+const CALIBRATION_SAMPLE_COUNT = 8
+const CALIBRATION_DISCARD_COUNT = 2
+// Ring spacing at BPM 120 = 4 beats * 500ms = 2000ms; the unwrap folds errors
+// outside ±1000ms back into range (half of the 2000ms grid period).
+const CALIBRATION_GRID_MS = 2000
+const CALIBRATION_UNWRAP_BOUND_MS = 1000
+
 /**
  * T133: Build the ProSeka-style infinite-loop practice chart.
  * - BPM fixed at 120.
@@ -67,6 +75,41 @@ export function generateCalibrationLoopChart(totalBeats = DEFAULT_TOTAL_BEATS): 
   return generateCalibrationChart(totalBeats)
 }
 
+/**
+ * T170: bring a timing error into [-bound, +bound] by adding / subtracting the
+ * ring grid period (2000ms) — the ±1000ms折返し補正. Combined with the nearest-ring
+ * judgement this resolves latencies beyond a half beat without ambiguity.
+ */
+export function unwrapTimingError(
+  raw: number,
+  period = CALIBRATION_GRID_MS,
+  bound = CALIBRATION_UNWRAP_BOUND_MS,
+): number {
+  let e = raw
+  while (e > bound) e -= period
+  while (e < -bound) e += period
+  return e
+}
+
+/**
+ * T170: 8-tap coarse calibration (old T61 flow, revived). The first `discard`
+ * samples are dropped, the remaining 6 are unwrapped and averaged. The new
+ * offset = currentOffset + average error, driving tap - (hitTime + manualOffset)
+ * to 0 on average (T167 sign).
+ */
+export function computeCoarseOffset(
+  rawSamples: number[],
+  currentOffset: number,
+  discard = CALIBRATION_DISCARD_COUNT,
+): number | null {
+  // T61式: 最初の2サンプルは破棄し、残り6の平均を取る
+  const kept = rawSamples.slice(discard)
+  if (kept.length === 0) return null
+  const unwrapped = kept.map((r) => unwrapTimingError(r))
+  const average = unwrapped.reduce((a, b) => a + b, 0) / unwrapped.length
+  return Math.round(currentOffset + average)
+}
+
 interface CalibrationModalProps {
   onClose: (save: boolean) => void
 }
@@ -92,6 +135,14 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
 
   const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
   const [lastJudgement, setLastJudgement] = useState<LastJudgement | null>(null)
+
+  // T170: coarse calibration state. Samples are collected in handleHit (tap only
+  // records), the offset is applied once 8 samples arrive — never from a tap.
+  const coarseActiveRef = useRef(false)
+  const coarseSamplesRef = useRef<number[]>([])
+  const [coarseActive, setCoarseActive] = useState(false)
+  const [coarseTapCount, setCoarseTapCount] = useState(0)
+  const [coarseMessage, setCoarseMessage] = useState<string | null>(null)
 
   const chart = useMemo(() => generateCalibrationChart(), [])
   const timeline = useMemo(() => new BpmTimeline(CAL_BPM, [], 1.0), [])
@@ -149,11 +200,23 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs, CALIBRATION_WIDE_WINDOW_MS)
       if (judgement) {
         journal(judgement.result, judgement.errorMs)
+        // T170: coarse mode collects one timing sample per tap. The offset is
+        // never mutated here — the sample counter effect applies the average
+        // when CALIBRATION_SAMPLE_COUNT taps have been recorded.
+        if (coarseActiveRef.current) {
+          coarseSamplesRef.current.push(judgement.errorMs)
+          setCoarseTapCount(coarseSamplesRef.current.length)
+        }
       }
     } catch {
       // AudioContext not initialized yet
     }
   }, [timeline, journal])
+
+  // Keep a ref mirror of coarseActive so tap handlers read it without re-binding.
+  useEffect(() => {
+    coarseActiveRef.current = coarseActive
+  }, [coarseActive])
 
   // Start the loop and metronome once on mount.
   useEffect(() => {
@@ -235,25 +298,47 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     }
   }, [chart, timeline, wave, stopMetronome, journal])
 
+  const resetCoarse = useCallback(() => {
+    coarseActiveRef.current = false
+    coarseSamplesRef.current = []
+    setCoarseActive(false)
+    setCoarseTapCount(0)
+    setCoarseMessage(null)
+  }, [])
+
   const cancel = useCallback(() => {
     stopMetronome()
+    resetCoarse()
     // Restore the offset that was active when the overlay was opened (no save).
     setManualOffset(savedOffsetRef.current)
     setOffsetMs(savedOffsetRef.current)
     onClose(false)
-  }, [stopMetronome, onClose])
+  }, [stopMetronome, resetCoarse, onClose])
 
   const save = useCallback(() => {
     stopMetronome()
+    resetCoarse()
     setManualOffset(getManualOffsetMs())
     onClose(true)
-  }, [stopMetronome, onClose])
+  }, [stopMetronome, resetCoarse, onClose])
 
   const adjustOffset = useCallback((delta: number) => {
     const next = Math.round(getManualOffsetMs() + delta)
     setManualOffset(next)
     setOffsetMs(next)
   }, [])
+
+  const startCoarse = useCallback(() => {
+    if (coarseActive) {
+      resetCoarse()
+      return
+    }
+    coarseActiveRef.current = true
+    coarseSamplesRef.current = []
+    setCoarseActive(true)
+    setCoarseTapCount(0)
+    setCoarseMessage(null)
+  }, [coarseActive, resetCoarse])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -304,6 +389,31 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     }
   }, [cancel, save, adjustOffset, handleHit])
 
+  // T170: when CALIBRATION_SAMPLE_COUNT samples have been collected in coarse
+  // mode, apply the averaged offset once (outside handleHit so a tap never
+  // mutates the offset — T169). Samples are the judgeHit errorMs values, which
+  // equal tapRaw - (hitTime + manualOffset) under the T167 judgement sign.
+  useEffect(() => {
+    if (!coarseActive) return
+    if (coarseTapCount < CALIBRATION_SAMPLE_COUNT) return
+    const next = computeCoarseOffset(coarseSamplesRef.current, getManualOffsetMs())
+    coarseSamplesRef.current = []
+    setCoarseTapCount(0)
+    coarseActiveRef.current = false
+    setCoarseActive(false)
+    if (next !== null) {
+      setManualOffset(next)
+      setOffsetMs(next)
+      setCoarseMessage(`粗調整完了: ${offsetText(next)} (あとは ,. で微調整)`)
+    }
+  }, [coarseActive, coarseTapCount])
+
+  useEffect(() => {
+    if (coarseMessage === null) return
+    const t = window.setTimeout(() => setCoarseMessage(null), 2500)
+    return () => window.clearTimeout(t)
+  }, [coarseMessage])
+
   const lastLabel =
     lastJudgement === null
       ? '—'
@@ -328,12 +438,20 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         <div className="calibration-offset" data-testid="calibration-offset">
           offset: {offsetText(offsetMs)}
         </div>
+        <div className="calibration-coarse" data-testid="calibration-coarse-progress">
+          {coarseActive
+            ? `粗調整: ${coarseTapCount}/${CALIBRATION_SAMPLE_COUNT} 回タップ`
+            : coarseMessage ?? '粗調整: 強拍に合わせ8回タップで一括補正'}
+        </div>
         <div className="calibration-actions">
           <button type="button" data-testid="calibration-minus" onClick={() => adjustOffset(-10)}>
             -10ms
           </button>
           <button type="button" data-testid="calibration-plus" onClick={() => adjustOffset(10)}>
             +10ms
+          </button>
+          <button type="button" data-testid="calibration-coarse" onClick={startCoarse}>
+            {coarseActive ? '粗調整 中止' : '粗調整'}
           </button>
           <button type="button" data-testid="calibration-save" onClick={save}>
             保存して終了
@@ -343,7 +461,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
           </button>
         </div>
         <p className="calibration-hint">
-          クリックに合わせて叩き、誤差が0になるよう ,. &lt;&gt; で±10ms調整 / Space: 判定 / ↑↓: 移動 / Enter: 保存して終了 / ESC: キャンセル
+          クリックに合わせて叩き、誤差が0になるよう ,. &lt;&gt; で±10ms調整 / Space: 判定 / ↑↓: 移動 / Enter: 保存して終了 / ESC: キャンセル / 「粗調整」で8回タップして大まかに合わせる
         </p>
       </div>
     </div>
