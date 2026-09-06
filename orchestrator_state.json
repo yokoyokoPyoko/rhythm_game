@@ -1408,7 +1408,7 @@
     },
     "T177": {
       "attempts": 9,
-      "status": "running",
+      "status": "passed",
       "started": 1788681723.330014,
       "cycles": 1,
       "sessions": {
@@ -1419,7 +1419,13 @@
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788682434.651861,
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788682480.8978493
+    },
+    "T178": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788682480.8994248
     }
   },
   "consecutive_no_action": 0
