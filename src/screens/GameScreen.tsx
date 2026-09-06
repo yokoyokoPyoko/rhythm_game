@@ -381,7 +381,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       )
 
       if (startedRef.current) {
-        const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE
+        const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE;
         scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       }
 

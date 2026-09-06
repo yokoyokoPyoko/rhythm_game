@@ -312,7 +312,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         (e) => songTimeMs - e.at < JUDGEMENT_LIFETIME_MS,
       )
 
-      const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE
+      const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE;
       scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       renderer.render(ctx2d, {
         waveEngine: wave,
