@@ -516,11 +516,56 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
   )
 }
  
- /**
-  * Exported formatter for tests / external use — keeps source pattern checks valid.
-  * Matches the inline lastLabel format: "NAME (+XXms, ΔY YYpx)" or "MISS (--, ΔY YYpx)"
-  */
-export function formatLastLabel(
+/**
+   * T174: Calculate the Y distance for the ring that would actually be hit,
+   * replicating the judgeHit logic (nearest timing among Y < HIT_Y candidates,
+   * otherwise nearest timing overall for a MISS). This ensures the calibration
+   * display shows the Y distance of the judged ring, not just the timing-closest
+   * ring. This function is pure and exported for testing.
+   */
+  export function calculateCalibrationHitYDist(
+    pressTimeMs: number,
+    cursorY: number,
+    rings: RingState[],
+    currentBeatMs: number,
+    windowMs?: number,
+  ): number {
+    const win = windowMs ?? currentBeatMs * 0.4;
+    const HIT_Y = 60;
+
+    const candidates: { ring: RingState; err: number; yDist: number }[] = [];
+    for (const ring of rings) {
+      if (ring.resolved) continue;
+      if (ring.type === 'hold' && ring.hit) continue;
+      const err = Math.abs(pressTimeMs - ring.hitTime);
+      if (err < win) {
+        const yDist = Math.abs(cursorY - ring.targetY);
+        candidates.push({ ring, err, yDist });
+      }
+    }
+
+    if (candidates.length === 0) return 0;
+
+    const hitCandidates = candidates.filter((c) => c.yDist < HIT_Y);
+
+    let selected: { ring: RingState; err: number; yDist: number } | null = null;
+
+    if (hitCandidates.length > 0) {
+      hitCandidates.sort((a, b) => a.err - b.err);
+      selected = hitCandidates[0];
+    } else {
+      candidates.sort((a, b) => a.err - b.err);
+      selected = candidates[0];
+    }
+
+    return selected ? selected.yDist : 0;
+  }
+
+  /**
+   * Exported formatter for tests / external use — keeps source pattern checks valid.
+   * Matches the inline lastLabel format: "NAME (+XXms, ΔY YYpx)" or "MISS (--, ΔY YYpx)"
+   */
+  export function formatLastLabel(
   result: HitResult,
   errorMs: number | null,
   yDist: number,
