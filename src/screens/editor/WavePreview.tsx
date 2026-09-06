@@ -439,26 +439,23 @@ export default function WavePreview({
       ctx.stroke()
     }
 
-    // Vertex handles (vertex mode) — draw circles at each wave point
-    if (editMode === 'vertex' && points.length > 0) {
-      points.forEach((p, idx) => {
-        const vx = beatToX(p.beat)
-        if (vx < -10 || vx > cssW + 10) return
-        const vy = mapY(p.y)
-        const isStart = p.beat === 0
-        const isHoveredVertex = hoveredSegment != null && (hoveredSegment === idx || hoveredSegment === idx - 1)
-        const isSelectedVertex = selectedVertices.includes(idx) || (selectedSegments.includes(idx) || selectedSegments.includes(idx - 1)) || (selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1))
-        const isHighlightedV = isSelectedVertex || isHoveredVertex
-        ctx.fillStyle = isHighlightedV ? SELECT_COLOR : isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
+    // Playhead (current playback position)
+    if (Number.isFinite(positionMs) && positionMs! > 0) {
+      const headBeat = timeline.msToBeat(positionMs!)
+      const hx = beatToX(headBeat)
+      if (hx >= -2 && hx <= cssW + 2) {
+        ctx.strokeStyle = 'rgba(74,222,128,0.85)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([4, 4])
         ctx.beginPath()
-        ctx.arc(vx, vy, isHighlightedV ? 7 : 6, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.strokeStyle = isHighlightedV ? 'rgba(237,237,237,0.9)' : 'rgba(10,10,10,0.9)'
-        ctx.lineWidth = isHighlightedV ? 2.5 : 2
-        ctx.beginPath()
-        ctx.arc(vx, vy, isHighlightedV ? 7 : 6, 0, Math.PI * 2)
+        ctx.moveTo(hx, RULER_H)
+        ctx.lineTo(hx, cssH)
         ctx.stroke()
-      })
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(74,222,128,0.95)'
+        ctx.font = '10px Inter, system-ui, sans-serif'
+        ctx.fillText('PLAY', hx + 4, RULER_H + 4)
+      }
     }
 
     // Recording trajectory overlay (dashed) + live ball
@@ -486,25 +483,6 @@ export default function WavePreview({
       ctx.beginPath()
       ctx.arc(liveX, liveY, 9, 0, Math.PI * 2)
       ctx.stroke()
-    }
-
-    // Playhead (current playback position)
-    if (Number.isFinite(positionMs) && positionMs! > 0) {
-      const headBeat = timeline.msToBeat(positionMs!)
-      const hx = beatToX(headBeat)
-      if (hx >= -2 && hx <= cssW + 2) {
-        ctx.strokeStyle = 'rgba(74,222,128,0.85)'
-        ctx.lineWidth = 1.5
-        ctx.setLineDash([4, 4])
-        ctx.beginPath()
-        ctx.moveTo(hx, RULER_H)
-        ctx.lineTo(hx, cssH)
-        ctx.stroke()
-        ctx.setLineDash([])
-        ctx.fillStyle = 'rgba(74,222,128,0.95)'
-        ctx.font = '10px Inter, system-ui, sans-serif'
-        ctx.fillText('PLAY', hx + 4, RULER_H + 4)
-      }
     }
 
     // Rings (X axis = beat position). During a vertex/edge drag, ring Y is derived
@@ -552,6 +530,28 @@ export default function WavePreview({
         ctx.textAlign = 'left'
       }
     })
+
+    // Vertex handles (vertex mode) — draw circles at each wave point
+    if (editMode === 'vertex' && points.length > 0) {
+      points.forEach((p, idx) => {
+        const vx = beatToX(p.beat)
+        if (vx < -10 || vx > cssW + 10) return
+        const vy = mapY(p.y)
+        const isStart = p.beat === 0
+        const isHoveredVertex = hoveredSegment != null && (hoveredSegment === idx || hoveredSegment === idx - 1)
+        const isSelectedVertex = selectedVertices.includes(idx) || (selectedSegments.includes(idx) || selectedSegments.includes(idx - 1)) || (selectedSegment != null && (selectedSegment === idx || selectedSegment === idx - 1))
+        const isHighlightedV = isSelectedVertex || isHoveredVertex
+        ctx.fillStyle = isHighlightedV ? SELECT_COLOR : isStart ? 'rgba(99,102,241,0.95)' : 'rgba(237,237,237,0.95)'
+        ctx.beginPath()
+        ctx.arc(vx, vy, isHighlightedV ? 7 : 6, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = isHighlightedV ? 'rgba(237,237,237,0.9)' : 'rgba(10,10,10,0.9)'
+        ctx.lineWidth = isHighlightedV ? 2.5 : 2
+        ctx.beginPath()
+        ctx.arc(vx, vy, isHighlightedV ? 7 : 6, 0, Math.PI * 2)
+        ctx.stroke()
+      })
+    }
 
     // T156: rubber band selection rectangle (dashed)
     if (rubberRect) {
@@ -1283,9 +1283,11 @@ export default function WavePreview({
         onMouseLeave={handleMouseLeave}
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
-        {editMode === 'vertex' && '頂点モード: 右ドラッグで範囲選択・左ドラッグで集合移動、右クリックで削除、空ドラッグで頂点作成（プレビュー→確定）。ホイールでズーム'}
-        {editMode === 'edge' && '辺モード: 左ドラッグで辺移動・右ドラッグで範囲選択。空白ドラッグでパン、ホイールでズーム'}
-        {editMode === 'ring' && 'リングモード: ダブルクリックで追加・右クリック削除・左ドラッグ移動・右ドラッグで範囲選択。ホイールでズーム'}
+        {editMode === 'ring'
+          ? 'ダブルクリック: リング追加 / 右クリック: 削除 / ドラッグ: 移動'
+          : editMode === 'vertex'
+            ? 'ドラッグ: 頂点移動 / ダブルクリック: 頂点追加 / 右クリック: 頂点削除'
+            : 'ドラッグ: 辺移動 / 右クリック: 辺削除'}
       </p>
     </div>
   )
