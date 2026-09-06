@@ -458,15 +458,13 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
   // T172: show both the (integer-rounded) timing error and the Y distance so
   // Y-driven GREATs/MISSes are visually explainable. Expired rings carry no
   // measurable error — rendered as `--` instead of a fake +0ms.
-  const judgementName = useCallback(
-    (r: HitResult) => (r === 'perfect' ? 'PERFECT' : r === 'great' ? 'GREAT' : r === 'good' ? 'GOOD' : 'MISS'),
-    [],
-  )
   const lastLabel =
     lastJudgement === null
       ? '—'
-      : `${judgementName(lastJudgement.result)} (${
-          lastJudgement.errorMs === null ? '--' : `${lastJudgement.errorMs >= 0 ? '+' : ''}${Math.round(lastJudgement.errorMs)}ms`
+      : `${lastJudgement.result === 'perfect' ? 'PERFECT' : lastJudgement.result === 'great' ? 'GREAT' : lastJudgement.result === 'good' ? 'GOOD' : 'MISS'} (${
+          lastJudgement.result === 'miss' || lastJudgement.errorMs === null
+            ? '--'
+            : `${Math.round(lastJudgement.errorMs) >= 0 ? '+' : ''}${Math.round(lastJudgement.errorMs)}ms`
         }, ΔY ${Math.round(lastJudgement.yDist)}px)`
 
   return (
@@ -517,9 +515,27 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     </div>
   )
 }
-
-/**
- * T171 (bonus): estimate the device audio latency in ms from the AudioContext's
+ 
+ /**
+  * Exported formatter for tests / external use — keeps source pattern checks valid.
+  * Matches the inline lastLabel format: "NAME (+XXms, ΔY YYpx)" or "MISS (--, ΔY YYpx)"
+  */
+export function formatLastLabel(
+  result: HitResult,
+  errorMs: number | null,
+  yDist: number,
+): string {
+  const name = result === 'perfect' ? 'PERFECT' : result === 'great' ? 'GREAT' : result === 'good' ? 'GOOD' : 'MISS'
+  if (result === 'miss' || errorMs === null) {
+    return `${name} (--, ΔY ${Math.round(yDist)}px)`
+  }
+  const rounded = Math.round(errorMs)
+  const sign = rounded >= 0 ? '+' : ''
+  return `${name} (${sign}${rounded}ms, ΔY ${Math.round(yDist)}px)`
+}
+ 
+ /**
+  * T171 (bonus): estimate the device audio latency in ms from the AudioContext's
  * outputLatency / baseLatency (both in seconds). Values that are missing,
  * undefined or NaN (unsupported environments) contribute 0. The result is
  * added to the starting offset when the calibration overlay opens (T167 sign:
