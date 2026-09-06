@@ -1398,7 +1398,8 @@
       "sessions": {
         "qa": "ses_f8a6b8213ffe9HldPBA74gMmMI",
         "coder": "ses_f8a6f8946ffeinU2SIo3sBfNQG",
-        "postmortem": "ses_f8a6e99d4ffePGKNAAICjsxSu7"
+        "postmortem": "ses_f8a6e99d4ffePGKNAAICjsxSu7",
+        "reviewer": "ses_f8a6af27affeHyJnA0eOREa3YU"
       },
       "gate_b_golden": true,
       "last_retry_from": "qa",
