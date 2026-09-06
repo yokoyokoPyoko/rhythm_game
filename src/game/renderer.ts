@@ -40,6 +40,16 @@ export interface Particle {
   alpha: number;
 }
 
+export interface FlashState {
+  alpha: number;
+  color: string;
+  active: boolean;
+}
+
+const FLASH_DURATION = 0.14;
+const GREAT_BURST_COUNT = 12;
+const GOOD_BURST_COUNT = 6;
+
 export interface UpdateParams {
   cursor: Cursor;
   score: ScoreManager;
@@ -90,9 +100,67 @@ export class Renderer {
   private spawnAccumulator = 0;
   private prevCursorY = CANVAS_HEIGHT / 2;
   private lastSongTimeMs = 0;
+  private flashAlpha = 0;
+  private flashFrom = 0;
+  private flashElapsed = 0;
+  private flashColor = '#ffffff';
+  private seenJudgements = new WeakSet<object>();
 
   getParticles(): Particle[] {
     return this.particles;
+  }
+
+  getFlashState(): FlashState {
+    return {
+      alpha: this.flashAlpha,
+      color: this.flashColor,
+      active: this.flashFrom > 0 && this.flashAlpha > 0,
+    };
+  }
+
+  triggerHit(result: HitResult, posX?: number | { x?: number; y?: number }, posY?: number): void {
+    if (result === 'miss') return;
+    let x: number;
+    let y: number;
+    if (typeof posX === 'number') {
+      x = posX;
+      y = typeof posY === 'number' ? posY : CANVAS_HEIGHT / 2;
+    } else if (posX && typeof posX === 'object') {
+      x = posX.x ?? TW_JUDGE_X;
+      y = posX.y ?? CANVAS_HEIGHT / 2;
+    } else {
+      x = TW_JUDGE_X;
+      y = CANVAS_HEIGHT / 2;
+    }
+
+    const count = result === 'perfect' ? 20 + Math.floor(Math.random() * 5) : result === 'great' ? GREAT_BURST_COUNT : GOOD_BURST_COUNT;
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = Math.random() * 80 + 40;
+      const px = x + (Math.random() * 14 - 7);
+      const py = y + (Math.random() * 14 - 7);
+      this.particles.push({
+        x: px,
+        y: py,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0,
+        maxLife: Math.random() * 0.2 + 0.3,
+        alpha: 1,
+      });
+    }
+
+    if (result === 'perfect') {
+      this.flashColor = '#ffffff';
+      this.flashFrom = 0.4;
+      this.flashAlpha = this.flashFrom;
+      this.flashElapsed = 0;
+    } else if (result === 'great') {
+      this.flashColor = COLORS.accentSub;
+      this.flashFrom = 0.25;
+      this.flashAlpha = this.flashFrom;
+      this.flashElapsed = 0;
+    }
   }
 
   update(dt: number, params: UpdateParams): void {
@@ -106,6 +174,16 @@ export class Renderer {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.alpha = Math.max(0, 1 - p.life / p.maxLife);
+    }
+
+    if (this.flashFrom > 0) {
+      this.flashElapsed += dt;
+      this.flashAlpha = Math.max(0, this.flashFrom * (1 - this.flashElapsed / FLASH_DURATION));
+      if (this.flashAlpha <= 0) {
+        this.flashAlpha = 0;
+        this.flashFrom = 0;
+        this.flashElapsed = 0;
+      }
     }
 
     const { cursor, score: _score, isTracing, cursorVelocity } = params;
@@ -155,6 +233,18 @@ export class Renderer {
     this.lastSongTimeMs = songTimeMs;
 
     const isTracing = paramIsTracing ?? (Math.abs(cursor.y - waveEngine.waveYAtMs(songTimeMs)) < 26);
+
+    const events = params.judgementEvents ?? [];
+    for (const e of events) {
+      if (e.result === 'miss') {
+        this.seenJudgements.add(e);
+        continue;
+      }
+      if (this.seenJudgements.has(e)) continue;
+      this.seenJudgements.add(e);
+      this.triggerHit(e.result, TW_JUDGE_X, safe(e.y, CANVAS_HEIGHT / 2));
+    }
+
     this.update(dt, {
       cursor,
       score,
@@ -170,7 +260,16 @@ export class Renderer {
     this.drawParticles(ctx, score);
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
-    this.drawJudgements(ctx, params.judgementEvents ?? [], songTimeMs);
+    this.drawJudgements(ctx, events, songTimeMs);
+    this.drawFlash(ctx);
+  }
+
+  private drawFlash(ctx: CanvasRenderingContext2D): void {
+    if (this.flashAlpha <= 0) return;
+    ctx.fillStyle = this.flashColor;
+    ctx.globalAlpha = this.flashAlpha;
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    ctx.globalAlpha = 1;
   }
 
   private drawBackground(ctx: CanvasRenderingContext2D): void {
