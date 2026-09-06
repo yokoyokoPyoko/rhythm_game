@@ -2029,11 +2029,13 @@ const minorStep =
 
 **背景**: T167で判定側を `pressTime = songTimeMs - getManualOffsetMs()` に移行したが、描画（リングの流れる位置・波形）は `songTimeMs`（生クロック）のまま描画されている。そのため、端末の音声遅延がある環境では、音が耳に届いた時点でリングがすでに判定線を通り過ぎて見えていた（視覚と聴覚の乖離）。
 
-**修正**（`GameScreen.tsx`, `CalibrationModal.tsx` または `renderer.ts`）:
-- リング・波形の描画（`renderer.render`）に渡す曲時刻を、音声出力遅延に合わせた可聴基準時刻 `renderTimeMs = songTimeMs - getManualOffsetMs()` に統一する（あるいは描画計算側で `manualOffsetMs` を反映）。
-- これにより、リングが判定線（`TW_JUDGE_X`）に重なるタイミングと音が耳に届くタイミングが一致し、判定線に合わせてキーを押した瞬間に誤差 0ms（PERFECT）となる。
+**修正**（`src/game/renderer.ts` のみ変更。GameScreenやCalibrationModalの変更は不要）:
+- `src/game/renderer.ts` で `import { getManualOffsetMs } from '../audio/clock';` をインポート。
+- `Renderer.prototype.render()` の内部で、音声出力遅延に合わせた可聴基準時刻 `const renderTimeMs = songTimeMs - getManualOffsetMs();` を算出。
+- `this.drawWave(ctx, waveEngine, renderTimeMs, scrollSpeed);` および `this.drawRings(ctx, rings, renderTimeMs, scrollSpeed, waveEngine);` に `renderTimeMs` を渡して描画する（波形とリングの描画基準時刻を `renderTimeMs` に統一）。
+- これにより、呼び出し側（GameScreen, CalibrationModal）に依存せず、QA単体テストで `renderer.render()` を直接実行した際にも確実に `manualOffsetMs` が反映され、リングが判定線（`TW_JUDGE_X`）に重なるタイミングと音が一致して同期する。
 
 **完了条件**:
 1. `manualOffset` 設定時、リングが判定線 `TW_JUDGE_X` に到達する瞬間と、クリック音/楽曲の音が一致して同期すること。
-2. 見た目で判定線にリングが重なった瞬間に押したとき、`errorMs` が 0ms 近辺（PERFECT）になること。
+2. `tests/dynamic.test.ts` で `Renderer.render` のリング描画位置が `manualOffsetMs` に応じてシフトすること。
 3. `tsc --noEmit` エラーなし。

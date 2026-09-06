@@ -1067,7 +1067,7 @@
   },
   {
     "id": "T175",
-    "desc": "描画側への音声遅延オフセット適用（目押し・耳押しの完全同期）。背景: T167で判定側をpressTime=songTimeMs-manualOffsetMsに移行したが描画は生クロックのままだったため、音声遅延のある環境で音が届いた時点でリングが判定線を通過して見えていた。修正: GameScreen.tsx・CalibrationModal.tsx(またはrenderer.ts)で描画に渡す曲時刻を音声遅延に合わせたrenderTimeMs=songTimeMs-manualOffsetMsに統一。完了条件: (1) manualOffset設定時、リングが判定線TW_JUDGE_Xに達する瞬間と音が一致して同期する (2) 見た目で判定線に合わせて叩いたときに誤差0ms(PERFECT)になる (3) tsc --noEmit。",
+    "desc": "描画側への音声遅延オフセット適用（目押し・耳押しの完全同期）。背景: T167で判定側をpressTime=songTimeMs-manualOffsetMsに移行したが描画は生クロックのままだったため、音声遅延のある環境で音が届いた時点でリングが判定線を通過して見えていた。修正: src/game/renderer.tsのみ変更(GameScreen/CalibrationModalは不変)。renderer.tsでgetManualOffsetMs()をインポートし、render()内で可聴基準時刻renderTimeMs=songTimeMs-getManualOffsetMs()を算出してdrawWaveおよびdrawRingsに渡す。完了条件: (1) manualOffset設定時、リングが判定線TW_JUDGE_Xに達する瞬間と音が一致して同期する (2) tests/dynamic.test.tsでRenderer.renderのリング描画位置がmanualOffsetMsに応じてシフトする (3) tsc --noEmit。",
     "depends_on": [
       "T174"
     ],

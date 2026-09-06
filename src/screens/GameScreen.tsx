@@ -385,12 +385,12 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       }
 
       // T121: dynamic scroll_speed from chart
-      renderer.render(ctx2d, {
+        renderer.render(ctx2d, {
         waveEngine: wave,
         cursor: cursorRef.current,
         rings: ringsRef.current,
         score: scoreRef.current,
-        songTimeMs,
+        songTimeMs: songTimeMs,
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
         scrollSpeed: chart.scroll_speed,

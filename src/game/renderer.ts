@@ -229,12 +229,13 @@ export class Renderer {
 
   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
     const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline, isTracing: paramIsTracing, cursorVelocity } = params;
+    const renderTimeMs = songTimeMs - getManualOffsetMs();
     const scrollSpeed = Number.isFinite(params.scrollSpeed) && (params.scrollSpeed as number) > 0 ? (params.scrollSpeed as number) : DEFAULT_SCROLL_SPEED;
 
     const dt = this.lastSongTimeMs > 0 ? Math.max(0, Math.min(0.1, (songTimeMs - this.lastSongTimeMs) / 1000)) : 1 / 60;
     this.lastSongTimeMs = songTimeMs;
 
-    const isTracing = paramIsTracing ?? (Math.abs(cursor.y - waveEngine.waveYAtMs(songTimeMs)) < 26);
+    const isTracing = paramIsTracing ?? (Math.abs(cursor.y - waveEngine.waveYAtMs(renderTimeMs)) < 26);
 
     const events = params.judgementEvents ?? [];
     for (const e of events) {
@@ -257,8 +258,8 @@ export class Renderer {
 
     this.drawBackground(ctx);
     this.drawJudgeLine(ctx);
-    this.drawWave(ctx, waveEngine, songTimeMs, scrollSpeed);
-    this.drawRings(ctx, rings, songTimeMs, scrollSpeed, waveEngine);
+    this.drawWave(ctx, waveEngine, renderTimeMs, scrollSpeed);
+    this.drawRings(ctx, rings, renderTimeMs, scrollSpeed, waveEngine);
     this.drawParticles(ctx, score);
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
