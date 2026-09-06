@@ -1381,7 +1381,8 @@
       "sessions": {
         "qa": "ses_f8aa46279ffeKT5bmG95F6OvRg",
         "coder": "ses_f8aaa27e6ffeh8MvoQ3aDSLi5O",
-        "postmortem": "ses_f8aa7f7beffezSnLglXJJDx7Q6"
+        "postmortem": "ses_f8aa7f7beffezSnLglXJJDx7Q6",
+        "reviewer": "ses_f8aa3fe4fffe0KfWtSN50xJr7e"
       },
       "started": 1788673482.4897318,
       "gate_b_golden": true,
