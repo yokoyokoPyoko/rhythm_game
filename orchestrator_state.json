@@ -1685,7 +1685,7 @@
     },
     "T196": {
       "attempts": 5,
-      "status": "running",
+      "status": "passed",
       "started": 1788776732.2233617,
       "cycles": 2,
       "sessions": {
@@ -1696,7 +1696,13 @@
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788779515.1953595,
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788781267.9169047
+    },
+    "T197": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788811528.762387
     }
   },
   "consecutive_no_action": 0

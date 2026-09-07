@@ -2377,3 +2377,82 @@ const minorStep =
 1. 一連フローが破綻なく完了すること。
 2. 異常系でクラッシュせず分かりやすいエラーになること。
 3. `tsc --noEmit`、T110/T120/T194/T195の回帰なし。
+
+---
+
+### [T197] 組込曲の完全削除（songs.toml・reply譜面・音源）
+
+**要求（ユーザー確定）**: 通常プレイ用に最初から入っている曲（選択画面の「Reply」）を完全に削除する。`songs.toml` はファイルごと削除する。
+
+**修正**:
+- ファイル削除：`public/songs.toml`、`public/charts/reply.toml`、`public/audio/08.Reply.flac`（`docs/` 配下はビルド成果物のため次回ビルドで自動消滅）。
+- `src/chart/manifest.ts`：`songs.toml` の404時は空リスト `[]` を返す（例外にしない）。
+- `src/screens/SelectScreen.tsx`：曲0件のときに空状態メッセージ（例：「曲がありません。上のエリアから譜面TOMLと音声をインポートしてください」）を表示する。
+- エディタの音楽URL初期値・プレースホルダにある `/rhythm_game/audio/08.Reply.flac` を除去（空欄化）。`EditorScreen` 内のデフォルト値を洗い替える。
+- テスト手直し：`.gateb_T98.spec.ts` の `#/play/reply` 遷移、`t42.spec.ts` の曲カードクリック、`debug-audio-fetch.spec.ts` の実ファイルfetch確認、`t50`/`t51`/`editor-workflow` 等の `08.Reply.flac` URL入力を、カスタム追加フロー・生成音源・インメモリfixtureに切り替える（`.gateb_T*.test.ts` 内のbasename処理用fixture文字列は実ファイル不要のため残してよい）。
+
+**完了条件**:
+1. リポジトリに組込曲ファイル（songs.toml・reply.toml・08.Reply.flac）が存在せず、選択画面が0曲＋インポートUI＋空状態メッセージで表示されること。
+2. 削除に伴い失敗するspecが残っていないこと。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T198] パブリックビュー／デバッグモード基盤＋切替＋ルートガード
+
+**要求（ユーザー確定）**: 展示中に勝手に譜面を消去・追加されないよう、`Ctrl+Alt+Shift+@` でパブリックビュー／デバッグモードを切り替える。既定はpublic（localStorageに保存・リロード維持）。
+
+**修正**（新規 `src/viewMode.ts`＋`src/App.tsx`）:
+- `getViewMode(): 'public'|'debug'`（未保存時は `'public'`）、`setViewMode()`、`toggleViewMode()`。保存キー例 `traceWaveViewMode`。
+- `App.tsx` に全画面共通のキー監視を追加：`e.ctrlKey && e.altKey && e.shiftKey && e.key === '@'` で切替→再描画。debug時のみ小さな `DEBUG` バッジ表示（publicでは無表示）。
+- publicモード中の `/editor` アクセスは `/` へリダイレクト（`<Navigate to="/" />`）。
+
+**完了条件**:
+1. 切替コンボでモードが切り替わり、リロード後も維持されること。
+2. public時に `/editor` 直打ちで `/` に飛ばされること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T199] SelectScreenのモード別表示分岐＋L/Eキー廃止
+
+**要求（ユーザー確定）**: publicでは譜面追加スペース・×ボタン・エディタ行きボタン・キャリブレーションボタンを非表示にする。`L`（キャリブレーション）・`E`（エディタ）のキーマッピングは両モード共通で廃止する。
+
+**修正**（`src/screens/SelectScreen.tsx`）:
+- public時に非表示：`.custom-import-section` 全体、`song-card-delete`（×）、エディタ行きボタン、キャリブレーションボタン（`select-calibration-button`）、`select-hint`（L/E案内）。曲カードのクリックプレイは両モードで維持。デバッグ時は現状通り全表示。
+- L/Eキーリスナーの `useEffect` を削除（両モード）。`CalibrationModal` 自体はデバッグモードのボタンから起動可のまま残す。
+
+**完了条件**:
+1. publicで上記UIが非表示、デバッグで全表示されること。
+2. L/Eキーで何も起きないこと（両モード）。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T200] GameScreenのプレイ時機能廃止（オフセット変更・Rリセット・キー音）
+
+**要求（ユーザー確定）**: プレイ時のオフセット変更（`,`/`.`）・`R` リセット・キー音（`K` トグル＋Space時クリック音）は両モード共通で廃止する。`offset:+Xms` 表示は残す。
+
+**修正**（`src/screens/GameScreen.tsx`＋`src/audio/keySound.ts`）:
+- `,`/`.` ハンドラ＋`adjustOffset`、`R` ハンドラ＋`resetGame`（デッドコード化するため除去）、`K` ハンドラ＋`keySoundOn` state＋Space時の `playKeyClick()` 呼び出しを削除。`.game-hint` 文言を更新（`offset` 表示divは維持）。
+- `src/audio/keySound.ts` は他で未使用のためファイルごと削除。
+
+**完了条件**:
+1. `,`/`.`・`R`・`K` キーで何も起きないこと（両モード）。
+2. Space押下時にキー音が鳴らないこと。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T201] パブリックビュー関連のテスト手直し・結合
+
+**要求（ユーザー確定）**: T198〜T200の結合仕上げ。既定publicのためデバッグUIを触るspecは切替コンボ先行方式に統一する。
+
+**修正**:
+- Lキー起動系（`t61` 等）、`select-calibration-button` 参照、`delete-` ボタン参照、`R` リセット・`K` 音・`,.` オフセット・`game-hint` 文言依存spec、エディタ遷移にEキーを使うspecの手直し。
+- 廃止しないもの（エディタ内R録音・`,`/`.`微調整・`CalibrationModal` 内キー）の回帰確認。
+
+**完了条件**:
+1. 失敗するspecが残っていないこと。
+2. public既定・デバッグ切替の一連フローが破綻なく動くこと。
+3. `tsc --noEmit` エラーなし。

@@ -1262,5 +1262,50 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T197",
+    "desc": "組込曲の完全削除（songs.toml・reply譜面・音源）。要求: 通常プレイ用に最初から入っている曲（選択画面のReply）を完全に削除。songs.tomlはファイルごと削除。修正: ファイル削除(public/songs.toml・public/charts/reply.toml・public/audio/08.Reply.flac。docs/配下はビルド成果物のため次回ビルドで自動消滅)。manifest.tsはsongs.tomlの404時に空リスト[]を返す。SelectScreenは曲0件時に空状態メッセージを表示。エディタの音楽URL初期値・プレースホルダの08.Reply.flacを除去（空欄化）。テスト手直し: .gateb_T98.spec.tsの#/play/reply遷移、t42.spec.tsの曲カードクリック、debug-audio-fetch.spec.tsの実ファイルfetch、t50/t51/editor-workflow等の08.Reply.flac URL入力をカスタム追加フロー・生成音源・インメモリfixtureに切替（.gateb_T*.test.ts内のbasename処理用fixture文字列は実ファイル不要のため残してよい）。完了条件: (1) 組込曲ファイルが存在せず選択画面が0曲＋インポートUI＋空状態メッセージ (2) 削除に伴い失敗するspecが残っていない (3) tsc --noEmit。",
+    "depends_on": [
+      "T196"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T198",
+    "desc": "パブリックビュー／デバッグモード基盤＋切替＋ルートガード。要求: 展示中に勝手に譜面を消去・追加されないようCtrl+Alt+Shift+@でモード切替。既定はpublic（localStorage保存・リロード維持）。修正: 新規src/viewMode.ts（getViewMode/setViewMode/toggleViewMode、未保存時はpublic、保存キー例traceWaveViewMode）。App.tsxに全画面共通キー監視（ctrl+alt+shift+@で切替→再描画）。debug時のみ小さなDEBUGバッジ（public無表示）。public時の/editorアクセスは/へリダイレクト。完了条件: (1) 切替コンボで切替＋リロード維持 (2) public時に/editor直打ちで/へ (3) tsc --noEmit。",
+    "depends_on": [
+      "T197"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T199",
+    "desc": "SelectScreenのモード別表示分岐＋L/Eキー廃止。要求: publicでは譜面追加スペース・×ボタン・エディタ行きボタン・キャリブレーションボタンを非表示。L/Eキーマッピングは両モード共通で廃止。修正: SelectScreen.tsxでpublic時に.custom-import-section全体・song-card-delete・select-navのエディタ行きボタン・select-calibration-button・select-hintを非表示。曲カードのクリックプレイは両モード維持。デバッグ時は全表示。L/EキーリスナーのuseEffectを削除。CalibrationModal自体はデバッグのボタンから起動可のまま。完了条件: (1) publicで非表示・デバッグで全表示 (2) L/Eキーで何も起きない（両モード） (3) tsc --noEmit。",
+    "depends_on": [
+      "T198"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T200",
+    "desc": "GameScreenのプレイ時機能廃止（オフセット変更・Rリセット・キー音）。要求: プレイ時の,/.(オフセット変更)・R(リセット)・K(キー音トグル＋Space時クリック音)は両モード共通で廃止。offset:+Xms表示は残す。修正: GameScreen.tsxで,/.ハンドラ＋adjustOffset、Rハンドラ＋resetGame（デッドコード化のため除去）、Kハンドラ＋keySoundOn state＋Space時のplayKeyClick()呼び出しを削除。.game-hint文言更新（offset表示div維持）。keySound.tsは他で未使用のためファイルごと削除。完了条件: (1) ,/.・R・Kキーで何も起きない（両モード） (2) Space押下時にキー音が鳴らない (3) tsc --noEmit。",
+    "depends_on": [
+      "T199"
+    ],
+    "type": "fix",
+    "test": true
+  },
+  {
+    "id": "T201",
+    "desc": "パブリックビュー関連のテスト手直し・結合。要求: T198〜T200の結合仕上げ。既定publicのためデバッグUIを触るspecは切替コンボ先行方式に統一。修正: Lキー起動系(t61等)、select-calibration-button参照、delete-ボタン参照、Rリセット・K音・,.オフセット・game-hint文言依存spec、エディタ遷移にEキーを使うspecの手直し。廃止しないもの（エディタ内R録音・,/.微調整・CalibrationModal内キー）の回帰確認。完了条件: (1) 失敗するspecが残っていない (2) public既定・デバッグ切替の一連フローが破綻なく動く (3) tsc --noEmit。",
+    "depends_on": [
+      "T200"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
