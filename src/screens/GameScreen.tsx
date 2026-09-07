@@ -3,8 +3,8 @@ import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { AudioManager } from '../audio/AudioManager'
 import { AudioCache, getBasename } from '../audio/AudioCache'
 import { BpmTimeline } from '../audio/bpmTimeline'
-import { getManualOffsetMs, resetClock, setManualOffset, songNow } from '../audio/clock'
-import { isKeySoundEnabled, playKeyClick, setKeySoundEnabled } from '../audio/keySound'
+import { getManualOffsetMs, resetClock, songNow } from '../audio/clock'
+
 import { loadAudio } from '../audio/loader'
 import { LOOKAHEAD_MS, schedule } from '../audio/metronome'
 import { ChartCache } from '../chart/cache'
@@ -58,10 +58,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
 
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
-  const [offsetMs, setOffsetMs] = useState(getManualOffsetMs)
-  const [keySoundOn, setKeySoundOn] = useState(isKeySoundEnabled)
+  const [offsetMs] = useState(getManualOffsetMs)
   const statusRef = useRef<LoadStatus>('loading')
-  const keySoundOnRef = useRef(isKeySoundEnabled())
   const onExitRef = useRef(onExit)
 
   useEffect(() => {
@@ -182,28 +180,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     }
   }, [])
 
-  const resetGame = useCallback(() => {
-    endedRef.current = false
-    stopMusic()
-    stopMetronome()
-    const audioMgr = AudioManager.getInstance()
-    try {
-      resetClock(audioMgr.ctx)
-    } catch {
-      // AudioContext not initialized yet
-    }
-    startedRef.current = false
-    keysRef.current.up = false
-    keysRef.current.down = false
-    const chart = chartRef.current
-    const amp = chart?.amplitude ?? 1.0
-    const sp = chart?.start_position ?? 0.0
-    cursorRef.current = new Cursor(amp, sp)
-    spawnerRef.current = new RingSpawner()
-    scoreRef.current = new ScoreManager()
-    ringsRef.current = []
-    judgementEventsRef.current = []
-  }, [stopMusic, stopMetronome])
+
 
   useEffect(() => {
     let cancelled = false
@@ -452,12 +429,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     }
   }, [status, navigate, stopMusic, stopMetronome, songId])
 
-  const adjustOffset = useCallback((delta: number) => {
-    const next = Math.round(getManualOffsetMs() + delta)
-    setManualOffset(next)
-    setOffsetMs(next)
-  }, [])
-
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -466,25 +437,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         } else {
           navigate('/')
         }
-        return
-      }
-      if (e.key === 'r' || e.key === 'R') {
-        resetGame()
-        return
-      }
-      if (e.key === ',' || e.key === '<') {
-        adjustOffset(-10)
-        return
-      }
-      if (e.key === '.' || e.key === '>') {
-        adjustOffset(10)
-        return
-      }
-      if (e.key === 'k' || e.key === 'K') {
-        const next = !keySoundOnRef.current
-        keySoundOnRef.current = next
-        setKeySoundOn(next)
-        setKeySoundEnabled(next)
         return
       }
       if (e.key === 'ArrowUp') {
@@ -499,7 +451,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         e.preventDefault()
         if (statusRef.current !== 'ready') return
         keysRef.current.space = true
-        if (keySoundOnRef.current) playKeyClick()
         if (!startedRef.current) {
           void startGame()
         } else {
@@ -520,7 +471,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [navigate, startGame, handleHit, resetGame, adjustOffset])
+  }, [navigate, startGame, handleHit])
 
   return (
     <div className="screen game-screen screen-fade">
@@ -556,7 +507,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             offset: {offsetMs >= 0 ? '+' : ''}
             {offsetMs}ms
           </div>
-          <div className="game-hint">Space: 判定 / ↑↓: 移動 / &lt;&gt;: オフセット±10ms / K: キー音{keySoundOn ? 'ON' : 'OFF'} / R: リセット / ESC: 戻る</div>
+          <div className="game-hint">Space: 判定 / ↑↓: 移動 / ESC: 戻る</div>
         </>
       )}
     </div>

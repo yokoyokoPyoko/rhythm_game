@@ -1,110 +1,120 @@
 /**
  * @vitest-environment node
- * T199 SelectScreenのモード別表示分岐＋L/Eキー廃止 — Vitest acceptance test
- * Verifies viewMode behavior, SelectScreen conditional UI branching for public vs debug, and L/E key listener removal.
+ * T200 GameScreenのプレイ時機能廃止（オフセット変更・Rリセット・キー音） — Vitest acceptance test
+ * Verifies that playback features (offset adjust with comma/period, reset with R, key sound toggle/click with K/Space) are abolished in both public and debug modes, while offset display is retained, and keySound.ts is removed.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getViewMode, setViewMode, toggleViewMode } from '../src/viewMode';
 
 vi.useFakeTimers();
 
-class MemoryStorage {
-  private m = new Map<string, string>();
-  getItem(k: string): string | null { return this.m.has(k) ? this.m.get(k)! : null; }
-  setItem(k: string, v: string): void { this.m.set(k, String(v)); }
-  removeItem(k: string): void { this.m.delete(k); }
-  clear(): void { this.m.clear(); }
-  key(i: number): string | null { return [...this.m.keys()][i] ?? null; }
-  get length(): number { return this.m.size; }
-}
+describe('T200 GameScreenのプレイ時機能廃止（オフセット変更・Rリセット・キー音）', () => {
+  const gameScreenPath = path.join(process.cwd(), 'src/screens/GameScreen.tsx');
+  const keySoundPath = path.join(process.cwd(), 'src/audio/keySound.ts');
 
-function installStorage(): MemoryStorage {
-  const s = new MemoryStorage();
-  (globalThis as unknown as Record<string, unknown>).localStorage = s as unknown as Storage;
-  return s;
-}
+  beforeEach(() => {
+    vi.setSystemTime(new Date('2026-03-15T12:00:00.000Z'));
+  });
 
-beforeEach(() => {
-  installStorage();
-  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-});
+  afterEach(() => {
+    vi.clearAllTimers();
+  });
 
-afterEach(() => {
-  vi.clearAllTimers();
-});
+  describe('1. keySound.ts file removal verification (3-Step State-Transition)', () => {
+    it('Step1: Identify target path for keySound.ts. Step2: Check file system. Step3: Assert file does not exist', () => {
+      // Step 1: Capture initial state concept (path definition)
+      expect(keySoundPath).toBeDefined();
 
-describe('T199 SelectScreenのモード別表示分岐＋L/Eキー廃止', () => {
-  describe('1. viewMode basic state-transition tests (3-step)', () => {
-    it('Step1: Initial state is public. Step2: Set debug. Step3: State becomes debug in storage and getter', () => {
-      // Step 1: Capture initial state
-      const initial = getViewMode();
-      expect(initial).toBe('public');
+      // Step 2: Inspect file system existence
+      const exists = fs.existsSync(keySoundPath);
 
-      // Step 2: Perform action (setViewMode('debug'))
-      setViewMode('debug');
-
-      // Step 3: Assert transition
-      expect(getViewMode()).toBe('debug');
-      expect(localStorage.getItem('traceWaveViewMode')).toBe('debug');
-    });
-
-    it('Step1: Toggle from public to debug and back (3-step state-transition)', () => {
-      // Step 1: Initial state
-      expect(getViewMode()).toBe('public');
-
-      // Step 2: Toggle to debug
-      const mode1 = toggleViewMode();
-      expect(mode1).toBe('debug');
-      expect(getViewMode()).toBe('debug');
-
-      // Step 3: Toggle back to public
-      const mode2 = toggleViewMode();
-      expect(mode2).toBe('public');
-      expect(getViewMode()).toBe('public');
-      expect(localStorage.getItem('traceWaveViewMode')).toBe('public');
+      // Step 3: Assert resulting transition (file must be deleted / absent)
+      expect(exists).toBe(false);
     });
   });
 
-  describe('2. SelectScreen.tsx source code inspection for public/debug view mode branching (3-step)', () => {
-    const selectSrcPath = path.join(process.cwd(), 'src/screens/SelectScreen.tsx');
-    const selectSrc = fs.existsSync(selectSrcPath) ? fs.readFileSync(selectSrcPath, 'utf-8') : '';
+  describe('2. GameScreen.tsx source code inspection for abolished features (3-Step State-Transition)', () => {
+    const src = fs.existsSync(gameScreenPath) ? fs.readFileSync(gameScreenPath, 'utf-8') : '';
 
-    it('Step1: Check if viewMode is imported in SelectScreen. Step2: Check conditional rendering for public vs debug. Step3: Assert presence of mode check in source', () => {
-      // Step 1: Initial check
-      const importsViewMode = selectSrc.includes('viewMode') || selectSrc.includes('getViewMode');
-      
-      // Step 2 & 3: Assert viewMode branching exists for hiding import section, delete button, editor button, calibration button, and hint
-      const hasCustomImportBranch = selectSrc.includes('custom-import-section') && (selectSrc.includes('debug') || selectSrc.includes('getViewMode()'));
-      const hasCalibrationBtnBranch = selectSrc.includes('select-calibration-button') && (selectSrc.includes('debug') || selectSrc.includes('getViewMode()'));
-      const hasHintBranch = selectSrc.includes('select-hint') && (selectSrc.includes('debug') || selectSrc.includes('getViewMode()'));
+    it('Step1: Capture initial source code presence. Step2: Analyze source for removed function names and states. Step3: Assert complete absence of adjustOffset, resetGame, keySoundOn, playKeyClick', () => {
+      // Step 1
+      expect(src.length).toBeGreaterThan(0);
 
-      expect(importsViewMode || hasCustomImportBranch || hasCalibrationBtnBranch || hasHintBranch).toBe(true);
-      expect(selectSrc).toContain('song-card-delete');
+      // Step 2: Check for dead code from abolished features
+      const hasAdjustOffset = src.includes('adjustOffset');
+      const hasResetGame = src.includes('resetGame');
+      const hasKeySoundOn = src.includes('keySoundOn');
+      const hasPlayKeyClick = src.includes('playKeyClick');
+
+      // Step 3: Assert all are absent
+      expect(hasAdjustOffset).toBe(false);
+      expect(hasResetGame).toBe(false);
+      expect(hasKeySoundOn).toBe(false);
+      expect(hasPlayKeyClick).toBe(false);
     });
 
-    it('Step1: Verify song card click navigation is maintained in both modes. Step2 & 3: Assert navigate("/play/" + song.id) exists', () => {
-      // Step 1 & 2: Check navigate call for song cards
-      const hasNavigatePlay = selectSrc.includes("navigate('/play/' + song.id)") || selectSrc.includes('navigate("/play/"');
-      
-      // Step 3: Assert persistence of click play
-      expect(hasNavigatePlay).toBe(true);
+    it('Step1: Inspect keydown event handlers. Step2: Check for comma (,), period (.), R, and K key handling. Step3: Assert that comma/period offset change, R reset, and K sound toggle handlers are removed', () => {
+      // Step 1
+      const hasKeyHandlers = src.includes('keydown');
+      expect(hasKeyHandlers).toBe(true);
+
+      // Step 2: Check if key codes for ',' (Comma), '.' (Period), 'r'/'R', 'k'/'K' are handled in game play
+      const handlesComma = src.includes("key === ','") || src.includes("code === 'Comma'");
+      const handlesPeriod = src.includes("key === '.'") || src.includes("code === 'Period'");
+      const handlesR = src.includes("'r'") || src.includes("'R'") || src.includes('"r"') || src.includes('"R"');
+      const handlesK = src.includes("'k'") || src.includes("'K'") || src.includes('"k"') || src.includes('"K"');
+
+      // Step 3: None of these gameplay shortcut handlers should be active in GameScreen
+      expect(handlesComma).toBe(false);
+      expect(handlesPeriod).toBe(false);
+      expect(handlesR).toBe(false);
+      expect(handlesK).toBe(false);
+    });
+
+    it('Step1: Capture hint markup. Step2: Inspect .game-hint content and .game-offset presence. Step3: Assert hint does not mention abolished shortcuts while offset display div is preserved', () => {
+      // Step 1
+      const hasGameHint = src.includes('game-hint');
+      const hasGameOffset = src.includes('game-offset');
+      expect(hasGameHint).toBe(true);
+      expect(hasGameOffset).toBe(true);
+
+      // Step 2: Extract game-hint text or check its pattern
+      const hintMatch = src.match(/className="game-hint"[^>]*>([^<]+)<\/div>/);
+      const hintText = hintMatch ? hintMatch[1] : '';
+
+      // Step 3: Assert offset div is retained and hint text does not advertise abolished shortcuts
+      expect(hasGameOffset).toBe(true);
+      if (hintText) {
+        expect(hintText).not.toContain(',');
+        expect(hintText).not.toContain('.');
+        expect(hintText).not.toContain('R');
+        expect(hintText).not.toContain('K');
+      }
     });
   });
 
-  describe('3. L/E key listener removal validation (3-step)', () => {
-    const selectSrcPath = path.join(process.cwd(), 'src/screens/SelectScreen.tsx');
-    const selectSrc = fs.existsSync(selectSrcPath) ? fs.readFileSync(selectSrcPath, 'utf-8') : '';
+  describe('3. Behavioral simulation of key inputs (3-Step State-Transition)', () => {
+    it('Step1: Initialize mock window keydown events. Step2: Dispatch comma, period, R, K keys. Step3: Assert offset value is unchanged and no error or sound trigger occurs', () => {
+      // Step 1: Capture initial offset from getManualOffsetMs
+      const { getManualOffsetMs } = require('../src/audio/clock');
+      const initialOffset = getManualOffsetMs();
 
-    it('Step1: Check key listener presence. Step2: Inspect for L/E key handling. Step3: Assert L/E key navigation/calibration useEffect listener is removed', () => {
-      // Step 1 & 2: Check if 'e'/'E' or 'l'/'L' keydown navigation is present in SelectScreen
-      const checksLEKeys = (selectSrc.includes("'l'") || selectSrc.includes('"l"') || selectSrc.includes("'L'") || selectSrc.includes('"L"')) &&
-                           (selectSrc.includes("'e'") || selectSrc.includes('"e"') || selectSrc.includes("'E'") || selectSrc.includes('"E"'));
-      const hasNavigateEditorOnKey = selectSrc.includes("navigate('/editor')") && selectSrc.includes('key');
+      // Step 2: Simulate window keydown for ',', '.', 'R', 'K'
+      const events = [
+        new KeyboardEvent('keydown', { key: ',' }),
+        new KeyboardEvent('keydown', { key: '.' }),
+        new KeyboardEvent('keydown', { key: 'r', code: 'KeyR' }),
+        new KeyboardEvent('keydown', { key: 'k', code: 'KeyK' }),
+      ];
 
-      // Step 3: L/E key listener must be removed (false)
-      expect(checksLEKeys && hasNavigateEditorOnKey).toBe(false);
+      for (const ev of events) {
+        window.dispatchEvent(ev);
+      }
+
+      // Step 3: Assert offset remains identical and no side effects occurred
+      const finalOffset = getManualOffsetMs();
+      expect(finalOffset).toBe(initialOffset);
     });
   });
 });
