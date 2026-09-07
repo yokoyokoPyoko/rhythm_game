@@ -1641,7 +1641,7 @@
     },
     "T193": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788774887.0204434,
       "cycles": 1,
       "sessions": {
@@ -1650,7 +1650,14 @@
         "reviewer": "ses_f84ab7ec1ffey7bmvMA7lyQjGr"
       },
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788775196.8159628
+      "last_postmortem_at": 1788775196.8159628,
+      "gate_b_golden": true,
+      "finished": 1788775579.2910492
+    },
+    "T194": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788775579.2924016
     }
   },
   "consecutive_no_action": 0
