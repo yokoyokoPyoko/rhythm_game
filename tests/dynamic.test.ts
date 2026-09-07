@@ -118,10 +118,13 @@ describe('T187 BpmTimeline基準BPM導出変更＋zoomAt追加 — Vitest pure e
       expect(tl.beatToMs(0.37)).toBeCloseTo(400 * 0.37, 2);
       expect(tl.beatToMs(2)).toBeCloseTo(800, 2);
       // after beat 4, 180 => 333.33
+      // model: base derived 150 covers [0,2) (800ms) AND [2,4) (800ms) since
+      // the beat-4 change owns the 150 bpm established at beat 2. So the total
+      // prefix at 150 is 400ms * 4 beats = 1600ms, then 180 applies from beat 4.
       const ms180 = 60000 / 180;
       expect(tl.bpmAt(4.23)).toBeCloseTo(180, 5);
-      expect(tl.beatToMs(5)).toBeCloseTo(800 + ms180 * 1, 2);
-      expect(tl.beatToMs(4.37)).toBeCloseTo(800 + ms180 * 0.37, 2);
+      expect(tl.beatToMs(5)).toBeCloseTo(400 * 4 + ms180 * 1, 2);
+      expect(tl.beatToMs(4.37)).toBeCloseTo(400 * 4 + ms180 * 0.37, 2);
     });
 
     it('未ソートのsectionsでもbeat最小が基準 — [{beat4:180},{beat0:150}] => base 150 (3-step)', () => {
