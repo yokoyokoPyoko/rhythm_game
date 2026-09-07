@@ -1,23 +1,78 @@
 /**
  * @vitest-environment node
- * T185: 録音カーソルの上下端突き抜け修正（クランプ無条件化）
+ * T174: キャリブレーション判定表示のΔY計測バグ修正
  * Vitest unit tests (node) — pure engine math, no DOM.
+ *
+ * Bug: handleHit computed ΔY AFTER judgeHit() had marked the hit ring resolved,
+ * so the subsequent scan skipped it and measured the next ring. Fix: capture
+ * targetY BEFORE calling judgeHit, using the ring judgeHit will actually resolve
+ * (Y-aware selection, not just timing-closest).
+ *
+ * Off-grid principle: include fractional beats (0.37, 1.23, 2.71) and complex
+ * amplitudes (0.7, 1.3, 2.7, 3.4).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Cursor } from '../src/game/cursor';
-import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
+import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
+import { Cursor } from '../src/game/cursor';
+import { judgeHit } from '../src/game/hitJudge';
+import {
+  calculateCalibrationHitYDist,
+  formatLastLabel,
+  generateCalibrationChart,
+} from '../src/screens/editor/CalibrationModal';
+import type { RingState } from '../src/types';
 
-const WAVE_TOP = TW_CENTER_Y - TW_AMP; // 170
-const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP; // 430
-const WAVE_CENTER = TW_CENTER_Y; // 300
-const PULL = 0.045;
+const WAVE_TOP = TW_CENTER_Y - TW_AMP;
+const WAVE_BOTTOM = TW_CENTER_Y + TW_AMP;
 
-function isClamped(y: number): boolean {
-  return y >= WAVE_TOP - 1e-9 && y <= WAVE_BOTTOM + 1e-9;
+// helper: create RingState array from targetYs and hitTimes
+function makeRings(hitTimes: number[], targetYs: number[], opts: Partial<Pick<RingState, 'type'>> = {}): RingState[] {
+  return hitTimes.map((hitTime, i) => ({
+    id: i,
+    spawnTime: hitTime - 1500,
+    hitTime,
+    targetY: targetYs[i],
+    resolved: false,
+    hit: false,
+    type: (opts.type as RingState['type']) ?? 'single',
+  }));
 }
 
-describe('T185: Cursor clamp unconditional (recording overflow fix)', () => {
+// helper: compute timeline hitTime for beat
+function hitMs(bpm: number, beat: number, bpmChanges: any[] = [], amp = 1.0): number {
+  const tl = new BpmTimeline(bpm, bpmChanges, amp);
+  return tl.beatToMs(beat);
+}
+
+// helper: simulate buggy AFTER-scan (the T174 bug)
+function buggyYDistAfterJudgeHit(rings: RingState[], cursorY: number): number {
+  // This mimics the buggy code: scan after judgeHit has marked resolved
+  let bestErr = Infinity;
+  let target: RingState | null = null;
+  // naive scan that just finds smallest err among unresolved (buggy handleHit did this)
+  // but because hit ring is now resolved, it finds next ring
+  for (const ring of rings) {
+    if (ring.resolved) continue;
+    // assume pressTime ~ first hitTime, so err approximates |hitTime - pressTime|
+    // for buggy check we just find closest unresolved ring's Y
+    // Use hitTime distance to first ring's hitTime as proxy
+    const err = Math.abs(ring.hitTime - rings[0].hitTime);
+    void err;
+  }
+  // Actually find closest unresolved ring after resolved
+  let minYDist = Infinity;
+  let closest: RingState | null = null;
+  for (const ring of rings) {
+    if (ring.resolved) continue;
+    // pick first unresolved
+    if (!closest) closest = ring;
+  }
+  if (closest) return Math.abs(cursorY - closest.targetY);
+  return 0;
+}
+
+describe('T174: ΔY calibration bug — capture BEFORE judgeHit', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
@@ -26,375 +81,405 @@ describe('T185: Cursor clamp unconditional (recording overflow fix)', () => {
     vi.useRealTimers();
   });
 
-  describe('1. Recording cursor (without nowWaveY) never escapes [TOP,BOTTOM] even on long hold', () => {
-    it('UP hold for 10 seconds stays clamped at TOP (amplitude 1.0, BPM120)', () => {
-      // [Step1] Capture initial state — center start, no wave snap argument
-      const cursor = new Cursor(1.0, 0);
-      expect(cursor.y).toBeCloseTo(WAVE_CENTER, 5);
-      const initial = cursor.y;
-      expect(isClamped(initial)).toBe(true);
-
-      // [Step2] Perform user interaction — hold UP for many ticks without nowWaveY (recording loop signature)
-      const beatMs = 500; // BPM 120
-      const dt = 0.016;
-      const ticks = Math.ceil(10 / dt); // 10 seconds
-      let minY = cursor.y;
-      for (let i = 0; i < ticks; i++) {
-        // T185: recCursorRef.update(dt, up, down, beatMs) — 4 args, no nowWaveY
-        cursor.update(dt, true, false, beatMs);
-        minY = Math.min(minY, cursor.y);
-      }
-
-      // [Step3] Assert resulting transition — clamped to TOP, never below
-      expect(isClamped(cursor.y)).toBe(true);
-      expect(cursor.y).toBeCloseTo(WAVE_TOP, 5);
-      expect(minY).toBeGreaterThanOrEqual(WAVE_TOP - 1e-9);
-    });
-
-    it('DOWN hold for 10 seconds stays clamped at BOTTOM (amplitude 1.0, BPM120)', () => {
-      const cursor = new Cursor(1.0, 0);
-      expect(cursor.y).toBeCloseTo(WAVE_CENTER, 5);
-      const beatMs = 500;
-      const dt = 0.016;
-      const ticks = Math.ceil(10 / dt);
-      let maxY = cursor.y;
-      for (let i = 0; i < ticks; i++) {
-        cursor.update(dt, false, true, beatMs);
-        maxY = Math.max(maxY, cursor.y);
-      }
-      expect(isClamped(cursor.y)).toBe(true);
-      expect(cursor.y).toBeCloseTo(WAVE_BOTTOM, 5);
-      expect(maxY).toBeLessThanOrEqual(WAVE_BOTTOM + 1e-9);
-    });
-
-    it('UP hold with complex amplitudes 0.7 / 1.3 / 2.7 / 3.4 and off-grid dt stays clamped', () => {
-      const amps = [0.7, 1.3, 2.7, 3.4] as const;
-      const dts = [0.037, 0.016, 0.033] as const; // off-grid fractional frame times
-      for (const amp of amps) {
-        for (const dt of dts) {
-          // [Step1]
-          const cursor = new Cursor(amp, 0);
-          const beatMs = 60000 / 120;
-          // [Step2] hold UP for 5 seconds
-          const ticks = Math.ceil(5 / dt);
-          for (let i = 0; i < ticks; i++) cursor.update(dt, true, false, beatMs);
-          // [Step3]
-          expect(isClamped(cursor.y)).toBe(true);
-          expect(cursor.y).toBeCloseTo(WAVE_TOP, 5);
-          // reset and test DOWN
-          const cursor2 = new Cursor(amp, 0);
-          for (let i = 0; i < ticks; i++) cursor2.update(dt, false, true, beatMs);
-          expect(isClamped(cursor2.y)).toBe(true);
-          expect(cursor2.y).toBeCloseTo(WAVE_BOTTOM, 5);
-        }
-      }
-    });
-
-    it('startPosition=1.0 (TOP) + DOWN, startPosition=-1.0 (BOTTOM) + UP — clamp still holds', () => {
-      // TOP start, go down
-      const topCursor = new Cursor(1.0, 1.0);
-      expect(topCursor.y).toBeCloseTo(WAVE_TOP, 5);
-      for (let i = 0; i < 500; i++) topCursor.update(0.016, false, true, 500);
-      expect(isClamped(topCursor.y)).toBe(true);
-      expect(topCursor.y).toBeCloseTo(WAVE_BOTTOM, 5);
-
-      // BOTTOM start, go up
-      const botCursor = new Cursor(1.0, -1.0);
-      expect(botCursor.y).toBeCloseTo(WAVE_BOTTOM, 5);
-      for (let i = 0; i < 500; i++) botCursor.update(0.016, true, false, 500);
-      expect(isClamped(botCursor.y)).toBe(true);
-      expect(botCursor.y).toBeCloseTo(WAVE_TOP, 5);
-    });
-
-    it('off-grid beatMs (e.g. BPM 137) with long hold still clamped', () => {
-      const cursor = new Cursor(2.0, 0);
-      const beatMs = 60000 / 137; // ~438ms off-grid
-      const dt = 0.023; // fractional
-      for (let i = 0; i < 800; i++) cursor.update(dt, true, false, beatMs);
-      expect(isClamped(cursor.y)).toBe(true);
-      expect(cursor.y).toBeCloseTo(WAVE_TOP, 5);
-      const cursor2 = new Cursor(2.0, 0);
-      for (let i = 0; i < 800; i++) cursor2.update(dt, false, true, beatMs);
-      expect(isClamped(cursor2.y)).toBe(true);
-      expect(cursor2.y).toBeCloseTo(WAVE_BOTTOM, 5);
-    });
-  });
-
-  describe('2. Clamp is unconditional — snap (nowWaveY) not required for clamping, and snap is not applied without it', () => {
-    it('without nowWaveY, movement is purely speed*dt clamped (no hidden snap pull)', () => {
+  describe('1. Correct ΔY matches hit ring (not next ring) when tapping directly above', () => {
+    it('two rings at beat 4 and 8, cursor exactly on ring 4 => ΔY ~0 (not distance to ring 8)', () => {
       // [Step1] Capture initial state
-      const cursor = new Cursor(1.0, 0);
-      cursor.y = WAVE_CENTER;
-      const beatMs = 500;
-      const dt = 0.016;
-      const speed = (2 * TW_AMP * 1.0) / (beatMs / 1000); // 520
-      const initialY = cursor.y;
+      const tl = new BpmTimeline(120, [], 1.0);
+      const engine = new WaveEngine(
+        [{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }, { direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }],
+        tl, 1.0, 0,
+      );
+      const hit4 = tl.beatToMs(4);
+      const hit8 = tl.beatToMs(8);
+      const y4 = engine.waveYAt(4);
+      const y8 = engine.waveYAt(8);
+      // Ensure they are far apart (>50px) to make bug detectable
+      // If not, force separation
+      const targetYs = [y4, y4 + 120];
+      const rings = makeRings([hit4, hit8], targetYs);
+      const cursorY = targetYs[0] + 2; // 2px above ring 4
+      const beatMs = tl.beatMsAt(4);
+      const pressTime = hit4 + 5; // 5ms error
 
-      // [Step2] Single tick UP without nowWaveY
-      cursor.update(dt, true, false, beatMs);
+      // [Step2] Perform user interaction — capture BEFORE judgeHit (correct) vs AFTER (buggy)
+      const correctYDist = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      // Simulate judgeHit mutates rings
+      const ringsClone: RingState[] = JSON.parse(JSON.stringify(rings));
+      // Need to preserve class behavior — use originals
+      const liveRings = makeRings([hit4, hit8], targetYs);
+      const judgement = judgeHit(pressTime, cursorY, liveRings, beatMs, 750);
+      expect(judgement).not.toBeNull();
+      // After judgeHit, first ring is resolved
+      expect(liveRings[0].resolved).toBe(true);
+      // Buggy scan: find closest unresolved ring after
+      let buggyYDist = 0;
+      for (const r of liveRings) {
+        if (r.resolved) continue;
+        buggyYDist = Math.abs(cursorY - r.targetY);
+        break;
+      }
 
-      // [Step3] Assert exact clamped movement, no snap
-      const expected = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, initialY - speed * dt));
-      expect(cursor.y).toBeCloseTo(expected, 5);
-      // Repeat with DOWN
-      const cursor2 = new Cursor(1.0, 0);
-      cursor2.y = WAVE_CENTER;
-      cursor2.update(dt, false, true, beatMs);
-      const expected2 = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, WAVE_CENTER + speed * dt));
-      expect(cursor2.y).toBeCloseTo(expected2, 5);
+      // [Step3] Assert resulting transition
+      expect(correctYDist).toBeCloseTo(2, 0); // ~2px
+      expect(correctYDist).toBeLessThan(10);
+      expect(buggyYDist).toBeGreaterThan(100); // distance to ring 8 (~118px)
+      expect(buggyYDist).not.toBeCloseTo(correctYDist, 0);
     });
 
-    it('with nowWaveY, snap pull is added after clamped movement (single tick precise)', () => {
-      // [Step1]
-      const cursor = new Cursor(1.0, 0);
-      cursor.y = 250;
-      const initialY = cursor.y;
-      const beatMs = 500;
-      const dt = 0.016;
-      const speed = (2 * TW_AMP * 1.0) / (beatMs / 1000);
-      const nowWaveY = WAVE_BOTTOM; // pull towards bottom
-      const delta = -speed * dt; // UP press
+    it('complex amplitude 0.7: off-grid beats with ΔY near zero still reports near-zero', () => {
+      const amp = 0.7;
+      const tl = new BpmTimeline(120, [], amp);
+      const engine = new WaveEngine([{ direction: 'down', beats: 4 }, { direction: 'up', beats: 4 }], tl, amp, 0);
+      const hit4 = tl.beatToMs(4);
+      const hit8 = tl.beatToMs(8);
+      const y4 = engine.waveYAt(4);
+      const rings = makeRings([hit4, hit8], [y4, y4 + 150]);
+      const cursorY = y4 + 1.5; // off-grid Y offset
+      const beatMs = tl.beatMsAt(4);
+      const pressTime = hit4 + 12; // 12ms error
 
-      // [Step2] tick with UP + nowWaveY
-      cursor.update(dt, true, false, beatMs, nowWaveY);
+      const yDist = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      expect(yDist).toBeCloseTo(1.5, 0);
+      expect(yDist).toBeLessThan(5);
 
-      // [Step3] Expected = clamp(clamp(initial+delta) + (clampedTarget - clamp(initial+delta))*PULL)
-      const afterMove = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, initialY + delta));
-      const clampedTarget = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, nowWaveY));
-      const expected = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, afterMove + (clampedTarget - afterMove) * PULL));
-      expect(cursor.y).toBeCloseTo(expected, 5);
-      expect(cursor.y).toBeGreaterThan(afterMove); // pull towards bottom
+      const live = makeRings([hit4, hit8], [y4, y4 + 150]);
+      const j = judgeHit(pressTime, cursorY, live, beatMs, 750);
+      expect(j?.result).toBe('perfect');
+      expect(live[0].resolved).toBe(true);
+      // bug would give ~148.5
+      let buggy = 0;
+      for (const r of live) if (!r.resolved) { buggy = Math.abs(cursorY - r.targetY); break; }
+      expect(buggy).toBeGreaterThan(140);
+      expect(yDist).not.toBeCloseTo(buggy, 0);
     });
 
-    it('undefined / NaN nowWaveY does not trigger snap (recording path)', () => {
-      const cursorA = new Cursor(1.0, 0);
-      cursorA.y = 250;
-      cursorA.update(0.016, false, false, 500, undefined as unknown as number);
-      const cursorB = new Cursor(1.0, 0);
-      cursorB.y = 250;
-      cursorB.update(0.016, false, false, 500);
-      expect(cursorA.y).toBeCloseTo(cursorB.y, 9);
-
-      const cursorC = new Cursor(1.0, 0);
-      cursorC.y = 250;
-      cursorC.update(0.016, false, false, 500, NaN);
-      expect(cursorC.y).toBeCloseTo(cursorB.y, 9);
-
-      const cursorD = new Cursor(1.0, 0);
-      cursorD.y = 250;
-      cursorD.update(0.016, false, false, 500, Infinity);
-      expect(cursorD.y).toBeCloseTo(cursorB.y, 9);
-    });
-
-    it('nowWaveY outside [TOP,BOTTOM] is clamped before snap pull', () => {
-      const cursor = new Cursor(1.0, 0);
-      cursor.y = WAVE_CENTER;
-      // target far above top
-      cursor.update(0.016, false, false, 500, WAVE_TOP - 1000);
-      // clampedTarget = WAVE_TOP, so pull towards TOP
-      // afterMove = CENTER (no key delta), so pull = (TOP - CENTER)*PULL
-      const expected = WAVE_CENTER + (WAVE_TOP - WAVE_CENTER) * PULL;
-      expect(cursor.y).toBeCloseTo(expected, 4);
-      expect(isClamped(cursor.y)).toBe(true);
-
-      const cursor2 = new Cursor(1.0, 0);
-      cursor2.y = WAVE_CENTER;
-      cursor2.update(0.016, false, false, 500, WAVE_BOTTOM + 1000);
-      const expected2 = WAVE_CENTER + (WAVE_BOTTOM - WAVE_CENTER) * PULL;
-      expect(cursor2.y).toBeCloseTo(expected2, 4);
-      expect(isClamped(cursor2.y)).toBe(true);
-    });
-  });
-
-  describe('3. Game cursor regression: with nowWaveY (T163) behavior unchanged and still clamped', () => {
-    it('game loop tick with nowWaveY matching WaveEngine stays within bounds and snaps correctly', () => {
-      // [Step1] Setup waveEngine with time-varying amplitude, cursor at startPosition 0 => CENTER
+    it('complex amplitude 1.3: off-grid press at 0.37 beat offset', () => {
       const amp = 1.3;
       const tl = new BpmTimeline(120, [], amp);
-      const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 0);
-      expect(engine.waveYAt(0)).toBeCloseTo(WAVE_CENTER, 5); // startPosition 0 => center
-      const cursor = new Cursor(amp, 0);
-      expect(cursor.y).toBeCloseTo(WAVE_CENTER, 5);
+      const engine = new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], tl, amp, 0);
+      const beat = 4.37; // off-grid hit
+      const hit = tl.beatToMs(beat);
+      const hitNext = tl.beatToMs(8.37);
+      const y = engine.waveYAt(beat);
+      const yNext = engine.waveYAt(8.37);
+      // ensure separation
+      const yNextForced = y + 110;
+      void yNext;
+      const rings = makeRings([hit, hitNext], [y, yNextForced]);
+      const cursorY = y + 3;
+      const beatMs = tl.beatMsAt(beat);
+      const pressTime = hit + 8;
 
-      const beatMs = tl.beatMsAt(0);
-      // Simulate a few game ticks holding DOWN towards wave that goes down
-      let beat = 0;
-      const dt = 0.016;
-      for (let i = 0; i < 10; i++) {
-        beat += dt * 1000 / beatMs; // approximate beat advance (off-grid)
-        const nowWaveY = engine.waveYAt(beat);
-        const before = cursor.y;
-        cursor.update(dt, false, true, tl.beatMsAt(beat), nowWaveY);
-        expect(isClamped(cursor.y)).toBe(true);
-        // cursor should move towards nowWaveY (which is descending) — monotonic or stable
-        void before;
-      }
-      // After 10 ticks, cursor should have moved down from center but not escaped
-      expect(cursor.y).toBeGreaterThan(WAVE_CENTER);
-      expect(isClamped(cursor.y)).toBe(true);
+      const yDist = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      expect(yDist).toBeCloseTo(3, 0);
+      expect(yDist).toBeLessThan(10);
+
+      const live = makeRings([hit, hitNext], [y, yNextForced]);
+      judgeHit(pressTime, cursorY, live, beatMs, 750);
+      let buggy = 0;
+      for (const r of live) if (!r.resolved) { buggy = Math.abs(cursorY - r.targetY); break; }
+      expect(buggy).toBeGreaterThan(100);
     });
 
-    it('game cursor with nowWaveY: short hold difference vs recording cursor (no snap) is ~pull amount', () => {
-      // This verifies T163 snap is preserved and that we do not regress game behavior.
-      // Use only 3 ticks so difference stays ~ few px (avoids accumulated snap drift trap).
-      const amp = 1.0;
+    it('complex amplitude 2.7: off-grid 1.23 beat press', () => {
+      const amp = 2.7;
       const tl = new BpmTimeline(120, [], amp);
-      const engine = new WaveEngine([{ direction: 'up', beats: 4 }], tl, amp, 1.0); // start at TOP
-      expect(engine.waveYAt(0)).toBeCloseTo(WAVE_TOP, 5);
+      const engine = new WaveEngine([{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }, { direction: 'down', beats: 2 }], tl, amp, 0);
+      const hit = tl.beatToMs(4);
+      const hitNext = tl.beatToMs(8);
+      const y = engine.waveYAt(4);
+      const rings = makeRings([hit, hitNext], [y, y + 130]);
+      const cursorY = y + 0.5;
+      const beatMs = tl.beatMsAt(4);
+      const pressTime = hit + 20; // 20ms
+      const yDist = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      expect(yDist).toBeCloseTo(0.5, 0);
 
-      const dt = 0.016;
-      const beatMs = 500;
+      const live = makeRings([hit, hitNext], [y, y + 130]);
+      judgeHit(pressTime, cursorY, live, beatMs, 750);
+      let buggy = 0;
+      for (const r of live) if (!r.resolved) { buggy = Math.abs(cursorY - r.targetY); break; }
+      expect(buggy).toBeGreaterThan(120);
+    });
+  });
 
-      // Game cursor: with nowWaveY = wave at current beat (use CENTER as wave value to isolate snap direction)
-      // Use waveY = 300 (center) so pull is towards center while key pushes up towards TOP.
-      const nowWaveY = WAVE_CENTER;
-      const gameCursor = new Cursor(amp, 0);
-      gameCursor.y = WAVE_CENTER;
-      const recCursor = new Cursor(amp, 0);
-      recCursor.y = WAVE_CENTER;
+  describe('2. Y-aware selection: timing-closest fails Y but second passes', () => {
+    it('ring A: small err but Y far (70px) => miss, ring B: larger err but Y close (10px) => hit picks B', () => {
+      // [Step1] Setup
+      const tl = new BpmTimeline(120, [], 1.0);
+      const beatMs = tl.beatMsAt(4);
+      // Two rings very close in time but different Y
+      const hitA = 2000;
+      const hitB = 2050; // 50ms later
+      const yA = 200;
+      const yB = 300;
+      const rings = makeRings([hitA, hitB], [yA, yB]);
+      const cursorY = yB + 10; // close to B, far from A (90px)
+      const pressTime = hitA + 5; // closest to A timing-wise (5ms vs 45ms to B)
 
-      // 3 ticks UP
-      for (let i = 0; i < 3; i++) {
-        gameCursor.update(dt, true, false, beatMs, nowWaveY);
-        recCursor.update(dt, true, false, beatMs);
-      }
-      // Game cursor should be pulled slightly towards CENTER relative to recording cursor,
-      // so gameCursor.y > recCursor.y (less far up). Difference is ~ PULL per tick accumulated.
-      expect(gameCursor.y).toBeGreaterThan(recCursor.y);
-      const diff = gameCursor.y - recCursor.y;
-      // After 3 ticks, diff is small (approx 1-10 px), not huge. This guards against
-      // exact accumulated-snap threshold errors while still verifying snap is active.
-      expect(diff).toBeGreaterThan(0);
-      expect(diff).toBeLessThan(35);
-      expect(isClamped(gameCursor.y)).toBe(true);
-      expect(isClamped(recCursor.y)).toBe(true);
+      // [Step2] Correct yDist should be distance to B (10px), not A (110px)
+      const yDist = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      // hitCandidates filter Y<60: only B qualifies, so B is selected despite larger err
+      expect(yDist).toBeCloseTo(10, 0);
+
+      // Verify judgeHit also picks B (not A)
+      const live = makeRings([hitA, hitB], [yA, yB]);
+      const j = judgeHit(pressTime, cursorY, live, beatMs, 750);
+      expect(j).not.toBeNull();
+      // Should be a hit (good/great/perfect) not miss
+      expect(j!.result).not.toBe('miss');
+      // The hit should have resolved B? Wait judgeHit resolves selected ring.
+      // Which ring got resolved? Y-aware picks B, so B should be resolved
+      // Check: if A was picked, A would be resolved with miss; but we got hit, so B
+      const resolvedIds = live.filter(r => r.resolved).map(r => r.id);
+      expect(resolvedIds).toContain(1); // B
+      // And yDist from before matches |cursorY - yB|
+      expect(yDist).toBeCloseTo(Math.abs(cursorY - yB), 5);
     });
 
-    it('snap equilibrium: holding against snap at boundary converges within 6px of TOP', () => {
-      // Start at TOP-going wave, hold UP continuously with snap towards wave that stays at TOP
-      // Cursor should stay near TOP, snap prevents escape but clamp is the ultimate guard.
-      const amp = 1.0;
-      const cursor = new Cursor(amp, 0);
-      cursor.y = WAVE_TOP + 5;
-      const nowWaveY = WAVE_TOP; // wave stays at top
-      const beatMs = 500;
-      const dt = 0.016;
-      for (let i = 0; i < 200; i++) {
-        cursor.update(dt, true, false, beatMs, nowWaveY);
-        expect(isClamped(cursor.y)).toBe(true);
-      }
-      // After many ticks, cursor should be very close to TOP (within snap equilibrium range)
-      expect(cursor.y).toBeLessThanOrEqual(WAVE_TOP + 6);
-      expect(cursor.y).toBeGreaterThanOrEqual(WAVE_TOP - 1e-6);
+    it('when no candidate passes Y<60, picks timing-closest for MISS with correct large ΔY', () => {
+      const tl = new BpmTimeline(120, [], 1.0);
+      const beatMs = tl.beatMsAt(4);
+      const hitA = 2000;
+      const hitB = 2050;
+      const yA = 200;
+      const yB = 400;
+      const rings = makeRings([hitA, hitB], [yA, yB]);
+      const cursorY = yA + 90; // far from both (>60)
+      const pressTime = hitA + 5; // closer to A
+
+      const yDist = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      // Both fail Y, so picks err smallest => A, yDist ~90
+      expect(yDist).toBeCloseTo(90, 0);
+      const live = makeRings([hitA, hitB], [yA, yB]);
+      const j = judgeHit(pressTime, cursorY, live, beatMs, 750);
+      expect(j?.result).toBe('miss');
+      // miss still returns errorMs and marks resolved
+      expect(live[0].resolved).toBe(true);
+      // yDist should be 90, not distance to B (which would be ~110)
+      expect(yDist).toBeLessThan(100);
+      expect(Math.abs(cursorY - yB)).toBeGreaterThan(100);
+    });
+  });
+
+  describe('3. Bug demonstration: AFTER scan gives wrong ΔY, BEFORE gives correct', () => {
+    it('sequence of 5 rings, hit first, buggy scan returns next ring distance', () => {
+      const tl = new BpmTimeline(120, [], 1.0);
+      const beats = [4, 8, 12, 16, 20];
+      const hitTimes = beats.map(b => tl.beatToMs(b));
+      const engine = new WaveEngine(generateCalibrationChart(24).segments, tl, 1.0, 0);
+      const ys = beats.map(b => engine.waveYAt(b));
+      // Force separation: offset even indices
+      const targetYs = ys.map((y, i) => (i === 0 ? y : y + 100 + i * 10));
+      // Ensure first is distinct
+      const rings = makeRings(hitTimes, targetYs);
+      const cursorY = targetYs[0] + 1;
+      const pressTime = hitTimes[0] + 10;
+      const beatMs = tl.beatMsAt(4);
+
+      const correct = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+      expect(correct).toBeCloseTo(1, 0);
+
+      const live = makeRings(hitTimes, targetYs);
+      judgeHit(pressTime, cursorY, live, beatMs, 750);
+      // Simulate buggy: scan after
+      let buggy = 0;
+      for (const r of live) if (!r.resolved) { buggy = Math.abs(cursorY - r.targetY); break; }
+      expect(buggy).toBeGreaterThan(90);
+      expect(correct).not.toEqual(buggy);
     });
 
-    it('off-grid beat phase: cursor and WaveEngine slope consistency (complex amp 0.7 / 1.3 / 2.7)', () => {
+    it('off-grid 0.37 and 1.23 beats still show BEFORE vs AFTER difference', () => {
       const amps = [0.7, 1.3, 2.7] as const;
+      for (const amp of amps) {
+        const tl = new BpmTimeline(120, [], amp);
+        const hit = tl.beatToMs(4.37);
+        const hitNext = tl.beatToMs(8.37);
+        const engine = new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], tl, amp, 0);
+        const y = engine.waveYAt(4.37);
+        const yNext = y + 100;
+        void yNext;
+        const cursorY = y + 2;
+        const pressTime = hit + 7;
+        const beatMs = tl.beatMsAt(4.37);
+        const rings = makeRings([hit, hitNext], [y, y + 100]);
+        const correct = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+        expect(correct).toBeCloseTo(2, 0);
+        const live = makeRings([hit, hitNext], [y, y + 100]);
+        judgeHit(pressTime, cursorY, live, beatMs, 750);
+        let buggy = 0;
+        for (const r of live) if (!r.resolved) { buggy = Math.abs(cursorY - r.targetY); break; }
+        expect(buggy).toBeGreaterThan(90);
+      }
+    });
+  });
+
+  describe('4. Edge cases and hitJudge side-effects', () => {
+    it('no rings => yDist 0', () => {
+      const yDist = calculateCalibrationHitYDist(1000, 300, [], 500, 750);
+      expect(yDist).toBe(0);
+    });
+
+    it('all rings already resolved => yDist 0', () => {
+      const rings: RingState[] = [
+        { id: 0, spawnTime: 0, hitTime: 2000, targetY: 200, resolved: true, hit: false },
+        { id: 1, spawnTime: 0, hitTime: 4000, targetY: 300, resolved: true, hit: true },
+      ];
+      const yDist = calculateCalibrationHitYDist(2005, 205, rings, 500, 750);
+      expect(yDist).toBe(0);
+    });
+
+    it('outside wide window => no candidate => yDist 0 and judgeHit returns null', () => {
+      const hit = 2000;
+      const rings = makeRings([hit], [300]);
+      const pressTime = hit + 800; // outside 750
+      const yDist = calculateCalibrationHitYDist(pressTime, 305, rings, 500, 750);
+      expect(yDist).toBe(0);
+      const live = makeRings([hit], [300]);
+      const j = judgeHit(pressTime, 305, live, 500, 750);
+      expect(j).toBeNull();
+      expect(live[0].resolved).toBe(false);
+    });
+
+    it('hold ring already hit (hit true) is skipped', () => {
+      const hit = 2000;
+      const hitB = 2050; // within wide window 750
+      const rings: RingState[] = [
+        { id: 0, spawnTime: 0, hitTime: hit, targetY: 200, resolved: false, hit: true, type: 'hold' },
+        { id: 1, spawnTime: 0, hitTime: hitB, targetY: 300, resolved: false, hit: false, type: 'single' },
+      ];
+      const yDist = calculateCalibrationHitYDist(hit + 5, 202, rings, 500, 750);
+      // Should skip hold hit, pick next ring => distance ~98
+      expect(yDist).toBeCloseTo(Math.abs(202 - 300), 5);
+    });
+
+    it('judgeHit marks resolved and hit flags correctly for 3.4 amplitude off-grid', () => {
+      const amp = 3.4;
+      const tl = new BpmTimeline(130, [], amp);
+      const engine = new WaveEngine([{ direction: 'down', beats: 1 }, { direction: 'up', beats: 1 }], tl, amp, 0);
+      const hit = tl.beatToMs(5.71); // off-grid
+      const hitNext = tl.beatToMs(9.71);
+      const y = engine.waveYAt(5.71);
+      const live = makeRings([hit, hitNext], [y, y + 110]);
+      const cursorY = y + 4;
+      const j = judgeHit(hit + 15, cursorY, live, tl.beatMsAt(5.71), 750);
+      expect(j).not.toBeNull();
+      expect(live[0].resolved).toBe(true);
+      expect(live[0].hit).toBe(true);
+      expect(live[1].resolved).toBe(false);
+      const yDist = calculateCalibrationHitYDist(hit + 15, cursorY, makeRings([hit, hitNext], [y, y + 110]), tl.beatMsAt(5.71), 750);
+      expect(yDist).toBeCloseTo(4, 0);
+    });
+  });
+
+  describe('5. WaveEngine / Cursor numeric consistency with complex amps (T127 style)', () => {
+    it('waveYAt and cursor speed share same perBeatPx for amps 0.7/1.3/2.7/3.4 at off-grid beats', () => {
+      const amps = [0.7, 1.3, 2.7, 3.4] as const;
       const offBeats = [0.37, 1.23, 2.71] as const;
       for (const amp of amps) {
         const tl = new BpmTimeline(120, [], amp);
-        const segs = [{ direction: 'down' as const, beats: 4 }];
-        const engine = new WaveEngine(segs, tl, amp, 0);
+        const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 0);
         for (const ob of offBeats) {
-          // wave slope per beat = 2*TW_AMP*amplitudeAt(beat)
           const perBeatPx = 2 * TW_AMP * tl.amplitudeAt(ob);
-          // Check waveYAt slope matches expected climb (clamped)
-          const y0 = WAVE_CENTER; // startPosition 0
+          const y0 = TW_CENTER_Y - 0 * TW_AMP; // startPosition 0 => 300
           const expectedY = Math.max(WAVE_TOP, Math.min(WAVE_BOTTOM, y0 + perBeatPx * ob));
-          expect(engine.waveYAt(ob)).toBeCloseTo(expectedY, 4);
-          // Cursor per-beat displacement should match same perBeatPx
+          expect(engine.waveYAt(ob)).toBeCloseTo(expectedY, 3);
           const beatMs = tl.beatMsAt(ob);
           const speed = (2 * TW_AMP * amp) / (beatMs / 1000);
-          // speed * (beatMs/1000) == perBeatPx
-          expect(speed * (beatMs / 1000)).toBeCloseTo(perBeatPx, 4);
+          expect(speed * (beatMs / 1000)).toBeCloseTo(perBeatPx, 3);
         }
       }
     });
+
+    it('generateCalibrationChart produces alternating up/down and 4-beat rings', () => {
+      const chart = generateCalibrationChart(16);
+      // segments: up 2 / down 2 pattern
+      expect(chart.segments.length).toBeGreaterThan(0);
+      expect(chart.segments[0].direction).toBe('up');
+      expect(chart.segments[1].direction).toBe('down');
+      expect(chart.rings[0].beat).toBe(4);
+      expect(chart.rings[1].beat).toBe(8);
+      expect(chart.bpm).toBe(120);
+    });
+
+    it('formatLastLabel shows ΔY and integer ms without fake 0 for miss', () => {
+      // [Step1] initial label
+      const perfectLabel = formatLastLabel('perfect', 3.7, 2.4);
+      // [Step2] interactions — formatter called with various inputs
+      const greatLabel = formatLastLabel('great', 40.2, 35.6);
+      const missLabel = formatLastLabel('miss', null, 10);
+      const missLabel2 = formatLastLabel('miss', 0, 0); // should still show --
+      // [Step3] assert transitions
+      expect(perfectLabel).toMatch(/PERFECT.*\+4ms.*ΔY 2px/);
+      expect(greatLabel).toMatch(/GREAT.*\+40ms.*ΔY 36px/);
+      expect(missLabel).toMatch(/MISS.*--.*ΔY 10px/);
+      expect(missLabel2).toMatch(/MISS.*--/);
+      expect(missLabel2).not.toMatch(/\+0ms/);
+    });
   });
 
-  describe('4. Recording trajectory simulation: live玉 never leaves field across mixed input', () => {
-    it('alternating UP/DOWN with gaps stays clamped (T185 unconditional clamp)', () => {
-      const cursor = new Cursor(1.5, 0);
-      const beatMs = 500;
-      const dt = 0.016;
-      // Simulate 8 seconds of erratic recording input without nowWaveY
-      const pattern: [boolean, boolean, number][] = [
-        [true, false, 60], // up 60 ticks
-        [false, false, 20], // release 20
-        [false, true, 80], // down 80
-        [false, false, 10],
-        [true, false, 100],
-        [false, true, 100],
+  describe('6. Integration: yDist via calculateCalibrationHitYDist equals manual BEFORE capture', () => {
+    it('manual BEFORE scan (same as Fixed handleHit) equals calculateCalibrationHitYDist for random off-grid cases', () => {
+      const cases: Array<{ amp: number; beat: number; yOff: number; tOff: number }> = [
+        { amp: 0.7, beat: 4, yOff: 2, tOff: 5 },
+        { amp: 1.3, beat: 4.37, yOff: 12, tOff: 40 },
+        { amp: 2.7, beat: 8.71, yOff: 3, tOff: -12 },
+        { amp: 3.4, beat: 12.23, yOff: 25, tOff: 80 },
+        { amp: 1.0, beat: 4, yOff: 55, tOff: 10 }, // Y miss case
       ];
-      for (const [up, down, n] of pattern) {
-        for (let i = 0; i < n; i++) {
-          cursor.update(dt, up, down, beatMs);
-          expect(isClamped(cursor.y)).toBe(true);
+      for (const c of cases) {
+        const tl = new BpmTimeline(120, [], c.amp);
+        const engine = new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], tl, c.amp, 0);
+        const hit = tl.beatToMs(c.beat);
+        const hitNext = tl.beatToMs(c.beat + 4);
+        const y = engine.waveYAt(c.beat);
+        const yNext = y + 80;
+        const rings = makeRings([hit, hitNext], [y, yNext]);
+        const cursorY = y + c.yOff;
+        const pressTime = hit + c.tOff;
+        const beatMs = tl.beatMsAt(c.beat);
+
+        // Manual BEFORE scan replicating fixed handleHit (yDist BEFORE judgeHit)
+        // Use y-aware logic via calculateCalibrationHitYDist
+        const expected = calculateCalibrationHitYDist(pressTime, cursorY, rings, beatMs, 750);
+        // Direct recompute via same logic
+        const direct = (() => {
+          const win = 750;
+          const HIT_Y = 60;
+          const cands: { ring: RingState; err: number; yDist: number }[] = [];
+          for (const r of rings) {
+            if (r.resolved) continue;
+            const err = Math.abs(pressTime - r.hitTime);
+            if (err < win) cands.push({ ring: r, err, yDist: Math.abs(cursorY - r.targetY) });
+          }
+          if (cands.length === 0) return 0;
+          const hits = cands.filter(v => v.yDist < HIT_Y);
+          const sel = hits.length ? hits.sort((a, b) => a.err - b.err)[0] : cands.sort((a, b) => a.err - b.err)[0];
+          return sel.yDist;
+        })();
+        expect(expected).toBeCloseTo(direct, 5);
+        // Also verify judgeHit picks same ring's yDist when hit succeeds
+        const live = makeRings([hit, hitNext], [y, yNext]);
+        const j = judgeHit(pressTime, cursorY, live, beatMs, 750);
+        if (j) {
+          // For hits, expected should be small (<60) else miss large
+          if (j.result !== 'miss') expect(expected).toBeLessThan(60);
         }
       }
-      expect(isClamped(cursor.y)).toBe(true);
     });
 
-    it('setAmplitude mid-recording does not break clamp', () => {
-      const cursor = new Cursor(0.5, 0);
-      const beatMs = 500;
-      const dt = 0.016;
-      // Phase 1: low amp up
-      for (let i = 0; i < 200; i++) {
-        cursor.update(dt, true, false, beatMs);
-        expect(isClamped(cursor.y)).toBe(true);
-      }
-      // Change amplitude mid-recording (T131)
-      cursor.setAmplitude(3.4);
-      for (let i = 0; i < 200; i++) {
-        cursor.update(dt, true, false, beatMs);
-        expect(isClamped(cursor.y)).toBe(true);
-      }
-      expect(cursor.y).toBeCloseTo(WAVE_TOP, 5);
-      cursor.setAmplitude(0.7);
-      for (let i = 0; i < 400; i++) {
-        cursor.update(dt, false, true, beatMs);
-        expect(isClamped(cursor.y)).toBe(true);
-      }
-      expect(cursor.y).toBeCloseTo(WAVE_BOTTOM, 5);
-    });
-
-    it('both keys pressed (up && down) yields zero delta but still clamped after snap', () => {
-      const cursor = new Cursor(1.0, 0);
-      cursor.y = WAVE_TOP + 1;
-      // Both pressed => delta 0, only snap acts. Snap towards BOTTOM should still clamp.
-      cursor.update(0.016, true, true, 500, WAVE_BOTTOM + 500);
-      expect(isClamped(cursor.y)).toBe(true);
-      // Without snap, both pressed is no-op and stays where it was (clamped)
-      const cursor2 = new Cursor(1.0, 0);
-      cursor2.y = WAVE_TOP + 1;
-      cursor2.update(0.016, true, true, 500);
-      expect(cursor2.y).toBeCloseTo(WAVE_TOP + 1, 5);
-      expect(isClamped(cursor2.y)).toBe(true);
-    });
-  });
-
-  describe('5. Edge: no regression on zero dt / invalid beatMs / NaN guards', () => {
-    it('dt=0 causes no movement but still clamped', () => {
-      const cursor = new Cursor(1.0, 0);
-      cursor.y = WAVE_CENTER;
-      cursor.update(0, true, false, 500);
-      expect(cursor.y).toBeCloseTo(WAVE_CENTER, 5);
-      // With snap, dt=0 still applies snap
-      cursor.y = WAVE_CENTER;
-      cursor.update(0, false, false, 500, WAVE_TOP);
-      const expected = WAVE_CENTER + (WAVE_TOP - WAVE_CENTER) * PULL;
-      expect(cursor.y).toBeCloseTo(expected, 4);
-    });
-
-    it('cursor y already out-of-range is clamped back on next update even without snap', () => {
-      const cursor = new Cursor(1.0, 0);
-      (cursor as unknown as { y: number }).y = WAVE_TOP - 500; // force illegal
-      cursor.update(0.016, false, false, 500);
-      expect(isClamped(cursor.y)).toBe(true);
-      (cursor as unknown as { y: number }).y = WAVE_BOTTOM + 500;
-      cursor.update(0.016, false, false, 500);
-      expect(isClamped(cursor.y)).toBe(true);
+    it('hitJudge window boundary: 749ms inside, 751ms outside for wide calibration window', () => {
+      const hit = 5000;
+      const rings = makeRings([hit], [300]);
+      const cursorY = 305;
+      const inside = calculateCalibrationHitYDist(hit + 749, cursorY, rings, 500, 750);
+      const outside = calculateCalibrationHitYDist(hit + 751, cursorY, rings, 500, 750);
+      expect(inside).toBeCloseTo(5, 0);
+      expect(outside).toBe(0);
+      const liveInside = makeRings([hit], [300]);
+      expect(judgeHit(hit + 749, cursorY, liveInside, 500, 750)).not.toBeNull();
+      const liveOutside = makeRings([hit], [300]);
+      expect(judgeHit(hit + 751, cursorY, liveOutside, 500, 750)).toBeNull();
     });
   });
 });

@@ -2199,3 +2199,98 @@ const minorStep =
 1. 録音中に↑/↓を押し続けても録音カーソルYが `[TW_CENTER_Y - TW_AMP, TW_CENTER_Y + TW_AMP]` 内に留まり、ライブ玉が画面外へ突き抜けないこと。
 2. ゲーム本編のカーソル挙動が変わらないこと（回帰なし）。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T186] セクション設定の型・TOML刷新（zoom追加・bpm/scroll_speed廃止・[[sections]]化）
+
+**要求（ユーザー確定）**:
+- 「BPM変更リスト」を「セクション設定」に改名。拍指定エントリは beat／BPM／速度係数／横拡大率の4値を持つ。
+- チャート単一値の `bpm`（基本BPM）・`scroll_speed` を廃止。基準テンポは先頭セクション（例 `{beat:0, bpm:120}`）が担う。
+- 横拡大率はゲーム内スクロールに反映（`scroll_speed` の代替）。既存 `scroll_speed` 値は読み捨て（変換なし）。
+
+**修正**:
+- `src/types.ts`: `BpmChange` に `zoom?: number` を追加。`Chart` から `bpm`・`scroll_speed` を削除（`zoom` 基本値は持たず既定1.0。`amplitude` 基本値は維持）。
+- `src/chart/loader.ts`: `[[sections]]` を読む。旧 `[[bpm_changes]]` もエイリアスとして読む（beat/bpm/amplitudeのみ）。`scroll_speed` キーは無視。セクション0件時は `[{beat:0, bpm:旧bpm or 120}]` にマイグレーション。
+- `src/chart/serialize.ts`: `[[sections]]` で `beat/bpm/amplitude?/zoom?` を出力。`bpm =`・`scroll_speed =` の単一行出力を廃止。
+
+**完了条件**:
+1. `zoom` 付きセクションのTOML往復（出力→再読込）が一致すること。
+2. 旧 `[[bpm_changes]]` 譜面が読め、`scroll_speed` が無視されること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T187] BpmTimelineの基準BPM導出変更＋zoomAt追加
+
+**要求（ユーザー確定）**: T186の型変更に伴い、タイムラインの基準BPMを先頭セクションから導出し、横拡大率のステップ関数を追加する。
+
+**修正**（`src/audio/bpmTimeline.ts`）:
+- コンストラクタの基準BPMを「先頭セクション（beat最小）のbpm、無ければ120」から導出するよう変更（`baseBpm` 引数の扱いは呼び出し側と合わせて整理）。
+- `amplitudeEntries` と同型の `zoomEntries`＋`zoomAt(beat): number`（既定1.0のステップ関数）を追加。
+
+**完了条件**:
+1. 先頭セクションのbpmが基準BPMとして `beatToMs`／`msToBeat` に反映されること。
+2. `zoomAt(beat)` がセクション境界で切り替わり、未設定区間は1.0を返すこと。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T188] ゲーム側のchart.bpm参照除去＋時変スクロール反映
+
+**要求（ユーザー確定）**: 横拡大率をゲーム内スクロール速度に反映する（`scroll_speed` の代替）。
+
+**修正**（`src/screens/GameScreen.tsx`＋`src/screens/editor/CalibrationModal.tsx`。`renderer.ts` の式自体は不変）:
+- `new BpmTimeline(chart.bpm, ...)` 等の `chart.bpm` 参照を除去（T187の新導出に合わせる）。
+- ゲームループ内で毎フレーム `scrollSpeed = 110 * timeline.zoomAt(currentBeat)` を算出し `renderer` に渡す（定数110は維持。カーソルの `amplitudeAt` 運用と同流儀の現在値近似）。
+
+**完了条件**:
+1. セクションのzoom値に応じてリング・波形の流速が変わること。
+2. `chart.bpm`・`chart.scroll_speed` 参照が残っていないこと。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T189] エディタ状態のbpm/scrollSpeed除去＋初期セクション
+
+**要求（ユーザー確定）**: 左ペイン整理のためエディタ状態から基本BPM・スクロール速度を除去し、新規譜面の初期値を先頭セクション1行にする。
+
+**修正**（`src/screens/EditorScreen.tsx`）:
+- `bpm`／`scrollSpeed` の `useState` と `BpmEditor` への受け渡し、`buildChart`・import・clear・autosave復元内の対応箇所を除去／更新。
+- 新規・クリア時の初期セクションを `[{beat:0, bpm:120}]` の1行にする。
+
+**完了条件**:
+1. エディタ操作（編集・復元・クリア・TOML入出力）で `bpm`・`scroll_speed` が出現しないこと。
+2. 新規譜面が先頭セクション1行から始まること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T190] BpmEditor整理＋セクション追加ダイアログ新設（タップテンポ内蔵）
+
+**要求（ユーザー確定）**: 左ペイン整理のため、追加時入力欄はダイアログに移設（複製ではなく移動）。セクションリスト自体はペインに残す。
+
+**修正**（`src/screens/editor/BpmEditor.tsx`＋ダイアログ新規ファイル推奨）:
+- ペインから削除：基本BPM欄・速度係数注入値欄・スクロール速度欄・タップテンポ欄。見出し・文言を「セクション設定」に改名。
+- ペインに残す：セクションリスト（beat/BPM/速度係数/横拡大率の行直接編集＋削除）、「セクションを追加」ボタン、開始位置・終了位置（変更なし）。
+- 追加ダイアログ：beat（初期値：末尾+4、空なら0）／BPM（初期値120または末尾値）／速度係数／横拡大率の4入力＋確定ボタン。タップテンポはダイアログ内に移設しダイアログのBPM欄へ反映。確定でリスト末尾に追加。
+
+**完了条件**:
+1. ペイン側に基本BPM・注入値・タップテンポの重複欄が存在しないこと。
+2. ダイアログから4値を指定してセクション追加でき、タップテンポがダイアログBPMに反映されること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T191] セクション設定の結合・回帰（autosave・旧譜面・TOML往復）
+
+**要求（ユーザー確定）**: T186〜T190の結合仕上げ。
+
+**修正**:
+- autosave（`src/chart/autosave.ts`）・`SelectScreen` の初期値・`CalibrationModal` の固定チャート等、`chart.bpm`／`scroll_speed` を参照する残存箇所の洗い替え。
+- 旧譜面（`bpm`＋`[[bpm_changes]]`＋`scroll_speed`）の読込マイグレーション確認：テンポ・振幅は維持、`scroll_speed` のみ捨てられること。
+
+**完了条件**:
+1. autosave保存→復元でセクション（4値）が再現されること。
+2. 旧TOMLが読めて `scroll_speed` 以外が維持されること。
+3. `tsc --noEmit`、T55・T102/T103・T155・T186〜T190の回帰なし。

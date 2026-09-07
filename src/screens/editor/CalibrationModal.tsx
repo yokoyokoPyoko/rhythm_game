@@ -218,21 +218,12 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
       // Error = tapRaw - (hitTime + manualOffset); passing the shifted tap time
       // keeps hitJudge's errorMs aligned so ,. adjustments reflect linearly.
       const pressTime = songTimeMs - getManualOffsetMs()
-      // T174: find the best ring BEFORE calling judgeHit. judgeHit marks
-      // that ring `resolved` itself, so any scan performed afterwards would
-      // skip it. Use the same logic as the judgement window (nearest).
-      let targetRing: RingState | null = null
-      let bestErr = Infinity
-      for (const ring of ringsRef.current) {
-        if (ring.resolved) continue
-        if (ring.type === 'hold' && ring.hit) continue
-        const err = Math.abs(pressTime - ring.hitTime)
-        if (err < bestErr) {
-          bestErr = err
-          targetRing = ring
-        }
-      }
-      const yDist = targetRing ? Math.abs(cursorRef.current.y - targetRing.targetY) : 0
+      // T174: compute yDist BEFORE calling judgeHit. judgeHit marks the hit
+      // ring `resolved`, so any post-hoc scan would skip it and find the wrong
+      // ring. calculateCalibrationHitYDist replicates judgeHit's ring selection
+      // (nearest timing among Y < 60 candidates, otherwise nearest timing
+      // overall) to yield the correct ΔY for the actually-judged ring.
+      const yDist = calculateCalibrationHitYDist(pressTime, cursorRef.current.y, ringsRef.current, beatMs, CALIBRATION_WIDE_WINDOW_MS)
       const judgement = judgeHit(pressTime, cursorRef.current.y, ringsRef.current, beatMs, CALIBRATION_WIDE_WINDOW_MS)
       if (judgement) {
         journal(judgement.result, judgement.errorMs, yDist)
