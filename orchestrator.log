@@ -9236,3 +9236,6 @@ src/screens/editor/CalibrationModal.tsx(315,22): error TS2454: Variable 'resetCo
 2026-09-08 06:55:35,719 [INFO] Persisted session ses_f82217b16ffeAtDlG5xXLnWT4Q for task=T199, role=reviewer
 2026-09-08 06:55:35,720 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: All requirements for T199 have been fully implemented and verified in src/screens/SelectScreen.tsx and src/viewMode.ts. Key listeners for L/E were removed, and UI visibility is correctly gated by viewMode.
 2026-09-08 06:55:35,720 [INFO] [T199] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-09-08 06:55:35,747 [INFO] [T199] Building docs/ dist for GitHub Pages...
+2026-09-08 06:55:39,981 [INFO] [T199] Pushing latest build to GitHub...
+2026-09-08 06:55:42,404 [INFO] [T199] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
