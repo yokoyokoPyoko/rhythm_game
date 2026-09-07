@@ -1640,9 +1640,17 @@
       "finished": 1788774887.0176983
     },
     "T193": {
-      "attempts": 0,
+      "attempts": 2,
       "status": "running",
-      "started": 1788774887.0204434
+      "started": 1788774887.0204434,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f84b07f1cffeHJ257NhYRr3FAK",
+        "postmortem": "ses_f84b28655ffefYIIVqw6541S73",
+        "reviewer": "ses_f84ab7ec1ffey7bmvMA7lyQjGr"
+      },
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1788775196.8159628
     }
   },
   "consecutive_no_action": 0
