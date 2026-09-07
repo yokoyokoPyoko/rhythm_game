@@ -164,7 +164,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
   }, [coarseActive, coarseTapCount])
 
   const chart = useMemo(() => generateCalibrationChart(), [])
-  const timeline = useMemo(() => new BpmTimeline(CAL_BPM, [], 1.0), [])
+  const timeline = useMemo(() => new BpmTimeline([{ beat: 0, bpm: CAL_BPM }], 1.0), [])
   const wave = useMemo(() => new WaveEngine(chart.segments, timeline, 1.0, 0.0), [chart, timeline])
   const cursorRef = useRef(new Cursor(1.0, 0.0))
   const spawnerRef = useRef(new RingSpawner())

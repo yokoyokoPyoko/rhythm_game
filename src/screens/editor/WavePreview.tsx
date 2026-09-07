@@ -175,7 +175,7 @@ export default function WavePreview({
   // T156-fix: multi-drag delegates to the pure parallel-move helper so the
   // math is unit-testable directly (T127 lesson: no reference reimplementation).
   const computeMultiDragSegs = (origSegs: Segment[], selSegIdxs: number[], dxBeat: number, dy: number): Segment[] => {
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     return calculateMultiDrag({
       segments: origSegs,
       bpmTimeline: timeline,
@@ -190,7 +190,7 @@ export default function WavePreview({
   // T157: vertex-unit multi-drag — only the selected vertices move, so a single
   // vertex {v} shifts alone (previous seg-based interpretation moved 2 points).
   const computeVertexMultiSegs = (origSegs: Segment[], vertexIdxs: number[], dxBeat: number, dy: number): Segment[] | null => {
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     return calculateVertexMultiDrag({
       segments: origSegs,
       bpmTimeline: timeline,
@@ -216,7 +216,7 @@ export default function WavePreview({
     const foundRings: number[] = []
     const foundSegs: number[] = []
     if (editMode === 'ring') {
-      const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+      const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
       const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
       const fieldH = rectH - RULER_H
       const centerY = RULER_H + fieldH / 2
@@ -231,7 +231,7 @@ export default function WavePreview({
         if (rx >= minX - 25 && rx <= maxX + 25 && ry >= minY - 20 && ry <= maxY + 20) foundRings.push(i)
       })
     } else {
-      const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+      const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
       const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
       const fieldH = rectH - RULER_H
       const centerY = RULER_H + fieldH / 2
@@ -285,7 +285,7 @@ export default function WavePreview({
     ctx.clearRect(0, 0, cssW, cssH)
 
     const startPosNorm = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     // T150: while a vertex/edge drag is in flight, render the local preview wave
     // instead of the committed segments; rings follow the preview engine too.
     const renderSegs = multiDragSegments ?? dragPreview ?? segments
@@ -640,7 +640,7 @@ export default function WavePreview({
         const dispAmp = Math.min(maxAmp, Math.max(TW_AMP, minAmp))
         const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
         const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, mapYInverse(e.clientY - rect.top)))
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
 
         if (segments.length === 0) {
           dragPreviewRef.current = null
@@ -681,7 +681,7 @@ export default function WavePreview({
         const yPrime = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, mapYInverse(e.clientY - rect.top)))
 
         const k = vertexCreateRef.current.anchorSeg
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
         const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
         const pts = engineTmp.getPoints()
         if (k < 0 || k >= pts.length - 1) return
@@ -715,7 +715,7 @@ export default function WavePreview({
         const mapYInverse = (mouseY: number) => TW_CENTER_Y + ((mouseY - centerY) / dispAmp) * TW_AMP
         const newYMouse = mapYInverse(e.clientY - rect.top)
         const dy = Math.max(TW_CENTER_Y - TW_AMP - drag.startY, Math.min(TW_CENTER_Y + TW_AMP - drag.startY, newYMouse - drag.startY))
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
 
         const result = calculateEdgeDrag({
           segments,
@@ -853,7 +853,7 @@ export default function WavePreview({
     const clickX = clientX - rect.left
     const clickY = clientY - rect.top
     const g = geoRef.current
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     const renderSegs = multiDragSegments ?? dragPreview ?? segments
     const engine = new WaveEngine(renderSegs, timeline, EDITOR_BASE_AMP, Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0)
     const centerY = RULER_H + (rect.height - RULER_H) / 2
@@ -883,7 +883,7 @@ export default function WavePreview({
     if (!canvas) return -1
     const rect = canvas.getBoundingClientRect()
     const g = geoRef.current
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
     const pts = engine.getPoints()
     const centerY = RULER_H + (rect.height - RULER_H) / 2
@@ -913,7 +913,7 @@ export default function WavePreview({
     if (!canvas) return -1
     const rect = canvas.getBoundingClientRect()
     const g = geoRef.current
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
     const pts = engine.getPoints()
     const centerY = RULER_H + (rect.height - RULER_H) / 2
@@ -1058,7 +1058,7 @@ export default function WavePreview({
       if (eHit >= 0) {
         onSelectSegment?.(eHit)
         // T140: begin edge drag — record translation baseline for the segment
-        const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+        const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
         const engineTmp = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
         const pts = engineTmp.getPoints()
         const startPrevBeat = eHit > 0 ? pts[eHit - 1].beat : 0
@@ -1128,7 +1128,7 @@ export default function WavePreview({
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
       const beatAdd = quantizeBeat(xToBeatLocal(x, rect.width), safeSnap)
-      const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+      const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
       const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
       const pts = engine.getPoints()
 
@@ -1184,7 +1184,7 @@ export default function WavePreview({
     if (!canvas2) return
     const rect2 = canvas2.getBoundingClientRect()
     const g2 = geoRef.current
-    const timeline = new BpmTimeline(bpm > 0 ? bpm : 120, bpmChanges, EDITOR_BASE_AMP)
+    const timeline = new BpmTimeline(bpmChanges, EDITOR_BASE_AMP)
     const engine = new WaveEngine(segments, timeline, EDITOR_BASE_AMP, startPosition)
     const pts = engine.getPoints()
     const centerY = RULER_H + (rect2.height - RULER_H) / 2

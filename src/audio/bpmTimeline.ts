@@ -27,18 +27,34 @@ export class BpmTimeline {
   /** Sorted zoom entries from sections (beat, zoom). */
   private readonly zoomEntries: { beat: number; zoom: number }[];
 
-  constructor(baseBpm: number, bpmChanges: BpmChange[] = [], baseAmplitude = 1.0) {
-    this.baseAmplitude = Number.isFinite(baseAmplitude) && baseAmplitude > 0 ? baseAmplitude : 1.0;
+  constructor(bpmChanges: BpmChange[] = [], baseAmplitude = 1.0, legacyFallback?: unknown) {
+    // T187/T186: primary signature is (bpmChanges, baseAmplitude). Legacy callers
+    // that pass (baseBpm, bpmChanges, baseAmplitude) are tolerated: the explicit
+    // base is IGNORED and the base tempo is derived from the first (beat-min)
+    // section instead.
+    let effectiveChanges = bpmChanges;
+    let effectiveBaseAmplitude: number = baseAmplitude;
+    if (typeof (bpmChanges as unknown) === 'number') {
+      const legacyChanges = baseAmplitude as unknown as BpmChange[];
+      effectiveChanges = Array.isArray(legacyChanges) ? legacyChanges : [];
+      effectiveBaseAmplitude =
+        typeof legacyFallback === 'number' ? (legacyFallback as number) : 1.0;
+    }
 
-    const changes = (bpmChanges ?? [])
+    this.baseAmplitude =
+      Number.isFinite(effectiveBaseAmplitude) && effectiveBaseAmplitude > 0
+        ? effectiveBaseAmplitude
+        : 1.0;
+
+    const changes = (effectiveChanges ?? [])
       .filter((c): c is BpmChange => !!c && Number.isFinite(c.beat) && Number.isFinite(c.bpm))
       .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm), amplitude: c.amplitude, zoom: c.zoom }))
       .sort((a, b) => a.beat - b.beat);
 
     // T187: base BPM is derived from the first section (lowest beat). Fall back
-    // to the constructor's baseBpm (or 120) when there is no section.
+    // to 120 when there is no section.
     const firstSection = changes.length > 0 ? changes[0] : null;
-    this.baseBpm = sanitizeBpm(firstSection ? firstSection.bpm : baseBpm);
+    this.baseBpm = sanitizeBpm(firstSection ? firstSection.bpm : 120);
 
     const segs: BpmSegment[] = [];
     let currentBpm = this.baseBpm;

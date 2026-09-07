@@ -243,9 +243,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           }
         }
         await audioMgr.ensure()
-        // T186: base tempo is carried by the first (beat-min) section
-        const baseBpm = chart.bpm_changes[0]?.bpm && chart.bpm_changes[0].bpm > 0 ? chart.bpm_changes[0].bpm : 120
-        const timeline = new BpmTimeline(baseBpm, chart.bpm_changes, chart.amplitude)
+        // T187: base tempo is derived internally from the first (beat-min) section
+        const timeline = new BpmTimeline(chart.bpm_changes, chart.amplitude)
         chartRef.current = chart
         timelineRef.current = timeline
         waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)

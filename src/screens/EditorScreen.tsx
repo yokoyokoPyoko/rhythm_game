@@ -342,9 +342,10 @@ export default function EditorScreen() {
   const safeBpm = bpm > 0 ? bpm : 120
   // T131: editor timeline uses a fixed base amplitude; bpm_changes[].amplitude
   // (list) is the primary driver for time-varying wave/cursor.
+  // T187: base tempo is derived internally from the first (beat-min) section.
   const timeline = useMemo(
-    () => new BpmTimeline(safeBpm, bpmChanges, EDITOR_BASE_AMP),
-    [safeBpm, bpmChanges],
+    () => new BpmTimeline(bpmChanges, EDITOR_BASE_AMP),
+    [bpmChanges],
   )
   // T131: list-driven wave engine used for editing/recording/preview.
   // Not derived from the live #amplitude injection field (no immediate apply).
