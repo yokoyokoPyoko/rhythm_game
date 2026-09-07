@@ -229,16 +229,33 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           if (cached) {
             chart = cached
           } else {
-            const songs = await loadSongList()
-            const song = songs.find((s) => s.id === songId)
-            if (!song) {
-              throw new Error('譜面ファイルが見つかりません')
+            // T195: fallback to IndexedDB for persistent custom charts
+            let idbChart: Chart | null = null
+            try {
+              const { getChart } = await import('../storage/libraryDb')
+              const { parseChartText } = await import('../chart/loader')
+              const stored = songId ? await getChart(songId) : undefined
+              if (stored) {
+                idbChart = parseChartText(stored.toml, songId!)
+                ChartCache.set(songId!, idbChart)
+              }
+            } catch {
+              // IndexedDB unavailable
             }
-            const cachedByPath = ChartCache.get(song.chartPath)
-            if (cachedByPath) {
-              chart = cachedByPath
+            if (idbChart) {
+              chart = idbChart
             } else {
-              chart = await loadChart(song.chartPath)
+              const songs = await loadSongList()
+              const song = songs.find((s) => s.id === songId)
+              if (!song) {
+                throw new Error('譜面ファイルが見つかりません')
+              }
+              const cachedByPath = ChartCache.get(song.chartPath)
+              if (cachedByPath) {
+                chart = cachedByPath
+              } else {
+                chart = await loadChart(song.chartPath)
+              }
             }
           }
         }
@@ -261,7 +278,27 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           if (cachedBuf) {
             buf = cachedBuf
           } else {
-            buf = await loadAudio(chart.audio, audioMgr.ctx)
+            // T195: fallback to IndexedDB persistent audio bytes for custom charts
+            let idbBuf: AudioBuffer | null = null
+            try {
+              const { getAudio } = await import('../storage/libraryDb')
+              const stored = songId ? await getAudio(songId) : undefined
+              if (stored && stored.bytes) {
+                const bytes = stored.bytes
+                const arrayBuf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+                idbBuf = await audioMgr.ctx.decodeAudioData(arrayBuf)
+                const base = getBasename(chart.audio)
+                AudioCache.set(songId!, idbBuf)
+                AudioCache.set(base, idbBuf)
+              }
+            } catch {
+              // IndexedDB unavailable or decode failed
+            }
+            if (idbBuf) {
+              buf = idbBuf
+            } else {
+              buf = await loadAudio(chart.audio, audioMgr.ctx)
+            }
           }
         }
 

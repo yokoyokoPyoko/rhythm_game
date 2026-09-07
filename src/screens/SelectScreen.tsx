@@ -7,6 +7,9 @@ import { AudioManager } from '../audio/AudioManager'
 import { getManualOffsetMs, setManualOffset } from '../audio/clock'
 import { AudioCache, getBasename } from '../audio/AudioCache'
 import { ChartCache } from '../chart/cache'
+import { chartToToml } from '../chart/serialize'
+import { putChart, putAudio, listCharts, deleteChart, deleteAudio } from '../storage/libraryDb'
+import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
 import type { Chart, SongEntry } from '../types'
 
@@ -31,8 +34,21 @@ export default function SelectScreen() {
 
   useEffect(() => {
     loadSongList()
-      .then((list) => {
-        setSongs(list)
+      .then(async (list) => {
+        let customEntries: SongEntry[] = []
+        try {
+          const stored = await listCharts()
+          customEntries = stored.map((sc: StoredChart) => ({
+            id: sc.id,
+            title: sc.title,
+            artist: sc.artist,
+            chartPath: sc.id,
+            difficulty: sc.difficulty,
+          }))
+        } catch {
+          /* IndexedDB unavailable, skip custom songs */
+        }
+        setSongs([...list, ...customEntries])
         setLoading(false)
       })
       .catch((e: unknown) => {
@@ -256,20 +272,48 @@ beat = 8.0
               onClick={() => {
                 if (chart && buffer) {
                   const id = `custom-${Date.now()}`
+                  const title = chart.title || chartFileName.replace(/\.toml$/i, '') || 'Untitled'
+                  const toml = chartToToml(chart)
+                  const base = getBasename(chart.audio)
                   const newEntry: SongEntry = {
                     id,
-                    title: chart.title || chartFileName.replace(/\.toml$/i, '') || 'Untitled',
+                    title,
                     artist: chart.artist || '',
                     chartPath: id,
                     difficulty: 3,
                   }
                   ChartCache.set(id, chart)
                   ChartCache.set(chartFileName, chart)
-                  const base = getBasename(chart.audio)
                   AudioCache.set(base, buffer)
                   AudioCache.set(id, buffer)
                   AudioCache.set(getBasename(chartFileName), buffer)
                   setSongs((prev) => [...prev, newEntry])
+
+                  // Persist to IndexedDB
+                  void (async () => {
+                    try {
+                      await putChart({
+                        id,
+                        title,
+                        artist: chart.artist || '',
+                        difficulty: 3,
+                        toml,
+                        audioId: id,
+                        addedAt: Date.now(),
+                      })
+                      if (audioFile) {
+                        const raw = await audioFile.arrayBuffer()
+                        await putAudio({
+                          id,
+                          name: audioFile.name || base,
+                          mime: audioFile.type || 'application/octet-stream',
+                          bytes: new Uint8Array(raw),
+                        })
+                      }
+                    } catch (e) {
+                      console.warn('[SelectScreen] Failed to persist to IndexedDB', e)
+                    }
+                  })()
                 }
               }}
               style={{
@@ -310,24 +354,93 @@ beat = 8.0
         </div>
       ) : (
         <div className="song-grid">
-          {songs.map((song) => (
-            <button
-              key={song.id}
-              className="song-card"
-              onClick={() => navigate('/play/' + song.id)}
-            >
-              <div className="song-card-title">{song.title}</div>
-              <div className="song-card-artist">{song.artist || 'Unknown Artist'}</div>
-              <div className="song-card-difficulty">
-                {Array.from({ length: MAX_DIFFICULTY }, (_, i) => (
-                  <span
-                    key={i}
-                    className={`difficulty-dot ${i < song.difficulty ? 'filled' : ''}`}
-                  />
-                ))}
+          {songs.map((song) => {
+            const isCustom = song.id.startsWith('custom-')
+            return (
+              <div key={song.id} className="song-card-wrapper" style={{ position: 'relative' }}>
+                <button
+                  className="song-card"
+                  onClick={() => {
+                    if (isCustom) {
+                      // Load chart from IndexedDB cache into ChartCache so GameScreen can find it
+                      const cached = ChartCache.get(song.id)
+                      if (!cached) {
+                        void (async () => {
+                          try {
+                            const { getChart } = await import('../storage/libraryDb')
+                            const stored = await getChart(song.id)
+                            if (stored) {
+                              const parsed = parseChartText(stored.toml, song.id)
+                              ChartCache.set(song.id, parsed)
+                            }
+                          } catch {
+                            /* fall through to navigation */
+                          }
+                          navigate('/play/' + song.id)
+                        })()
+                        return
+                      }
+                    }
+                    navigate('/play/' + song.id)
+                  }}
+                >
+                  <div className="song-card-title">{song.title}</div>
+                  <div className="song-card-artist">{song.artist || 'Unknown Artist'}</div>
+                  <div className="song-card-difficulty">
+                    {Array.from({ length: MAX_DIFFICULTY }, (_, i) => (
+                      <span
+                        key={i}
+                        className={`difficulty-dot ${i < song.difficulty ? 'filled' : ''}`}
+                      />
+                    ))}
+                  </div>
+                </button>
+                {isCustom && (
+                  <button
+                    type="button"
+                    aria-label={`${song.title}を削除`}
+                    data-testid={`delete-${song.id}`}
+                    className="song-card-delete"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void (async () => {
+                        try {
+                          await deleteChart(song.id)
+                          await deleteAudio(song.id)
+                        } catch {
+                          /* best effort */
+                        }
+                        ChartCache.clear()
+                        AudioCache.clear()
+                        setSongs((prev) => prev.filter((s) => s.id !== song.id))
+                      })()
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: '6px',
+                      right: '6px',
+                      width: '20px',
+                      height: '20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: 'var(--danger)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 'var(--radius)',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      lineHeight: 1,
+                      padding: 0,
+                      zIndex: 1,
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
               </div>
-            </button>
-          ))}
+            )
+          })}
         </div>
       )}
 
