@@ -1154,5 +1154,14 @@
     ],
     "type": "feat",
     "test": true
+  },
+  {
+    "id": "T185",
+    "desc": "録音カーソルの上下端突き抜け修正（クランプ無条件化）。要求: 録音中に上下キー押し続けで録音カーソル（ライブ玉）が波形上下限を突き抜けて画面外へ飛び異常な軌跡・セグメントが記録される。根本原因: EditorScreen.tsx:547の録音ループはupdate(dt,up,down,beatMs)と第5引数nowWaveYを渡さず、Cursor.update(cursor.ts:42-45)はnowWaveY有限時のみwaveTop/waveBottomクランプするため録音中は無制限発散。ゲーム本編は第5引数を渡すため正常。修正: src/game/cursor.tsのupdate内クランプを無条件化（nowWaveY有無に関わらず常に[TW_CENTER_Y-TW_AMP,TW_CENTER_Y+TW_AMP]に収める）。T163スナップ自体はnowWaveYがある時のみ従来通り。録音側に第5引数は渡さない（既存波形へのスナップは録音の自由入力と競合するため）。完了条件: (1) 録音中に上下キー押し続けても録音カーソルYが範囲内に留まりライブ玉が突き抜けない (2) ゲーム本編のカーソル挙動不変（回帰なし） (3) tsc --noEmit。",
+    "depends_on": [
+      "T184"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
