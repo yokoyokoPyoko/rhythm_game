@@ -1,23 +1,23 @@
 /**
  * T189 — エディタ状態のbpm/scrollSpeed除去＋初期セクション Vitest pure acceptance
- * node environment — pure engine math + file-content contract, no DOM, TDD Red->Green
- * Verifies:
- *  (1) EditorScreen.tsx no longer owns bpm/scrollSpeed state nor passes them to BpmEditor
- *      buildChart/import/clear/autosave do not emit bpm/scroll_speed
- *  (2) New/clear initial bpmChanges is [{beat:0,bpm:120}] single head section
- *  (3) TOML I/O never emits top-level bpm/scroll_speed (only [[sections]] bpm)
- *  (4) BpmTimeline base derived from first section, off-grid, complex amplitudes
- *  (5) WaveEngine/Cursor numeric consistency across complex amps 0.7/1.3/2.7/3.4 + off-grid 0.37/1.23
+ * node environment — pure engine/math + static source verification, TDD Red->Green
+ *
+ * 完了条件:
+ *  (1) 編集・復元・クリア・TOML入出力で bpm・scroll_speed が出現しない
+ *  (2) 新規譜面が先頭セクション1行 [{beat:0,bpm:120}] から始まる
+ *  (3) tsc --noEmit (implicit via import)
+ *
+ * 方針: Actionable Fix Prescriptions に従い sections 1-3 は
+ *  currentファイルの直接assertのみ（before/after captureパターン禁止）
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
-import { Cursor } from '../src/game/cursor';
 import { parseChartText } from '../src/chart/loader';
 import { chartToToml } from '../src/chart/serialize';
-import type { BpmChange, Chart, Segment } from '../src/types';
+import { TW_CENTER_Y } from '../src/game/waveEngine';
+import { WaveEngine } from '../src/game/waveEngine';
+import type { BpmChange, Chart } from '../src/types';
+import * as fs from 'fs';
 
 vi.useFakeTimers();
 
@@ -28,575 +28,453 @@ afterEach(() => {
   vi.clearAllTimers();
 });
 
-// helpers — must use distinct names from variables (postmortem rule)
-function makeTimeline(changes: BpmChange[], baseAmp = 1.0): BpmTimeline {
-  return new (BpmTimeline as any)(changes, baseAmp) as BpmTimeline;
+// helpers — distinct names, no shadowing
+function makeTimelineFromChanges(changes: BpmChange[], baseAmp = 1.0): BpmTimeline {
+  return new (BpmTimeline as unknown as { new(changes: BpmChange[], baseAmp: number): BpmTimeline })(changes, baseAmp);
 }
-function makeTimelineLegacy(baseBpm: number, changes: BpmChange[], baseAmp = 1.0): BpmTimeline {
-  return new (BpmTimeline as any)(baseBpm, changes, baseAmp) as BpmTimeline;
+function hasSingleBpmLine(toml: string): boolean {
+  const lines = toml.split('\n').map(l => l.trim());
+  const firstSectionIdx = lines.findIndex(l => l === '[[sections]]' || l === '[[bpm_changes]]');
+  const candidateIdx = lines.findIndex(l => /^bpm\s*=\s*[-+\d.]+/.test(l));
+  if (candidateIdx === -1) return false;
+  if (firstSectionIdx === -1) return true;
+  return candidateIdx < firstSectionIdx;
 }
-function readSourceFile(relativePath: string): string {
-  const abs = path.join(process.cwd(), relativePath);
-  return fs.readFileSync(abs, 'utf8');
+function hasScrollSpeedLine(toml: string): boolean {
+  return toml.split('\n').some(l => l.trim().startsWith('scroll_speed'));
 }
 
-// ========================================================================
-// 1) EditorScreen.tsx file contract — bpm/scrollSpeed state removed
-// ========================================================================
-describe('T189 1) EditorScreen state contract — bpm/scrollSpeed removed', () => {
-  it('EditorScreen.tsx no longer declares bpm/scrollSpeed useState (3-step)', () => {
-    // [Step1: Capture Initial State] read raw source
-    const beforeContent = readSourceFile('src/screens/EditorScreen.tsx');
-    expect(beforeContent.length).toBeGreaterThan(1000);
-    const hasBpmBefore = /useState\s*\(\s*120\s*\)/.test(beforeContent) && /const\s*\[bpm/.test(beforeContent);
-    const hasScrollBefore = /scrollSpeed/.test(beforeContent);
-    // document captured values (surface existence only for step1)
-    // actual requirement: both should be absent after T189, so this documents pre-state
-
-    // [Step2: Perform] re-read and extract the state declaration region
-    const content = readSourceFile('src/screens/EditorScreen.tsx');
-    const bpmStateMatches = content.match(/const\s*\[bpm\s*,/g) || [];
-    const scrollSpeedMatches = content.match(/scrollSpeed/g) || [];
-    const safeBpmMatches = content.match(/\bsafeBpm\b/g) || [];
-    const setBpmMatches = content.match(/\bsetBpm\b/g) || [];
-
-    // [Step3: Assert Resulting Transition] absent in post-T189 implementation
-    // These must be zero — file currently has them, so this FAILS pre-implementation (Red)
-    expect(bpmStateMatches.length).toBe(0);
-    expect(scrollSpeedMatches.length).toBe(0);
-    expect(safeBpmMatches.length).toBe(0);
-    expect(setBpmMatches.length).toBe(0);
-    // sanity: captured pre-state showed presence, now must be absent
-    expect(hasBpmBefore).toBe(true); // proves test is not trivially passing on empty
-    expect(hasScrollBefore).toBe(true);
-  });
-
-  it('EditorScreen.tsx no longer passes bpm/scrollSpeed to BpmEditor nor WavePreview (3-step)', () => {
-    // [Step1] capture
-    const before = readSourceFile('src/screens/EditorScreen.tsx');
-    const hadBpmProp = /<BpmEditor[\s\S]*?bpm=\{/.test(before);
-    const hadScrollProp = /scrollSpeed=\{/.test(before);
-    const hadSafeBpm = /bpm=\{safeBpm\}/.test(before);
-
-    // [Step2] perform extraction
-    const content = readSourceFile('src/screens/EditorScreen.tsx');
-    const hasBpmProp = /<BpmEditor[\s\S]*?bpm=\{/.test(content);
-    const hasOnBpm = /onBpmChange/.test(content);
-    const hasScrollProp = /scrollSpeed=\{/.test(content);
-    const hasOnScroll = /onScrollSpeedChange/.test(content);
-    const hasWaveBpm = /<WavePreview[\s\S]*?bpm=\{safeBpm/.test(content);
-
-    // [Step3] assert absent
-    expect(hasBpmProp).toBe(false);
-    expect(hasOnBpm).toBe(false);
-    expect(hasScrollProp).toBe(false);
-    expect(hasOnScroll).toBe(false);
-    expect(hasWaveBpm).toBe(false);
-    // pre-state must have had them (non-trivial)
-    expect(hadBpmProp).toBe(true);
-    expect(hadScrollProp).toBe(true);
-    expect(hadSafeBpm).toBe(true);
-  });
-
-  it('EditorScreen importChart/clear/buildChart no longer reference bpm/scroll_speed (3-step)', () => {
-    // [Step1] capture
-    const before = readSourceFile('src/screens/EditorScreen.tsx');
-    const hadSetBpmImport = /setBpm\(.*chart\.bpm/.test(before);
-    const hadClearEmpty = /setBpmChanges\(\[\]\)/.test(before);
-
-    // [Step2] perform
-    const content = readSourceFile('src/screens/EditorScreen.tsx');
-    const hasSetBpmImport = /setBpm\(/.test(content);
-    const hasChartDotBpm = /chart\.bpm\b(?!_changes)/.test(content);
-    const hasChartScroll = /chart\.scroll_speed|scroll_speed/.test(content) && !/getManualOffsetMs/.test(content.split('scroll_speed')[0]?.slice(-200) || '');
-    // more precise: look for any literal scroll_speed handling outside metronome comments
-    const scrollSpeedLiteralCount = (content.match(/scroll_speed/g) || []).length;
-    const hasBpmChangesEmptyClear = /setBpmChanges\(\[\]\)/.test(content);
-
-    // [Step3] assert
-    expect(hasSetBpmImport).toBe(false);
-    expect(hasChartDotBpm).toBe(false);
-    // scroll_speed literal should be 0 in editor file post-T189 (loader handles legacy discard)
-    expect(scrollSpeedLiteralCount).toBe(0);
-    expect(hasBpmChangesEmptyClear).toBe(false);
-    expect(hadSetBpmImport).toBe(true);
-    expect(hadClearEmpty).toBe(true);
-  });
-});
-
-// ========================================================================
-// 2) Initial section is [{beat:0,bpm:120}] — new/clear start state
-// ========================================================================
-describe('T189 2) 新規譜面初期値は先頭セクション1行 [{beat:0,bpm:120}]', () => {
-  it('EditorScreen initial bpmChanges state literal is [{beat:0,bpm:120}] (3-step)', () => {
-    // [Step1] capture before - currently useState<BpmChange[]>([])  -> empty
-    const before = readSourceFile('src/screens/EditorScreen.tsx');
-    const hadEmptyInit = /useState<BpmChange\[]>\(\[\]\)/.test(before);
-    const hadNoSectionInit = !/beat:\s*0[^}]*bpm:\s*120/.test(before.split('useState<BpmChange')[1]?.slice(0, 500) || '');
-
-    // [Step2] perform - look for the state initialization line
-    const content = readSourceFile('src/screens/EditorScreen.tsx');
-    const initMatch = content.match(/useState<BpmChange\[]>\s*\(\s*(\[[^\]]*\])\s*\)/);
-    // alternative: useState([{beat:0,bpm:120}])
-    const hasCorrectInit = /\[\s*\{\s*beat\s*:\s*0\s*,\s*bpm\s*:\s*120\s*\}\s*\]/.test(content);
-    const initSnippet = initMatch ? initMatch[1] : '';
-
-    // [Step3] assert correct initial section
-    expect(hasCorrectInit).toBe(true);
-    expect(initSnippet).toContain('beat');
-    expect(initSnippet).toContain('120');
-    // pre-state had empty
-    expect(hadEmptyInit).toBe(true);
-    expect(hadNoSectionInit).toBe(true);
-  });
-
-  it('clearAll resets to [{beat:0,bpm:120}] not empty (3-step)', () => {
-    // [Step1] capture
-    const before = readSourceFile('src/screens/EditorScreen.tsx');
-    const hadEmptyClear = /setBpmChanges\(\[\]\)/.test(before);
-
-    // [Step2] perform
-    const content = readSourceFile('src/screens/EditorScreen.tsx');
-    // find clearAll region
-    const clearAllIdx = content.indexOf('const clearAll');
-    const clearSnippet = clearAllIdx >= 0 ? content.slice(clearAllIdx, clearAllIdx + 800) : '';
-    const hasCorrectClear = /setBpmChanges\(\s*\[\s*\{\s*beat\s*:\s*0\s*,\s*bpm\s*:\s*120/.test(clearSnippet);
-
-    // [Step3] assert
-    expect(hasCorrectClear).toBe(true);
-    expect(clearSnippet).not.toContain('setBpmChanges([])');
-    expect(hadEmptyClear).toBe(true);
-  });
-
-  it('parseChartText empty fallback and legacy migration yield correct section (3-step computed)', () => {
-    // [Step1: Capture Initial State] empty TOML without sections
-    const emptyToml = `title = "Empty"\nartist = ""\naudio = "test.flac"\n`;
-    const beforeChart = parseChartText(emptyToml, 'empty');
-    expect(beforeChart.bpm_changes.length).toBeGreaterThan(0); // currently [{beat:0,bpm:120}] via fallback
-
-    // [Step2: Perform] legacy TOML with top-level bpm + scroll_speed (should be discarded, migrated)
-    const legacyToml = `title = "Legacy"\nartist = ""\naudio = "test.flac"\nbpm = 150\nscroll_speed = 200\n`;
-    const legacyChart = parseChartText(legacyToml, 'legacy');
-    const complexToml = `title = "Complex"\nartist = ""\naudio = "test.flac"\n[[sections]]\nbeat = 0\nbpm = 140\namplitude = 1.3\nzoom = 1.5\n[[sections]]\nbeat = 4\nbpm = 180\n`;
-    const complexChart = parseChartText(complexToml, 'complex');
-
-    // [Step3: Assert Resulting Transition] dynamic computed values
-    // empty => single head section
-    expect(beforeChart.bpm_changes).toEqual([{ beat: 0, bpm: 120 }]);
-    // legacy: scroll_speed ignored, bpm migrated to beat 0 section, not top-level
-    expect((legacyChart as any).bpm).toBeUndefined();
-    expect((legacyChart as any).scroll_speed).toBeUndefined();
-    expect(legacyChart.bpm_changes.some(s => s.beat === 0 && s.bpm === 150)).toBe(true);
-    // complex: sections preserved, scroll_speed absent
-    expect(complexChart.bpm_changes.length).toBe(2);
-    expect(complexChart.bpm_changes[0]).toEqual(expect.objectContaining({ beat: 0, bpm: 140, amplitude: 1.3, zoom: 1.5 }));
-    expect((complexChart as any).scroll_speed).toBeUndefined();
-  });
-});
-
-// ========================================================================
-// 3) BpmEditor props — bpm/scrollSpeed removed, list-driven only
-// ========================================================================
-describe('T189 3) BpmEditor props contract — bpm/scrollSpeed removed', () => {
-  it('BpmEditor.tsx interface no longer exposes bpm/scrollSpeed (3-step)', () => {
-    // [Step1] capture
-    const before = readSourceFile('src/screens/editor/BpmEditor.tsx');
-    const hadBpmPropBefore = /^\s*bpm:\s*number/m.test(before);
-    const hadScrollBefore = /scrollSpeed:\s*number/.test(before);
-
-    // [Step2] perform
-    const content = readSourceFile('src/screens/editor/BpmEditor.tsx');
-    const propsBlock = content.match(/interface BpmEditorProps[\s\S]*?}/)?.[0] || '';
-    const hasBpmProp = /^\s*bpm:\s*number/m.test(propsBlock);
-    const hasOnBpm = /onBpmChange/.test(propsBlock);
-    const hasScrollProp = /scrollSpeed:\s*number/.test(propsBlock);
-    const hasOnScroll = /onScrollSpeedChange/.test(propsBlock);
-    // also check that the rendered inputs for bpm/scroll-speed are gone
-    const hasBpmInput = /id="bpm"/.test(content);
-    const hasScrollInput = /id="scroll-speed"/.test(content);
-    const hasBasicBpmLabel = /基本BPM/.test(content);
-
-    // [Step3] assert absent
-    expect(hasBpmProp).toBe(false);
-    expect(hasOnBpm).toBe(false);
-    expect(hasScrollProp).toBe(false);
-    expect(hasOnScroll).toBe(false);
-    expect(hasBpmInput).toBe(false);
-    expect(hasScrollInput).toBe(false);
-    expect(hasBasicBpmLabel).toBe(false);
-    // pre-state had them
-    expect(hadBpmPropBefore).toBe(true);
-    expect(hadScrollBefore).toBe(true);
-  });
-
-  it('BpmEditor still retains sections list + add button (sanity, 3-step)', () => {
-    // [Step1] capture
-    const before = readSourceFile('src/screens/editor/BpmEditor.tsx');
-    const hadListBefore = /bpmChanges\.map/.test(before);
-
-    // [Step2] perform
-    const content = readSourceFile('src/screens/editor/BpmEditor.tsx');
-    const hasList = /bpmChanges\.map/.test(content);
-    const hasAdd = /BPM変更を追加/.test(content) || /セクションを追加/.test(content);
-    const hasBeatInput = /bpm-change-beat/.test(content);
-    const hasBpmChangeBpm = /bpm-change-bpm/.test(content);
-
-    // [Step3] assert retained
-    expect(hasList).toBe(true);
-    expect(hasAdd).toBe(true);
-    expect(hasBeatInput).toBe(true);
-    expect(hasBpmChangeBpm).toBe(true);
-    expect(hadListBefore).toBe(true);
-  });
-});
-
-// ========================================================================
-// 4) TOML I/O never emits top-level bpm / scroll_speed
-// ========================================================================
-describe('T189 4) TOML入出力で bpm・scroll_speed が出現しない (3-step computed)', () => {
-  it('chartToToml output contains [[sections]] and no top-level bpm/scroll_speed (3-step)', () => {
-    // [Step1: Capture Initial State] build a chart via helper and serialize before-check
-    const beforeChart: Chart = {
-      title: 'Before',
-      artist: '',
-      audio: 'test.flac',
-      audio_offset: 0,
-      amplitude: 1.0,
-      start_position: 0,
-      bpm_changes: [{ beat: 0, bpm: 120 }],
-      segments: [],
-      rings: [],
-    };
-    const beforeToml = chartToToml(beforeChart);
-    const beforeHasSections = beforeToml.includes('[[sections]]');
-    const beforeScrollCount = (beforeToml.match(/scroll_speed/g) || []).length;
-
-    // [Step2: Perform] chart with multiple sections + amplitude/zoom, serialize
-    const chartComplex: Chart = {
-      title: 'ComplexT189',
-      artist: 'Artist',
-      audio: '08.Reply.flac',
-      audio_offset: 10,
-      amplitude: 1.3,
-      start_position: 0.0,
-      bpm_changes: [
-        { beat: 0, bpm: 123, amplitude: 0.7, zoom: 1.5 },
-        { beat: 4, bpm: 180, zoom: 2.7 },
-        { beat: 7.37, bpm: 140, amplitude: 1.3 },
-      ],
-      segments: [{ direction: 'up', beats: 0.5 }, { direction: 'down', beats: 0.25 }],
-      rings: [{ beat: 4.23, type: 'single' }],
-    };
-    const tomlOutput = chartToToml(chartComplex);
-    const lines = tomlOutput.split('\n');
-
-    // [Step3: Assert Resulting Transition] dynamic computed
-    // has sections, no scroll_speed, all bpm lines are inside sections
-    expect(beforeHasSections).toBe(true);
-    expect(beforeScrollCount).toBe(0);
-    expect(tomlOutput).toContain('[[sections]]');
-    expect(tomlOutput).not.toContain('scroll_speed');
-    // count bpm = lines vs sections count — every bpm must be inside a section
-    const bpmLines = lines.filter(l => /^\s*bpm\s*=/.test(l));
-    const sectionCount = (tomlOutput.match(/\[\[sections\]\]/g) || []).length;
-    expect(sectionCount).toBe(3);
-    expect(bpmLines.length).toBe(sectionCount);
-    // no top-level bare bpm = outside sections (first bpm appears after first [[sections]])
-    const firstSectionIdx = tomlOutput.indexOf('[[sections]]');
-    const firstBpmIdx = tomlOutput.indexOf('bpm =');
-    expect(firstBpmIdx).toBeGreaterThan(firstSectionIdx);
-    // basename handling: audio is basename only
-    expect(tomlOutput).toContain('audio = "08.Reply.flac"');
-    // round-trip preserves sections
-    const reparsed = parseChartText(tomlOutput, 'roundtrip');
-    expect(reparsed.bpm_changes.length).toBe(3);
-    expect(reparsed.bpm_changes[0].bpm).toBeCloseTo(123, 5);
-    expect(reparsed.bpm_changes[0].amplitude).toBeCloseTo(0.7, 5);
-    expect(reparsed.bpm_changes[0].zoom).toBeCloseTo(1.5, 5);
-    expect((reparsed as any).scroll_speed).toBeUndefined();
-    expect((reparsed as any).bpm).toBeUndefined();
-  });
-
-  it('Chart type no longer has bpm/scroll_speed fields (3-step file contract)', () => {
-    // [Step1] capture
-    const before = readSourceFile('src/types.ts');
-    const hadChartBlock = before.match(/interface Chart[\s\S]*?}/)?.[0] || '';
-
-    // [Step2] perform
-    const content = readSourceFile('src/types.ts');
-    const chartBlock = content.match(/interface Chart[\s\S]*?}/)?.[0] || '';
-    const hasBpmField = /^\s*bpm\s*:/m.test(chartBlock);
-    const hasScrollField = /scroll_speed|scrollSpeed/.test(chartBlock);
-    const hasSections = /bpm_changes:\s*BpmChange/.test(chartBlock);
-    const hasAmplitude = /amplitude:\s*number/.test(chartBlock);
-
-    // [Step3] assert
-    expect(hasBpmField).toBe(false);
-    expect(hasScrollField).toBe(false);
-    expect(hasSections).toBe(true);
-    expect(hasAmplitude).toBe(true);
-    // sanity: file is not empty
-    expect(content.length).toBeGreaterThan(200);
-  });
-});
-
-// ========================================================================
-// 5) BpmTimeline — first section BPM authoritative (hardcode 120 prohibited), off-grid
-// ========================================================================
-describe('T189 5) BpmTimeline base derived from first section (no hardcoded 120), off-grid 0.37/1.23', () => {
-  it('first section BPM is authoritative for beatToMs/msToBeat/amplitudeAt/zoomAt (3-step off-grid)', () => {
-    // [Step1: Capture Initial State] empty fallback is 120
-    const emptyTl = makeTimeline([], 1.0);
-    const emptyBeatMs = emptyTl.beatMsAt(0.37);
-    expect(emptyBeatMs).toBeCloseTo(500, 5); // 120 BPM fallback
-    expect(emptyTl.bpmAt(0.37)).toBeCloseTo(120, 5);
-    expect(emptyTl.beatToMs(1)).toBeCloseTo(500, 2);
-    expect(emptyTl.beatToMs(0.37)).toBeCloseTo(185, 2);
-
-    // [Step2: Perform] timeline with head section 140 bpm + off-grid second entry
-    const tl140 = makeTimeline(
-      [{ beat: 0, bpm: 140, amplitude: 0.7, zoom: 0.5 }, { beat: 4, bpm: 180, amplitude: 1.3, zoom: 2.7 }],
-      1.0,
-    );
-    const ms140 = 60000 / 140;
-    const beatBefore = tl140.beatToMs(0.37);
-    const beatAfter = tl140.beatToMs(4.37); // 4 beats at 140 + 0.37 at 180
-    const ampBefore = tl140.amplitudeAt(1.23);
-    const ampAfter = tl140.amplitudeAt(4.23);
-    const zoomBefore = tl140.zoomAt(1.23);
-    const zoomAfter = tl140.zoomAt(4.23);
-
-    // [Step3: Assert Resulting Transition] computed values exact, not hardcoded 120
-    expect(tl140.bpmAt(0.37)).toBeCloseTo(140, 5);
-    expect(tl140.bpmAt(1.23)).toBeCloseTo(140, 5);
-    expect(tl140.bpmAt(4.37)).toBeCloseTo(180, 5);
-    expect(beatBefore).toBeCloseTo(ms140 * 0.37, 2);
-    expect(beatAfter).toBeCloseTo(ms140 * 4 + (60000 / 180) * 0.37, 1);
-    expect(emptyTl.beatToMs(4.37)).not.toBeCloseTo(beatAfter, 0); // must differ from hardcoded 120
-    expect(ampBefore).toBeCloseTo(0.7, 5);
-    expect(ampAfter).toBeCloseTo(1.3, 5);
-    expect(zoomBefore).toBeCloseTo(0.5, 5);
-    expect(zoomAfter).toBeCloseTo(2.7, 5);
-    // round-trip off-grid
-    expect(tl140.msToBeat(tl140.beatToMs(2.37))).toBeCloseTo(2.37, 4);
-    expect(tl140.msToBeat(tl140.beatToMs(4.23))).toBeCloseTo(4.23, 4);
-  });
-
-  it('complex amps 0.7/1.3/2.7 with off-grid beats produce distinct timelines (not 120 default)', () => {
-    // [Step1] baseline 120
-    const baseline = makeTimeline([{ beat: 0, bpm: 120 }], 1.0);
-    const baselineMs = baseline.beatToMs(1.23);
-
-    // [Step2] derived timelines with complex head BPMs
-    const tl90 = makeTimeline([{ beat: 0, bpm: 90 }], 1.0);
-    const tl150 = makeTimeline([{ beat: 0, bpm: 150 }], 1.0);
-    const tl210 = makeTimeline([{ beat: 0, bpm: 210 }], 1.0);
-
-    // [Step3] assert each is authoritative, off-grid 0.37/1.23 distinct
-    expect(tl90.beatToMs(0.37)).toBeCloseTo((60000 / 90) * 0.37, 1);
-    expect(tl90.beatToMs(1.23)).toBeCloseTo((60000 / 90) * 1.23, 1);
-    expect(tl150.beatToMs(1.23)).toBeCloseTo((60000 / 150) * 1.23, 1);
-    expect(tl210.beatToMs(1.23)).toBeCloseTo((60000 / 210) * 1.23, 1);
-    // must not equal baseline (120)
-    expect(tl90.beatToMs(1.23)).not.toBeCloseTo(baselineMs, 1);
-    expect(tl150.beatToMs(1.23)).not.toBeCloseTo(baselineMs, 1);
-    // legacy overload ignores explicit base, derives from sections
-    const legacyTl = makeTimelineLegacy(999, [{ beat: 0, bpm: 150 }], 1.0);
-    expect(legacyTl.bpmAt(0.37)).toBeCloseTo(150, 5);
-  });
-});
-
-// ========================================================================
-// 6) WaveEngine + Cursor numeric consistency across complex amplitudes + off-grid
-//     T127 style: wave slope = 2*TW_AMP*amplitudeAt(beat), clamped, off-grid 0.37/1.23
-// ========================================================================
-describe('T189 6) WaveEngine/Cursor consistency complex amps 0.7/1.3/2.7/3.4 + off-grid 0.37/1.23', () => {
-  const complexAmps = [0.7, 1.3, 2.7, 3.4];
-  const offGridBeats = [0.37, 1.23, 2.37, 4.23];
-
-  for (const ampVal of complexAmps) {
-    it(`amp=${ampVal} WaveEngine slope == Cursor speed == 2*TW_AMP*amp off-grid (3-step)`, () => {
-      // [Step1: Capture Initial State] build timeline + engine at this amp
-      const changes: BpmChange[] = [{ beat: 0, bpm: 120, amplitude: ampVal }];
-      const timelineBefore = makeTimeline(changes, 1.0);
-      const waveTop = TW_CENTER_Y - TW_AMP;
-      const waveBottom = TW_CENTER_Y + TW_AMP;
-      const perBeat = 2 * TW_AMP * ampVal;
-      expect(timelineBefore.amplitudeAt(0.37)).toBeCloseTo(ampVal, 5);
-      expect(perBeat).toBeCloseTo(260 * ampVal, 3);
-
-      // [Step2: Perform] compute wave positions + cursor step
-      const timelineAfter = makeTimeline(changes, 1.0);
-      const segs: Segment[] = [{ direction: 'down', beats: 10 }];
-      const engine = new WaveEngine(segs, timelineAfter, 1.0, 0.0);
-      const yAt037 = engine.waveYAt(0.37);
-      const yAt123 = engine.waveYAt(1.23);
-      const expected037 = Math.max(waveTop, Math.min(waveBottom, TW_CENTER_Y + perBeat * 0.37));
-      const expected123 = Math.max(waveTop, Math.min(waveBottom, TW_CENTER_Y + perBeat * 1.23));
-
-      // cursor 1-beat move
-      const beatMs = timelineAfter.beatMsAt(0.37);
-      const cursorBefore = new Cursor(ampVal, 0);
-      const yBefore = cursorBefore.y;
-      cursorBefore.update(1.0 * (beatMs / 1000), false, true, beatMs, undefined);
-      const cursorDelta = cursorBefore.y - yBefore;
-      // clamp may limit if amp large and reaches bottom
-      const expectedDelta = Math.min(perBeat, waveBottom - TW_CENTER_Y);
-
-      // [Step3: Assert Resulting Transition] wave == cursor == perBeat*beat
-      expect(yAt037).toBeCloseTo(expected037, 0.5);
-      expect(yAt123).toBeCloseTo(expected123, 0.5);
-      // off-grid fractional beats 0.37/1.23 must follow perBeat slope exactly (clamped)
-      for (const beatVal of offGridBeats.slice(0, 2)) {
-        const yAt = engine.waveYAt(beatVal);
-        const expected = Math.max(waveTop, Math.min(waveBottom, TW_CENTER_Y + perBeat * beatVal));
-        expect(yAt).toBeCloseTo(expected, 0.5);
-      }
-      // cursor delta for 1 beat equals perBeat (or clamped)
-      expect(cursorDelta).toBeCloseTo(expectedDelta, 0.5);
-      // getPoints length invariant
-      expect(engine.getPoints().length).toBe(segs.length + 1);
+describe('T189 エディタ状態のbpm/scrollSpeed除去＋初期セクション — Vitest pure', () => {
+  // ======================================================================
+  // 1) EditorScreen.tsx: useState for bpm/scrollSpeed が存在しない
+  //    (direct assertion on current file, no before/after capture)
+  // ======================================================================
+  describe('1. EditorScreen.tsx から bpm/scrollSpeed の useState 除去', () => {
+    it('EditorScreen.tsx に base bpm / scrollSpeed の useState が存在しない', () => {
+      const src = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
+      // base bpm: const [bpm, setBpm] / useState<number>(120) etc — but bpmChanges is allowed
+      // Must not have standalone base bpm state: search for useState with bpm name not bpmChanges
+      const hasBaseBpmState = /const\s*\[\s*bpm\s*,/.test(src);
+      const hasSetBpmState = /const\s*\[\s*setBpm/.test(src);
+      // scrollSpeed state
+      const hasScrollSpeedState = /const\s*\[\s*scrollSpeed\s*,/.test(src);
+      const hasSetScrollSpeed = /setScrollSpeed/.test(src);
+      // more generic: useState with scroll_speed string
+      const hasScrollSpeedString = src.includes('scrollSpeed') && /useState/.test(src) && /scrollSpeed/.test(src);
+      // Verify no standalone base bpm variable besides bpmChanges
+      // Allow bpmChanges, but not "const [bpm" without "bpmChanges"
+      expect(hasBaseBpmState).toBe(false);
+      expect(hasSetBpmState).toBe(false);
+      expect(hasScrollSpeedState).toBe(false);
+      // setScrollSpeed should not appear at all (commit history shows it was removed)
+      expect(hasSetScrollSpeed).toBe(false);
+      // Ensure no legacy string "scroll_speed" in EditorScreen (except comments about ignore)
+      // The file may mention scroll_speed in comments about legacy ignore, but not as state/prop
+      // We check for scroll_speed as a state/prop key: "scroll_speed" assignment
+      // Allow comment mentions but not code: check not in useState/set
+      const scrollSpeedUseStatePattern = /useState[^;]*scroll/i;
+      expect(scrollSpeedUseStatePattern.test(src)).toBe(false);
     });
-  }
 
-  it('amplitude step at beat 4 produces slope discontinuity off-grid 3.37/4.37 (3-step)', () => {
-    // [Step1] before step
-    const changes: BpmChange[] = [
-      { beat: 0, bpm: 120, amplitude: 0.7 },
-      { beat: 4, bpm: 120, amplitude: 2.7 },
-    ];
-    const timelineBefore = makeTimeline(changes, 1.0);
-    expect(timelineBefore.amplitudeAt(3.37)).toBeCloseTo(0.7, 5);
-    expect(timelineBefore.amplitudeAt(4.37)).toBeCloseTo(2.7, 5);
+    it('EditorScreen.tsx の buildChart が bpm / scroll_speed を含まない', () => {
+      const src = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
+      const buildChartSection = src.slice(src.indexOf('const buildChart'), src.indexOf('const buildChart') + 2000);
+      // buildChart return object should not contain bpm: or scroll_speed:
+      expect(buildChartSection).not.toMatch(/^\s*bpm\s*:/m);
+      expect(buildChartSection).not.toMatch(/scroll_speed/);
+      // Should contain bpm_changes, amplitude, audio_offset, start_position etc.
+      expect(buildChartSection).toContain('bpm_changes');
+      expect(buildChartSection).toContain('amplitude');
+    });
 
-    // [Step2] perform engine with two segments straddling the step
-    const segs: Segment[] = [
-      { direction: 'down', beats: 4 }, // beat 0-4 with amp 0.7
-      { direction: 'down', beats: 4 }, // beat 4-8 with amp 2.7
-    ];
-    const engine = new WaveEngine(segs, timelineBefore, 1.0, 0.0);
-
-    // [Step3] assert slopes differ before/after step, off-grid
-    const perBeatBefore = 2 * TW_AMP * 0.7;
-    const perBeatAfter = 2 * TW_AMP * 2.7;
-    // y at 3.37 should be TW_CENTER_Y + perBeatBefore * 3.37 clamped
-    const y3_37 = engine.waveYAt(3.37);
-    const y4 = engine.waveYAt(4.0);
-    const y4_37 = engine.waveYAt(4.37);
-    const waveTop = TW_CENTER_Y - TW_AMP;
-    const waveBottom = TW_CENTER_Y + TW_AMP;
-    // first segment already clamped quickly due to bottom, but slope before step is shallower
-    expect(y3_37).toBeGreaterThanOrEqual(waveTop);
-    expect(y3_37).toBeLessThanOrEqual(waveBottom);
-    // second segment steepness: from y4, slope = perBeatAfter
-    const expected4_37 = Math.max(waveTop, Math.min(waveBottom, y4 + perBeatAfter * 0.37));
-    expect(y4_37).toBeCloseTo(expected4_37, 0.5);
-    expect(engine.getPoints().length).toBe(3);
+    it('EditorScreen.tsx の importChart が bpm / scroll_speed を扱わない', () => {
+      const src = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
+      const importIdx = src.indexOf('const importChart');
+      const importSection = src.slice(importIdx, importIdx + 2000);
+      expect(importSection).not.toMatch(/setBpm\s*\(/);
+      expect(importSection).not.toMatch(/setScrollSpeed/);
+      expect(importSection).not.toContain('scroll_speed');
+      // Should set bpmChanges via setBpmChanges(chart.bpm_changes)
+      expect(importSection).toContain('setBpmChanges');
+      expect(importSection).toContain('chart.bpm_changes');
+    });
   });
 
-  it('initial section [{beat:0,bpm:120,amp:1.3}] gives consistent timeline + wave off-grid (3-step)', () => {
-    // [Step1] capture empty vs derived mismatch would be Red
-    const emptyTimeline = makeTimeline([], 1.0);
-    const emptyY = new WaveEngine([{ direction: 'down', beats: 2 }], emptyTimeline, 1.0, 0).waveYAt(0.37);
+  // ======================================================================
+  // 2) bpmChanges 初期値が [{beat:0,bpm:120}] の1行
+  // ======================================================================
+  describe('2. 新規譜面初期セクション [{beat:0,bpm:120}] 1行', () => {
+    it('bpmChanges の useState 初期値が [{beat:0,bpm:120}]', () => {
+      const src = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
+      // Direct assertion: must contain exact initial
+      const hasInitial = src.includes('useState<BpmChange[]>([{ beat: 0, bpm: 120 }]') || src.includes("useState<BpmChange[]>([{beat:0,bpm:120}]") || src.includes('[{ beat: 0, bpm: 120 }]');
+      expect(hasInitial).toBe(true);
+      // Ensure not empty array or different value
+      expect(src).not.toMatch(/useState<BpmChange\[]>\(\[\]\)/);
+      // Must not be bpm-based initial like [{beat:0,bpm: bpm}]
+      expect(src).toContain('[{ beat: 0, bpm: 120 }]');
+    });
 
-    // [Step2] new T189 initial section
-    const initChanges: BpmChange[] = [{ beat: 0, bpm: 120, amplitude: 1.3 }];
-    const initTimeline = makeTimeline(initChanges, 1.0);
-    const initEngine = new WaveEngine([{ direction: 'down', beats: 2 }], initTimeline, 1.0, 0);
-    const yAt037 = initEngine.waveYAt(0.37);
-    const yAt123 = initEngine.waveYAt(1.23);
-    const perBeat = 2 * TW_AMP * 1.3;
+    it('clearAll が bpmChanges を [{beat:0,bpm:120}] にリセット', () => {
+      const src = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
+      const clearIdx = src.indexOf('const clearAll');
+      const clearSection = src.slice(clearIdx, clearIdx + 2000);
+      expect(clearSection).toContain('setBpmChanges([{ beat: 0, bpm: 120 }]');
+      // Must clear rings/segments as well
+      expect(clearSection).toContain('setRings([])');
+      expect(clearSection).toContain('setSegments([])');
+    });
 
-    // [Step3] assert init section produces exact perBeat slope, off-grid, and differs from legacy empty only via amp (beatToMs same BPM)
-    expect(initTimeline.bpmAt(0.37)).toBeCloseTo(120, 5);
-    expect(initTimeline.amplitudeAt(0.37)).toBeCloseTo(1.3, 5);
-    expect(yAt037).toBeCloseTo(Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + perBeat * 0.37)), 0.5);
-    expect(yAt123).toBeCloseTo(Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, TW_CENTER_Y + perBeat * 1.23)), 0.5);
-    expect(emptyY).not.toBeCloseTo(yAt037, 1); // different amp => different Y (dynamic)
+    it('BpmTimeline が初期セクション 120 BPM で beatToMs/msToBeat が正しい off-grid', () => {
+      const initialChanges: BpmChange[] = [{ beat: 0, bpm: 120 }];
+      const timelineInstance = makeTimelineFromChanges(initialChanges, 1.0);
+      const beatMs120 = 60000 / 120; // 500
+      expect(timelineInstance.bpmAt(0)).toBeCloseTo(120, 5);
+      expect(timelineInstance.bpmAt(0.37)).toBeCloseTo(120, 5);
+      expect(timelineInstance.bpmAt(1.23)).toBeCloseTo(120, 5);
+      expect(timelineInstance.beatToMs(1)).toBeCloseTo(beatMs120, 2);
+      expect(timelineInstance.beatToMs(0.37)).toBeCloseTo(beatMs120 * 0.37, 2);
+      expect(timelineInstance.beatToMs(1.23)).toBeCloseTo(beatMs120 * 1.23, 2);
+      expect(timelineInstance.msToBeat(beatMs120 * 0.37)).toBeCloseTo(0.37, 4);
+      expect(timelineInstance.msToBeat(beatMs120 * 1.23)).toBeCloseTo(1.23, 4);
+    });
+
+    it('WaveEngine が初期セクションで正しく動作し getPoints 長さが segments+1', () => {
+      const initialChanges: BpmChange[] = [{ beat: 0, bpm: 120 }];
+      const timelineForWave = makeTimelineFromChanges(initialChanges, 1.0);
+      const engineInstance = new WaveEngine([{ direction: 'up', beats: 2 }], timelineForWave, 1.0, 0.0);
+      const pts = engineInstance.getPoints();
+      expect(pts.length).toBe(2); // 1 segment + 1
+      // waveYAt at beat 0 is center (start_position 0)
+      expect(engineInstance.waveYAt(0)).toBeCloseTo(TW_CENTER_Y as number, 2);
+    });
   });
-});
 
-// ========================================================================
-// 7) Chart with initial section round-trips and editor buildChart sanity
-// ========================================================================
-describe('T189 7) 初期セクションの Chart round-trip + editor buildContract (3-step)', () => {
-  it('Chart with [{beat:0,bpm:120}] round-trips via chartToToml/parseChartText preserving data (3-step)', () => {
-    // [Step1: Capture Initial State] build minimal new-chart as editor would after T189
-    const newChartBefore: Chart = {
-      title: 'New Song',
-      artist: '',
-      audio: 'demo.flac',
-      audio_offset: 0,
-      amplitude: 1.0,
-      start_position: 0,
-      bpm_changes: [{ beat: 0, bpm: 120 }],
-      segments: [],
-      rings: [{ beat: 4.37, type: 'single' }],
-    };
-    const beforeToml = chartToToml(newChartBefore);
-    expect(beforeToml).toContain('[[sections]]');
-    expect(beforeToml).not.toContain('scroll_speed');
+  // ======================================================================
+  // 3) BpmEditor props interface に bpm / scrollSpeed が無い
+  // ======================================================================
+  describe('3. BpmEditor props から bpm/scrollSpeed 除去', () => {
+    it('BpmEditor.tsx の Props interface が bpm/scrollSpeed/onBpmChange/onScrollSpeedChange を含まない', () => {
+      const src = fs.readFileSync('src/screens/editor/BpmEditor.tsx', 'utf-8');
+      const propsIdx = src.indexOf('interface BpmEditorProps');
+      const propsSection = src.slice(propsIdx, propsIdx + 800);
+      expect(propsSection).not.toMatch(/\bbpm\s*:/);
+      expect(propsSection).not.toMatch(/scrollSpeed/);
+      expect(propsSection).not.toMatch(/scroll_speed/);
+      expect(propsSection).not.toMatch(/onBpmChange/);
+      expect(propsSection).not.toMatch(/onScrollSpeedChange/);
+      // Must have correct props: bpmChanges, onSectionsChange, amplitude, onAmplitudeChange
+      expect(propsSection).toContain('bpmChanges');
+      expect(propsSection).toContain('onSectionsChange');
+      expect(propsSection).toContain('amplitude');
+      expect(propsSection).toContain('onAmplitudeChange');
+      // startPosition / endBeat are still present
+      expect(propsSection).toContain('startPosition');
+      expect(propsSection).toContain('endBeat');
+    });
 
-    // [Step2: Perform] add off-grid ring + segment, re-serialize and parse
-    const editedChart: Chart = {
-      ...newChartBefore,
-      title: 'Edited 1.23',
-      segments: [{ direction: 'up', beats: 0.5 }, { direction: 'stay', beats: 1.23 - 0.5 }],
-      rings: [{ beat: 0.37, type: 'single' }, { beat: 1.23, type: 'hold', duration: 0.5 }],
-      bpm_changes: [
+    it('EditorScreen が BpmEditor に bpmChanges/onSectionsChange を渡し legacy props を渡さない', () => {
+      const src = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
+      const bpmEditorUsageIdx = src.indexOf('<BpmEditor');
+      const usage = src.slice(bpmEditorUsageIdx, bpmEditorUsageIdx + 1000);
+      expect(usage).toContain('bpmChanges={bpmChanges}');
+      expect(usage).toContain('onSectionsChange={setBpmChanges}');
+      expect(usage).not.toContain('bpm={');
+      expect(usage).not.toContain('scrollSpeed');
+      expect(usage).not.toContain('onBpmChange');
+      expect(usage).not.toContain('onScrollSpeedChange');
+      // amplitude injection is still passed
+      expect(usage).toContain('amplitude={amplitude}');
+    });
+
+    it('BpmEditor の入力欄に bpm 単体入力や scrollSpeed 入力が存在しない', () => {
+      const src = fs.readFileSync('src/screens/editor/BpmEditor.tsx', 'utf-8');
+      // Should not have standalone bpm input outside bpmChanges list, nor scroll_speed input
+      // Count amplitude inputs: there is main amplitude + per-entry amplitude, but no base bpm input
+      const hasBaseBpmInput = /id\s*=\s*["']bpm["']/.test(src);
+      const hasScrollSpeedInput = /scroll/i.test(src) && /scroll_speed|scrollSpeed/.test(src);
+      expect(hasBaseBpmInput).toBe(false);
+      expect(hasScrollSpeedInput).toBe(false);
+      // Must have amplitude injection field
+      expect(src).toContain('id="amplitude"');
+    });
+  });
+
+  // ======================================================================
+  // 4) TOML入出力で bpm・scroll_speed が出現しない (完了条件1)
+  // ======================================================================
+  describe('4. TOML入出力で bpm / scroll_speed 単一行が出ない (完了条件1)', () => {
+    it('chartToToml が bpm= / scroll_speed= 単一行を出力しない', () => {
+      const chartData: Chart = {
+        title: 'NoLegacy',
+        artist: '',
+        audio: 'test.flac',
+        audio_offset: 0,
+        amplitude: 1.0,
+        start_position: 0,
+        bpm_changes: [{ beat: 0, bpm: 120 }],
+        segments: [],
+        rings: [],
+      } as unknown as Chart;
+      const tomlOut = chartToToml(chartData as unknown as Chart);
+      expect(hasSingleBpmLine(tomlOut)).toBe(false);
+      expect(hasScrollSpeedLine(tomlOut)).toBe(false);
+      expect(tomlOut).toContain('[[sections]]');
+      expect(tomlOut).not.toContain('[[bpm_changes]]');
+      // Ensure single-line bpm not before sections
+      const lines = tomlOut.split('\n');
+      const beforeSections = lines.slice(0, lines.findIndex(l => l.trim() === '[[sections]]'));
+      expect(beforeSections.some(l => l.trim().startsWith('bpm'))).toBe(false);
+      expect(beforeSections.some(l => l.trim().startsWith('scroll_speed'))).toBe(false);
+    });
+
+    it('複雑 zoom/amplitude 混在でも単一行 bpm/scroll_speed が出ない off-grid', () => {
+      const complexChart: Chart = {
+        title: 'Complex',
+        artist: 'T',
+        audio: 'a.flac',
+        audio_offset: 0,
+        amplitude: 1.5,
+        start_position: 0.5,
+        bpm_changes: [
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0 },
+          { beat: 4.37, bpm: 150, amplitude: 1.3, zoom: 2.0 },
+          { beat: 8.25, bpm: 140, zoom: 0.5 },
+        ],
+        segments: [{ direction: 'down', beats: 2 }],
+        rings: [{ beat: 4.37 }],
+      } as unknown as Chart;
+      const tomlComplex = chartToToml(complexChart as unknown as Chart);
+      expect(hasSingleBpmLine(tomlComplex)).toBe(false);
+      expect(hasScrollSpeedLine(tomlComplex)).toBe(false);
+      // zoom and amplitude lines must appear for entries that have them
+      expect(tomlComplex).toContain('zoom = 1');
+      expect(tomlComplex).toContain('zoom = 2');
+      expect(tomlComplex).toContain('amplitude = 1');
+      // round-trip preserves
+      const parsedBack = parseChartText(tomlComplex);
+      expect(parsedBack.bpm_changes.length).toBe(3);
+      expect(parsedBack.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
+      expect((parsedBack.bpm_changes[1] as unknown as { zoom: number }).zoom).toBeCloseTo(2.0, 3);
+    });
+
+    it('parseChartText が旧 bpm 単一行 + scroll_speed を無視し sections にマイグレーション', () => {
+      const oldToml = `
+title = "Old"
+artist = ""
+bpm = 135
+audio = "a.flac"
+scroll_speed = 999
+audio_offset = 0
+amplitude = 1.0
+[[bpm_changes]]
+beat = 64
+bpm = 150
+`;
+      const parsedOld = parseChartText(oldToml);
+      expect((parsedOld as unknown as { bpm: unknown }).bpm).toBeUndefined();
+      expect((parsedOld as unknown as { scroll_speed: unknown }).scroll_speed).toBeUndefined();
+      // legacy bpm 135 should become section at beat 0 if no beat0 exists
+      expect(parsedOld.bpm_changes.some(c => c.beat === 0 && c.bpm === 135)).toBe(true);
+      expect(parsedOld.bpm_changes.some(c => c.beat === 64 && c.bpm === 150)).toBe(true);
+      // re-serialize must not contain legacy lines
+      const reserialized = chartToToml(parsedOld as unknown as Chart);
+      expect(hasSingleBpmLine(reserialized)).toBe(false);
+      expect(hasScrollSpeedLine(reserialized)).toBe(false);
+    });
+
+    it('TOML往復 off-grid beat 0.37/1.23 で bpm_changes が保持される', () => {
+      const offGridChart: Chart = {
+        title: 'OffGrid',
+        artist: '',
+        audio: 's.flac',
+        audio_offset: 10,
+        amplitude: 1.2,
+        start_position: 0.0,
+        bpm_changes: [
+          { beat: 0.37, bpm: 123.456, amplitude: 0.7, zoom: 0.75 },
+          { beat: 1.23, bpm: 178.9, amplitude: 3.4, zoom: 1.33 },
+        ],
+        segments: [],
+        rings: [],
+      } as unknown as Chart;
+      const tomlOff = chartToToml(offGridChart as unknown as Chart);
+      expect(hasSingleBpmLine(tomlOff)).toBe(false);
+      const parsedOff = parseChartText(tomlOff);
+      expect(parsedOff.bpm_changes[0].beat).toBeCloseTo(0.37, 3);
+      expect(parsedOff.bpm_changes[1].beat).toBeCloseTo(1.23, 3);
+      expect(parsedOff.bpm_changes[0].bpm).toBeCloseTo(123.456, 3);
+      expect((parsedOff.bpm_changes[0] as unknown as { zoom: number }).zoom).toBeCloseTo(0.75, 3);
+    });
+  });
+
+  // ======================================================================
+  // 5) セクション0件時のマイグレーション
+  // ======================================================================
+  describe('5. セクション0件時のマイグレーション', () => {
+    it('TOML に sections/bpm_changes が無い場合 [{beat:0,bpm:120}] にフォールバック', () => {
+      const emptyToml = `
+title = "Empty"
+artist = ""
+audio = "e.flac"
+`;
+      const parsedEmpty = parseChartText(emptyToml);
+      expect(parsedEmpty.bpm_changes.length).toBe(1);
+      expect(parsedEmpty.bpm_changes[0].beat).toBeCloseTo(0, 5);
+      expect(parsedEmpty.bpm_changes[0].bpm).toBeCloseTo(120, 5);
+      expect((parsedEmpty as unknown as { bpm: unknown }).bpm).toBeUndefined();
+    });
+
+    it('legacy bpm 単一行のみの場合、それが beat0 セクションに移行', () => {
+      const legacyToml = `
+title = "LegacyBpm"
+artist = ""
+bpm = 142
+audio = "e.flac"
+`;
+      const parsedLegacy = parseChartText(legacyToml);
+      expect(parsedLegacy.bpm_changes.length).toBe(1);
+      expect(parsedLegacy.bpm_changes[0].beat).toBeCloseTo(0, 5);
+      expect(parsedLegacy.bpm_changes[0].bpm).toBeCloseTo(142, 5);
+    });
+
+    it('既に sections がある場合、余分な beat0 120 が挿入されない', () => {
+      const withSectionToml = `
+title = "With"
+artist = ""
+audio = "e.flac"
+[[sections]]
+beat = 0
+bpm = 150
+[[sections]]
+beat = 8
+bpm = 180
+zoom = 2
+`;
+      const parsedWith = parseChartText(withSectionToml);
+      expect(parsedWith.bpm_changes.length).toBe(2);
+      expect(parsedWith.bpm_changes[0].bpm).toBeCloseTo(150, 5);
+      expect(parsedWith.bpm_changes[1].beat).toBeCloseTo(8, 5);
+    });
+  });
+
+  // ======================================================================
+  // 6) Chart 型から bpm / scroll_speed 削除確認
+  // ======================================================================
+  describe('6. Chart 型から bpm / scroll_speed 廃止', () => {
+    it('parseChartText が返す Chart に bpm / scroll_speed プロパティが存在しない', () => {
+      const tomlSample = `
+title = "NoSingle"
+artist = ""
+audio = "n.flac"
+[[sections]]
+beat = 0
+bpm = 135
+zoom = 1.2
+`;
+      const chartSample = parseChartText(tomlSample);
+      expect((chartSample as unknown as { bpm: unknown }).bpm).toBeUndefined();
+      expect((chartSample as unknown as { scroll_speed: unknown }).scroll_speed).toBeUndefined();
+      expect('bpm' in chartSample ? (chartSample as unknown as { bpm: unknown }).bpm : undefined).toBeUndefined();
+    });
+
+    it('src/types.ts の Chart interface が bpm / scroll_speed を定義しない', () => {
+      const typesSrc = fs.readFileSync('src/types.ts', 'utf-8');
+      const chartInterfaceIdx = typesSrc.indexOf('export interface Chart');
+      const chartSection = typesSrc.slice(chartInterfaceIdx, chartInterfaceIdx + 600);
+      // Must not contain "bpm:" as property (but bpm_changes is allowed)
+      // Check for standalone "bpm:" not followed by "_changes"
+      expect(/^\s*bpm\s*:/m.test(chartSection) || chartSection.includes('bpm: number') && !chartSection.includes('bpm_changes')).toBe(false);
+      // More precise: ensure no "bpm?:", "bpm :", "scroll_speed"
+      expect(chartSection).not.toMatch(/\n\s*bpm\s*\??:/);
+      expect(chartSection).not.toContain('scroll_speed');
+      expect(chartSection).not.toContain('scrollSpeed');
+      expect(chartSection).toContain('bpm_changes');
+      expect(chartSection).toContain('amplitude');
+    });
+  });
+
+  // ======================================================================
+  // 7) BpmTimeline が初期セクションから正しく 120 を導出 — off-grid & numeric
+  // ======================================================================
+  describe('7. BpmTimeline 初期セクション整合 off-grid 数値検証', () => {
+    it('初期 [{beat:0,bpm:120}] で zoomAt 未設定は 1.0, scrollSpeed 110', () => {
+      const initChanges: BpmChange[] = [{ beat: 0, bpm: 120 }];
+      const initTimeline = makeTimelineFromChanges(initChanges, 1.0);
+      expect(initTimeline.bpmAt(0.37)).toBeCloseTo(120, 5);
+      expect(initTimeline.zoomAt(0.37)).toBeCloseTo(1.0, 5);
+      expect(initTimeline.zoomAt(1.23)).toBeCloseTo(1.0, 5);
+      const scrollAt037 = 110 * initTimeline.zoomAt(0.37);
+      const scrollAt123 = 110 * initTimeline.zoomAt(1.23);
+      expect(scrollAt037).toBeCloseTo(110, 5);
+      expect(scrollAt123).toBeCloseTo(110, 5);
+    });
+
+    it('複雑 amplitude 0.7/1.3/2.7 と off-grid 0.37/1.23 で timeline が正確', () => {
+      const complexChanges: BpmChange[] = [
         { beat: 0, bpm: 120, amplitude: 0.7 },
-        { beat: 4, bpm: 180, zoom: 2.7 },
-      ],
-    };
-    const tomlAfter = chartToToml(editedChart);
-    const reparsed = parseChartText(tomlAfter, 'reparsed');
-
-    // [Step3: Assert Resulting Transition] dynamic computed round-trip exact
-    expect(reparsed.title).toBe('Edited 1.23');
-    expect(reparsed.bpm_changes.length).toBe(2);
-    expect(reparsed.bpm_changes[0]).toEqual(expect.objectContaining({ beat: 0, bpm: 120 }));
-    expect(reparsed.bpm_changes[1].beat).toBeCloseTo(4, 5);
-    expect(reparsed.bpm_changes[1].zoom).toBeCloseTo(2.7, 5);
-    expect(reparsed.segments.length).toBe(2);
-    expect(reparsed.segments[0].beats).toBeCloseTo(0.5, 4);
-    expect(reparsed.rings.find(r => Math.abs(r.beat - 0.37) < 1e-6)).toBeDefined();
-    expect(reparsed.rings.find(r => Math.abs(r.beat - 1.23) < 1e-6)).toBeDefined();
-    expect((reparsed as any).bpm).toBeUndefined();
-    expect((reparsed as any).scroll_speed).toBeUndefined();
-    // TOML string never contains scroll_speed literal anywhere
-    expect(tomlAfter).not.toContain('scroll_speed');
-    // and every bpm line belongs to a section
-    const bpmCount = (tomlAfter.match(/^\s*bpm\s*=/gm) || []).length;
-    const sectionCount = (tomlAfter.match(/\[\[sections\]\]/g) || []).length;
-    expect(bpmCount).toBe(sectionCount);
+        { beat: 2, bpm: 150, amplitude: 1.3 },
+        { beat: 4.37, bpm: 180, amplitude: 2.7 },
+      ];
+      const timelineComplex = makeTimelineFromChanges(complexChanges, 1.0);
+      // bpmAt off-grid
+      expect(timelineComplex.bpmAt(0.37)).toBeCloseTo(120, 5);
+      expect(timelineComplex.bpmAt(2.37)).toBeCloseTo(150, 5);
+      expect(timelineComplex.bpmAt(4.37)).toBeCloseTo(180, 5);
+      expect(timelineComplex.bpmAt(4.73)).toBeCloseTo(180, 5);
+      // amplitudeAt step
+      expect(timelineComplex.amplitudeAt(0.37)).toBeCloseTo(0.7, 5);
+      expect(timelineComplex.amplitudeAt(1.23)).toBeCloseTo(0.7, 5);
+      expect(timelineComplex.amplitudeAt(2.37)).toBeCloseTo(1.3, 5);
+      expect(timelineComplex.amplitudeAt(4.37)).toBeCloseTo(2.7, 5);
+      // beatToMs numeric
+      const ms120 = 500;
+      const ms150 = 400;
+      expect(timelineComplex.beatToMs(1.23)).toBeCloseTo(ms120 * 1.23, 2);
+      expect(timelineComplex.beatToMs(2.37)).toBeCloseTo(ms120 * 2 + ms150 * 0.37, 2);
+    });
   });
 
-  it('autosave/serialize content scrubbed of bpm/scroll_speed top-level (3-step file check)', () => {
-    // [Step1] capture before — EditorScreen buildChart currently serializes via chartToToml which already scrubs, but file still mentions legacy chart.bpm
-    const beforeContent = readSourceFile('src/screens/EditorScreen.tsx');
-    const beforeHasBuildChartBpm = /chart\.bpm\b(?!_changes)/.test(beforeContent);
+  // ======================================================================
+  // 8) 回帰: T186/T187/T188 の重要不変量が維持されている
+  // ======================================================================
+  describe('8. 回帰 — T186/T187/T188 不変量維持', () => {
+    it('旧 [[bpm_changes]] エイリアスが読める', () => {
+      const oldBpmChangesToml = `
+title = "OldAlias"
+artist = ""
+audio = "test.flac"
+[[bpm_changes]]
+beat = 4
+bpm = 150
+amplitude = 1.3
+`;
+      const parsedAlias = parseChartText(oldBpmChangesToml);
+      expect(parsedAlias.bpm_changes.length).toBe(1);
+      expect(parsedAlias.bpm_changes[0].beat).toBeCloseTo(4, 5);
+      expect(parsedAlias.bpm_changes[0].bpm).toBeCloseTo(150, 5);
+      expect(parsedAlias.bpm_changes[0].amplitude).toBeCloseTo(1.3, 5);
+    });
 
-    // [Step2] perform — read serialize output contract
-    const chartSample: Chart = {
-      title: 'AutosaveTest',
-      artist: 'A',
-      audio: 'x.flac',
-      audio_offset: 0,
-      amplitude: 1.0,
-      start_position: 0,
-      bpm_changes: [{ beat: 0, bpm: 120 }],
-      segments: [{ direction: 'down', beats: 1 }],
-      rings: [],
-    };
-    const tomlSample = chartToToml(chartSample);
-    const autosaveContent = readSourceFile('src/chart/autosave.ts');
-    const autosaveHasBpmField = /chart\.bpm\b(?!_changes)/.test(autosaveContent);
-
-    // [Step3] assert — autosave and serialize must not reference legacy bpm/scroll_speed fields
-    expect(tomlSample).not.toContain('scroll_speed');
-    // autosave module should not reference chart.bpm (legacy) — it just stores TOML string
-    expect(autosaveHasBpmField).toBe(false);
-    // EditorScreen must not reference legacy chart.bpm after T189 (checked in section 1)
-    expect(beforeHasBuildChartBpm).toBe(false); // will FAIL until buildChart cleaned of chart.bpm
+    it('autosave 由来の TOML 往復でも bpm/scroll_speed が出ない', () => {
+      // Simulate autosave chart via buildChart shape
+      const autosaveChart: Chart = {
+        title: 'AutosaveTest',
+        artist: 'A',
+        audio: 'a.flac',
+        audio_offset: 5,
+        amplitude: 1.0,
+        start_position: 0.0,
+        bpm_changes: [{ beat: 0, bpm: 120 }, { beat: 4, bpm: 150, zoom: 2.0 }],
+        segments: [{ direction: 'up', beats: 2 }],
+        rings: [{ beat: 2 }],
+      } as unknown as Chart;
+      const tomlAutosave = chartToToml(autosaveChart as unknown as Chart);
+      expect(hasSingleBpmLine(tomlAutosave)).toBe(false);
+      expect(hasScrollSpeedLine(tomlAutosave)).toBe(false);
+      const reparsedAutosave = parseChartText(tomlAutosave);
+      expect(reparsedAutosave.bpm_changes.length).toBe(2);
+      expect((reparsedAutosave.bpm_changes[1] as unknown as { zoom: number }).zoom).toBeCloseTo(2.0, 5);
+    });
   });
 });
