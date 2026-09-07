@@ -1615,9 +1615,14 @@
       "finished": 1788760219.4038665
     },
     "T191": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788760219.4053679
+      "started": 1788760219.4053679,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f85950a7dffe6wTyWeppjk8QRq",
+        "reviewer": "ses_f859372a7ffezSqkKJtk5VSPoO"
+      }
     }
   },
   "consecutive_no_action": 0
