@@ -1603,7 +1603,7 @@
     },
     "T190": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1788759505.2738318,
       "cycles": 1,
       "sessions": {
@@ -1611,7 +1611,13 @@
         "coder": "ses_f859d94e1ffeaXUhcbWYdANftz",
         "reviewer": "ses_f8596a267ffeAP3004Ni1Q2b9u"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788760219.4038665
+    },
+    "T191": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788760219.4053679
     }
   },
   "consecutive_no_action": 0
