@@ -1635,7 +1635,7 @@
         "qa": "ses_f84c858eaffeup0zjOpZVdu3pI",
         "coder": "ses_f84c58fc3ffe4gkQ6O5dcd6LpA"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
