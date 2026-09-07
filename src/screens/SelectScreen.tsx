@@ -11,6 +11,7 @@ import { chartToToml } from '../chart/serialize'
 import { putChart, putAudio, listCharts, deleteChart, deleteAudio } from '../storage/libraryDb'
 import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
+import { getViewMode, ViewMode } from '../viewMode'
 import type { Chart, SongEntry } from '../types'
 
 const MAX_DIFFICULTY = 5
@@ -58,18 +59,19 @@ export default function SelectScreen() {
       })
   }, [])
 
+  const [viewMode, setViewMode] = useState<ViewMode>(getViewMode())
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'l' || e.key === 'L') {
-        savedOffsetRef.current = getManualOffsetMs()
-        setCalibrationOpen(true)
-      } else if (e.key === 'e' || e.key === 'E') {
-        navigate('/editor')
-      }
+    const handleModeChange = () => {
+      setViewMode(getViewMode())
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [navigate])
+    window.addEventListener('storage', handleModeChange)
+    window.addEventListener('trace-wave-view-mode-changed', handleModeChange)
+    return () => {
+      window.removeEventListener('storage', handleModeChange)
+      window.removeEventListener('trace-wave-view-mode-changed', handleModeChange)
+    }
+  }, [])
 
   const handleChartFile = useCallback(async (file: File | Blob | any, customName = '') => {
     try {
@@ -239,114 +241,116 @@ beat = 8.0
         <span className="select-sub">Trace Wave</span>
       </header>
 
-      <div className="custom-import-section" style={{ marginBottom: '20px', padding: '16px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-surface)' }}>
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>譜面 TOML ファイル</label>
-            <input
-              type="file"
-              accept=".toml"
-              data-testid="home-chart-input"
-              onChange={(e) => {
-                if (e.target.files?.[0]) {
-                  void handleChartFile(e.target.files[0])
-                }
-              }}
-            />
-            {chartFileName && <span style={{ fontSize: '11px', color: 'var(--positive)', marginLeft: '8px' }}>読み込み済: {chartFileName}</span>}
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>音声ファイル</label>
-            <input
-              type="file"
-              accept="audio/*"
-              data-testid="home-audio-input"
-              onChange={(e) => {
-                if (e.target.files?.[0]) {
-                  void handleAudioFile(e.target.files[0])
-                }
-              }}
-            />
-            {audioFile && <span style={{ fontSize: '11px', color: 'var(--positive)', marginLeft: '8px' }}>読み込み済: {audioFile.name}</span>}
-          </div>
-          <div style={{ alignSelf: 'flex-end' }}>
-            <button
-              type="button"
-              data-testid="home-play-button"
-              disabled={!isPaired}
-              onClick={() => {
-                if (chart && buffer) {
-                  const id = `custom-${Date.now()}`
-                  const title = chart.title || chartFileName.replace(/\.toml$/i, '') || 'Untitled'
-                  const toml = chartToToml(chart)
-                  const base = getBasename(chart.audio)
-                  const newEntry: SongEntry = {
-                    id,
-                    title,
-                    artist: chart.artist || '',
-                    chartPath: id,
-                    difficulty: 3,
+      {viewMode === 'debug' && (
+        <div className="custom-import-section" style={{ marginBottom: '20px', padding: '16px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-surface)' }}>
+          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>譜面 TOML ファイル</label>
+              <input
+                type="file"
+                accept=".toml"
+                data-testid="home-chart-input"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    void handleChartFile(e.target.files[0])
                   }
-                  ChartCache.set(id, chart)
-                  ChartCache.set(chartFileName, chart)
-                  AudioCache.set(base, buffer)
-                  AudioCache.set(id, buffer)
-                  AudioCache.set(getBasename(chartFileName), buffer)
-                  setSongs((prev) => [...prev, newEntry])
-
-                  // Persist to IndexedDB
-                  void (async () => {
-                    try {
-                      await putChart({
-                        id,
-                        title,
-                        artist: chart.artist || '',
-                        difficulty: 3,
-                        toml,
-                        audioId: id,
-                        addedAt: Date.now(),
-                      })
-                      if (audioFile) {
-                        const raw = await audioFile.arrayBuffer()
-                        await putAudio({
-                          id,
-                          name: audioFile.name || base,
-                          mime: audioFile.type || 'application/octet-stream',
-                          bytes: new Uint8Array(raw),
-                        })
-                      }
-                      setImportError(null)
-                    } catch (e) {
-                      console.warn('[SelectScreen] Failed to persist to IndexedDB', e)
-                      setImportError(e instanceof Error ? e.message : 'カスタム譜面の保存に失敗しました（再読み込み後は消える場合があります）')
+                }}
+              />
+              {chartFileName && <span style={{ fontSize: '11px', color: 'var(--positive)', marginLeft: '8px' }}>読み込み済: {chartFileName}</span>}
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>音声ファイル</label>
+              <input
+                type="file"
+                accept="audio/*"
+                data-testid="home-audio-input"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    void handleAudioFile(e.target.files[0])
+                  }
+                }}
+              />
+              {audioFile && <span style={{ fontSize: '11px', color: 'var(--positive)', marginLeft: '8px' }}>読み込み済: {audioFile.name}</span>}
+            </div>
+            <div style={{ alignSelf: 'flex-end' }}>
+              <button
+                type="button"
+                data-testid="home-play-button"
+                disabled={!isPaired}
+                onClick={() => {
+                  if (chart && buffer) {
+                    const id = `custom-${Date.now()}`
+                    const title = chart.title || chartFileName.replace(/\.toml$/i, '') || 'Untitled'
+                    const toml = chartToToml(chart)
+                    const base = getBasename(chart.audio)
+                    const newEntry: SongEntry = {
+                      id,
+                      title,
+                      artist: chart.artist || '',
+                      chartPath: id,
+                      difficulty: 3,
                     }
-                  })()
-                }
-              }}
-              style={{
-                padding: '8px 16px',
-                background: isPaired ? 'var(--accent)' : 'var(--border)',
-                color: isPaired ? '#fff' : 'var(--text-muted)',
-                border: 'none',
-                borderRadius: 'var(--radius)',
-                cursor: isPaired ? 'pointer' : 'not-allowed',
-                fontWeight: 'bold',
-              }}
-            >
-              追加
-            </button>
+                    ChartCache.set(id, chart)
+                    ChartCache.set(chartFileName, chart)
+                    AudioCache.set(base, buffer)
+                    AudioCache.set(id, buffer)
+                    AudioCache.set(getBasename(chartFileName), buffer)
+                    setSongs((prev) => [...prev, newEntry])
+
+                    // Persist to IndexedDB
+                    void (async () => {
+                      try {
+                        await putChart({
+                          id,
+                          title,
+                          artist: chart.artist || '',
+                          difficulty: 3,
+                          toml,
+                          audioId: id,
+                          addedAt: Date.now(),
+                        })
+                        if (audioFile) {
+                          const raw = await audioFile.arrayBuffer()
+                          await putAudio({
+                            id,
+                            name: audioFile.name || base,
+                            mime: audioFile.type || 'application/octet-stream',
+                            bytes: new Uint8Array(raw),
+                          })
+                        }
+                        setImportError(null)
+                      } catch (e) {
+                        console.warn('[SelectScreen] Failed to persist to IndexedDB', e)
+                        setImportError(e instanceof Error ? e.message : 'カスタム譜面の保存に失敗しました（再読み込み後は消える場合があります）')
+                      }
+                    })()
+                  }
+                }}
+                style={{
+                  padding: '8px 16px',
+                  background: isPaired ? 'var(--accent)' : 'var(--border)',
+                  color: isPaired ? '#fff' : 'var(--text-muted)',
+                  border: 'none',
+                  borderRadius: 'var(--radius)',
+                  cursor: isPaired ? 'pointer' : 'not-allowed',
+                  fontWeight: 'bold',
+                }}
+              >
+                追加
+              </button>
+            </div>
           </div>
-        </div>
-        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          ここにTOMLファイルや音声ファイルをドラッグ＆ドロップ（またはファイル選択）してください。
-          {chart && ` ターゲット音源: ${chart.audio}`}
-        </p>
-        {importError && (
-          <p data-testid="select-import-error" style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>
-            {importError}
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            ここにTOMLファイルや音声ファイルをドラッグ＆ドロップ（またはファイル選択）してください。
+            {chart && ` ターゲット音源: ${chart.audio}`}
           </p>
-        )}
-      </div>
+          {importError && (
+            <p data-testid="select-import-error" style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>
+              {importError}
+            </p>
+          )}
+        </div>
+      )}
 
       {error ? (
         <p className="select-error">{error}</p>
@@ -413,7 +417,7 @@ beat = 8.0
                     ))}
                   </div>
                 </button>
-                {isCustom && (
+                {viewMode === 'debug' && isCustom && (
                   <button
                     type="button"
                     aria-label={`${song.title}を削除`}
@@ -463,23 +467,25 @@ beat = 8.0
         </div>
       )}
 
-      <div className="select-nav">
-        <button type="button" className="select-nav-button" onClick={() => navigate('/editor')}>
-          エディタ
-        </button>
-        <button
-          type="button"
-          className="select-nav-button"
-          data-testid="select-calibration-button"
-          onClick={() => {
-            savedOffsetRef.current = getManualOffsetMs()
-            setCalibrationOpen(true)
-          }}
-        >
-          キャリブレーション
-        </button>
-        <span className="select-hint">L: キャリブレーション / E: エディタ</span>
-      </div>
+      {viewMode === 'debug' && (
+        <div className="select-nav">
+          <button type="button" className="select-nav-button" onClick={() => navigate('/editor')}>
+            エディタ
+          </button>
+          <button
+            type="button"
+            className="select-nav-button"
+            data-testid="select-calibration-button"
+            onClick={() => {
+              savedOffsetRef.current = getManualOffsetMs()
+              setCalibrationOpen(true)
+            }}
+          >
+            キャリブレーション
+          </button>
+          <span className="select-hint">L: キャリブレーション / E: エディタ</span>
+        </div>
+      )}
 
       {calibrationOpen && (
         <CalibrationModal

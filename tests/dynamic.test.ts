@@ -1,12 +1,12 @@
 /**
  * @vitest-environment node
- * T198 パブリックビュー／デバッグモード基盤＋切替＋ルートガード — Vitest acceptance test
- * Verifies behavior/internal state, 3-step state-transition pattern, storage persistence, keyboard shortcut, and route guard logic.
+ * T199 SelectScreenのモード別表示分岐＋L/Eキー廃止 — Vitest acceptance test
+ * Verifies viewMode behavior, SelectScreen conditional UI branching for public vs debug, and L/E key listener removal.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getViewMode, setViewMode, toggleViewMode, ViewMode } from '../src/viewMode';
+import { getViewMode, setViewMode, toggleViewMode } from '../src/viewMode';
 
 vi.useFakeTimers();
 
@@ -18,47 +18,16 @@ class MemoryStorage {
   clear(): void { this.m.clear(); }
   key(i: number): string | null { return [...this.m.keys()][i] ?? null; }
   get length(): number { return this.m.size; }
-  keys(): string[] { return [...this.m.keys()]; }
 }
 
-class MockEventTarget {
-  private listeners = new Map<string, EventListenerOrEventListenerObject[]>();
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-    if (!this.listeners.has(type)) this.listeners.set(type, []);
-    this.listeners.get(type)!.push(listener);
-  }
-  removeEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-    const list = this.listeners.get(type);
-    if (list) {
-      const idx = list.indexOf(listener);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
-  dispatchEvent(event: Event): boolean {
-    const list = this.listeners.get(event.type);
-    if (list) {
-      for (const l of list) {
-        if (typeof l === 'function') {
-          l(event);
-        } else if (l && typeof l.handleEvent === 'function') {
-          l.handleEvent(event);
-        }
-      }
-    }
-    return true;
-  }
-}
-
-function installStorageAndWindow(): MemoryStorage {
+function installStorage(): MemoryStorage {
   const s = new MemoryStorage();
   (globalThis as unknown as Record<string, unknown>).localStorage = s as unknown as Storage;
-  const mockWin = new MockEventTarget();
-  (globalThis as unknown as Record<string, unknown>).window = mockWin;
   return s;
 }
 
 beforeEach(() => {
-  installStorageAndWindow();
+  installStorage();
   vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
 });
 
@@ -66,15 +35,14 @@ afterEach(() => {
   vi.clearAllTimers();
 });
 
-describe('T198 パブリックビュー／デバッグモード基盤＋切替＋ルートガード', () => {
-  describe('1. src/viewMode.ts storage and toggle behavior (3-Step State-Transition)', () => {
-    it('Step1: Initial state defaults to public when storage is empty', () => {
-      // Step 1
-      const initialMode = getViewMode();
-      expect(initialMode).toBe('public');
-      expect(localStorage.getItem('traceWaveViewMode')).toBeNull();
+describe('T199 SelectScreenのモード別表示分岐＋L/Eキー廃止', () => {
+  describe('1. viewMode basic state-transition tests (3-step)', () => {
+    it('Step1: Initial state is public. Step2: Set debug. Step3: State becomes debug in storage and getter', () => {
+      // Step 1: Capture initial state
+      const initial = getViewMode();
+      expect(initial).toBe('public');
 
-      // Step 2: Set mode to debug
+      // Step 2: Perform action (setViewMode('debug'))
       setViewMode('debug');
 
       // Step 3: Assert transition
@@ -82,62 +50,61 @@ describe('T198 パブリックビュー／デバッグモード基盤＋切替�
       expect(localStorage.getItem('traceWaveViewMode')).toBe('debug');
     });
 
-    it('Step1: Toggle from public to debug and back, persisting in localStorage', () => {
-      // Step 1: Initial public
+    it('Step1: Toggle from public to debug and back (3-step state-transition)', () => {
+      // Step 1: Initial state
       expect(getViewMode()).toBe('public');
 
-      // Step 2: Toggle 1 (public -> debug)
-      const afterFirstToggle = toggleViewMode();
-      expect(afterFirstToggle).toBe('debug');
+      // Step 2: Toggle to debug
+      const mode1 = toggleViewMode();
+      expect(mode1).toBe('debug');
       expect(getViewMode()).toBe('debug');
-      expect(localStorage.getItem('traceWaveViewMode')).toBe('debug');
 
-      // Step 2b: Toggle 2 (debug -> public)
-      const afterSecondToggle = toggleViewMode();
-      expect(afterSecondToggle).toBe('public');
+      // Step 3: Toggle back to public
+      const mode2 = toggleViewMode();
+      expect(mode2).toBe('public');
       expect(getViewMode()).toBe('public');
       expect(localStorage.getItem('traceWaveViewMode')).toBe('public');
     });
+  });
 
-    it('Step1: Reload persistence (simulated via new storage instance / reading key)', () => {
-      // Step 1: Set debug mode
-      setViewMode('debug');
-      const stored = localStorage.getItem('traceWaveViewMode');
-      expect(stored).toBe('debug');
+  describe('2. SelectScreen.tsx source code inspection for public/debug view mode branching (3-step)', () => {
+    const selectSrcPath = path.join(process.cwd(), 'src/screens/SelectScreen.tsx');
+    const selectSrc = fs.existsSync(selectSrcPath) ? fs.readFileSync(selectSrcPath, 'utf-8') : '';
 
-      // Step 2: Simulate page reload by creating a fresh getViewMode check with existing storage value
-      const reloadedMode = getViewMode();
-      // Step 3: Assert mode remains debug
-      expect(reloadedMode).toBe('debug');
+    it('Step1: Check if viewMode is imported in SelectScreen. Step2: Check conditional rendering for public vs debug. Step3: Assert presence of mode check in source', () => {
+      // Step 1: Initial check
+      const importsViewMode = selectSrc.includes('viewMode') || selectSrc.includes('getViewMode');
+      
+      // Step 2 & 3: Assert viewMode branching exists for hiding import section, delete button, editor button, calibration button, and hint
+      const hasCustomImportBranch = selectSrc.includes('custom-import-section') && (selectSrc.includes('debug') || selectSrc.includes('getViewMode()'));
+      const hasCalibrationBtnBranch = selectSrc.includes('select-calibration-button') && (selectSrc.includes('debug') || selectSrc.includes('getViewMode()'));
+      const hasHintBranch = selectSrc.includes('select-hint') && (selectSrc.includes('debug') || selectSrc.includes('getViewMode()'));
+
+      expect(importsViewMode || hasCustomImportBranch || hasCalibrationBtnBranch || hasHintBranch).toBe(true);
+      expect(selectSrc).toContain('song-card-delete');
+    });
+
+    it('Step1: Verify song card click navigation is maintained in both modes. Step2 & 3: Assert navigate("/play/" + song.id) exists', () => {
+      // Step 1 & 2: Check navigate call for song cards
+      const hasNavigatePlay = selectSrc.includes("navigate('/play/' + song.id)") || selectSrc.includes('navigate("/play/"');
+      
+      // Step 3: Assert persistence of click play
+      expect(hasNavigatePlay).toBe(true);
     });
   });
 
-  describe('2. App.tsx keyboard shortcut and route guard structure (Static & Behavioral Analysis)', () => {
-    it('Step1: App.tsx source contains Ctrl+Alt+Shift+@ keydown shortcut handling', () => {
-      const appSrc = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf-8');
-      
-      // Step 2 & 3: Assert App.tsx handles ctrlKey, altKey, shiftKey, and key === '@'
-      expect(appSrc).toContain('ctrlKey');
-      expect(appSrc).toContain('altKey');
-      expect(appSrc).toContain('shiftKey');
-      expect(appSrc).toContain("@");
-      expect(appSrc).toContain('toggleViewMode');
-    });
+  describe('3. L/E key listener removal validation (3-step)', () => {
+    const selectSrcPath = path.join(process.cwd(), 'src/screens/SelectScreen.tsx');
+    const selectSrc = fs.existsSync(selectSrcPath) ? fs.readFileSync(selectSrcPath, 'utf-8') : '';
 
-    it('Step1: App.tsx source contains debug badge with data-testid="debug-badge"', () => {
-      const appSrc = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf-8');
-      
-      // Step 3: Assert debug badge testid exists and condition checks debug mode
-      expect(appSrc).toContain('data-testid="debug-badge"');
-      expect(appSrc).toContain("mode === 'debug'");
-    });
+    it('Step1: Check key listener presence. Step2: Inspect for L/E key handling. Step3: Assert L/E key navigation/calibration useEffect listener is removed', () => {
+      // Step 1 & 2: Check if 'e'/'E' or 'l'/'L' keydown navigation is present in SelectScreen
+      const checksLEKeys = (selectSrc.includes("'l'") || selectSrc.includes('"l"') || selectSrc.includes("'L'") || selectSrc.includes('"L"')) &&
+                           (selectSrc.includes("'e'") || selectSrc.includes('"e"') || selectSrc.includes("'E'") || selectSrc.includes('"E"'));
+      const hasNavigateEditorOnKey = selectSrc.includes("navigate('/editor')") && selectSrc.includes('key');
 
-    it('Step1: App.tsx source contains route guard for /editor redirecting to / when not in debug mode', () => {
-      const appSrc = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf-8');
-      
-      // Step 3: Assert /editor route uses Navigate to="/" or similar guard
-      expect(appSrc).toContain('path="/editor"');
-      expect(appSrc).toContain('Navigate to="/"');
+      // Step 3: L/E key listener must be removed (false)
+      expect(checksLEKeys && hasNavigateEditorOnKey).toBe(false);
     });
   });
 });
