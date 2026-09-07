@@ -16,7 +16,9 @@ export function chartToToml(chart: Chart): string {
   lines.push(`artist = ${tomlString(chart.artist)}`)
   lines.push(`audio = ${tomlString(getBasename(chart.audio))}`)
   lines.push(`audio_offset = ${fmt(chart.audio_offset)}`)
-  lines.push(`amplitude = ${fmt(chart.amplitude)}`)
+  if (typeof chart.amplitude === 'number' && Number.isFinite(chart.amplitude)) {
+    lines.push(`amplitude = ${fmt(chart.amplitude)}`)
+  }
   lines.push(`start_position = ${fmt(chart.start_position)}`)
   if (typeof chart.end_beat === 'number' && Number.isFinite(chart.end_beat) && chart.end_beat >= 0) {
     lines.push(`end_beat = ${fmt(chart.end_beat)}`)

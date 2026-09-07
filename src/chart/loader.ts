@@ -76,9 +76,13 @@ export function parseChartText(text: string, source = 'chart'): Chart {
   // T186: scroll_speed is read-and-discarded (no conversion). bpm (single value) is the legacy base tempo.
   const legacyBpm = isFiniteNumber(raw.bpm) && (raw.bpm as number) > 0 ? (raw.bpm as number) : undefined;
 
-  // T186: migrate to at least one base section [{beat:0, bpm: oldBpm or 120}]
+  // T186: migrate legacy bpm to beat=0 when legacy bpm single value exists but no beat=0 section
+  if (legacyBpm !== undefined && !sections.some(s => s.beat === 0)) {
+    sections.unshift({ beat: 0, bpm: legacyBpm });
+  }
+  // T186: fallback if completely empty (no sections, no legacy bpm)
   if (sections.length === 0) {
-    sections = [{ beat: 0, bpm: legacyBpm ?? 120 }];
+    sections = [{ beat: 0, bpm: 120 }];
   }
 
   return {
