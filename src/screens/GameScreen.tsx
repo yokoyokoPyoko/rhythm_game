@@ -374,8 +374,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       }
 
-      // T121: dynamic scroll_speed from chart
-        renderer.render(ctx2d, {
+      renderer.render(ctx2d, {
         waveEngine: wave,
         cursor: cursorRef.current,
         rings: ringsRef.current,
@@ -383,7 +382,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         songTimeMs: songTimeMs,
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
-        scrollSpeed: 110,
+        scrollSpeed: 110 * timeline.zoomAt(currentBeat),
       })
 
       const buffer = bufferRef.current

@@ -304,7 +304,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         songTimeMs,
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
-        scrollSpeed: 110,
+        scrollSpeed: 110 * timeline.zoomAt(currentBeat),
       })
 
       raf = requestAnimationFrame(tick)
