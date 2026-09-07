@@ -85,9 +85,7 @@ export default function EditorScreen() {
   const [title, setTitle] = useState('')
   const [artist, setArtist] = useState('')
   const [url, setUrl] = useState('')
-  const [bpm, setBpm] = useState(120)
   const [amplitude, setAmplitude] = useState(1.0)
-  const [scrollSpeed, setScrollSpeed] = useState(110)
   const [audioOffset, setAudioOffset] = useState(0)
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null)
   const [durationMs, setDurationMs] = useState(0)
@@ -100,7 +98,7 @@ export default function EditorScreen() {
   const [endBeat, setEndBeat] = useState<number | undefined>(undefined)
   const [rings, setRings] = useState<RingDef[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
-  const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([])
+  const [bpmChanges, setBpmChanges] = useState<BpmChange[]>([{ beat: 0, bpm: 120 }])
   const [playtest, setPlaytest] = useState<{ chart: Chart; buffer: AudioBuffer | null } | null>(null)
   const [selectedRing, setSelectedRing] = useState<number | null>(null)
   const [selectedRings, setSelectedRings] = useState<number[]>([])
@@ -339,7 +337,6 @@ export default function EditorScreen() {
     setIsPlaying(v)
   }
 
-  const safeBpm = bpm > 0 ? bpm : 120
   // T131: editor timeline uses a fixed base amplitude; bpm_changes[].amplitude
   // (list) is the primary driver for time-varying wave/cursor.
   // T187: base tempo is derived internally from the first (beat-min) section.
@@ -1105,7 +1102,6 @@ export default function EditorScreen() {
     pushHistory()
     setTitle(chart.title)
     setArtist(chart.artist)
-    setBpm(chart.bpm_changes[0]?.bpm && chart.bpm_changes[0].bpm > 0 ? chart.bpm_changes[0].bpm : 120)
     setUrl(chart.audio)
     setAudioOffset(chart.audio_offset)
     setAmplitude(chart.amplitude)
@@ -1172,7 +1168,7 @@ export default function EditorScreen() {
     pushHistory()
     setRings([])
     setSegments([])
-    setBpmChanges([])
+    setBpmChanges([{ beat: 0, bpm: 120 }])
     setSelectedRing(null)
     setPositionMs(0)
     positionRef.current = 0
@@ -1520,14 +1516,10 @@ export default function EditorScreen() {
           <section className="editor-pane">
             <h2>BPM設定</h2>
             <BpmEditor
-              bpm={bpm}
-              onBpmChange={setBpm}
               bpmChanges={bpmChanges}
-              onBpmChangesChange={setBpmChanges}
+              onSectionsChange={setBpmChanges}
               amplitude={amplitude}
               onAmplitudeChange={setAmplitude}
-              scrollSpeed={scrollSpeed}
-              onScrollSpeedChange={setScrollSpeed}
               startPosition={startPosition}
               onStartPositionChange={setStartPosition}
               endBeat={endBeat}
@@ -1561,7 +1553,7 @@ export default function EditorScreen() {
           <div className="editor-legend" data-testid="editor-legend">
             <span><b>使い方</b></span>
             <span>① 音楽URLを入力し「読込・再生」</span>
-            <span>② 基本BPM / 振幅などを設定</span>
+            <span>② セクション(BPM) / 振幅などを設定</span>
             <span>③ 波形上クリックでリング追加・ドラッグで移動・ダブルクリックで削除</span>
             <span>④ 上端ルーラー(↑)クリックでシーク</span>
             <span>⑤ 録音モード中 Space=リング追加（単発/ホールド）</span>
@@ -1612,7 +1604,6 @@ export default function EditorScreen() {
           </section>
           <WavePreview
             segments={segments}
-            bpm={safeBpm}
             bpmChanges={bpmChanges}
             rings={rings}
             amplitude={amplitude}

@@ -43,7 +43,6 @@ export type EditMode = 'vertex' | 'edge' | 'ring'
 
 export interface WavePreviewProps {
   segments: Segment[]
-  bpm: number
   bpmChanges?: BpmChange[]
   rings?: RingDef[]
   amplitude?: number
@@ -79,7 +78,6 @@ export interface WavePreviewProps {
 
 export default function WavePreview({
   segments,
-  bpm,
   bpmChanges = [],
   rings = [],
   amplitude = 1.0,
@@ -567,7 +565,7 @@ export default function WavePreview({
       ctx.rect(rubberRect.x, rubberRect.y, rubberRect.w, rubberRect.h)
       ctx.fill()
     }
-  }, [segments, dragPreview, multiDragSegments, bpm, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, selectedVertices, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
+  }, [segments, dragPreview, multiDragSegments, bpmChanges, rings, amplitude, startPosition, selectedRing, selectedSegment, selectedRings, selectedSegments, selectedVertices, hoveredRing, hoveredSegment, positionMs, view, recording, editMode, ringDragOffset, rubberRect])
 
   // ResizeObserver guarantees the canvas intrinsic size is set after layout
   // completes (and on any container resize), so the first paint is never blank.
@@ -844,7 +842,7 @@ export default function WavePreview({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [onMoveRing, onViewChange, editMode, segments, bpm, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, onSelectVertices, selectedVertices, rings, findItemsInRect])
+  }, [onMoveRing, onViewChange, editMode, segments, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, onSelectVertices, selectedVertices, rings, findItemsInRect])
 
   const nearestRingIndex = (clientX: number, clientY: number): number => {
     const canvas = canvasRef.current

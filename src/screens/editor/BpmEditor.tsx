@@ -1,7 +1,5 @@
-import { useRef, useState } from 'react'
 import type { BpmChange } from '../../types'
 
-const TAP_COUNT = 4
 const BPM_MIN = 1
 const BPM_MAX = 1000
 
@@ -20,14 +18,10 @@ function safeAmp (v: number): number {
 }
 
 interface BpmEditorProps {
-  bpm: number
-  onBpmChange: (bpm: number) => void
   bpmChanges: BpmChange[]
-  onBpmChangesChange: (next: BpmChange[]) => void
+  onSectionsChange: (next: BpmChange[]) => void
   amplitude: number
   onAmplitudeChange: (val: number) => void
-  scrollSpeed: number
-  onScrollSpeedChange: (val: number) => void
   startPosition: number
   onStartPositionChange: (val: number) => void
   endBeat?: number
@@ -35,84 +29,38 @@ interface BpmEditorProps {
 }
 
 export default function BpmEditor({
-  bpm,
-  onBpmChange,
   bpmChanges,
-  onBpmChangesChange,
+  onSectionsChange,
   amplitude,
   onAmplitudeChange,
-  scrollSpeed,
-  onScrollSpeedChange,
   startPosition,
   onStartPositionChange,
   endBeat,
   onEndBeatChange,
 }: BpmEditorProps) {
-  const tapTimesRef = useRef<number[]>([])
-  const [tapCount, setTapCount] = useState(0)
-
   const addChange = () => {
-    const defaultBeat = bpmChanges.length > 0 ? Math.floor(bpmChanges[bpmChanges.length - 1].beat) + 4 : 4
-    // T131: stamp the current main #amplitude value into the new entry
-    onBpmChangesChange([
+    const last = bpmChanges[bpmChanges.length - 1]
+    const defaultBeat = last ? Math.floor(last.beat) + 4 : 4
+    // T131: stamp the current main #amplitude value into the new entry.
+    // T189: the base tempo is derived from the first section; a new section
+    // defaults to the last section's BPM (120 when the list is empty).
+    const injectedBpm = last ? last.bpm : 120
+    onSectionsChange([
       ...bpmChanges,
-      { beat: defaultBeat, bpm: safeBpm(bpm), amplitude: safeAmp(amplitude) },
+      { beat: defaultBeat, bpm: safeBpm(injectedBpm), amplitude: safeAmp(amplitude) },
     ])
   }
 
   const removeChange = (index: number) => {
-    onBpmChangesChange(bpmChanges.filter((_, i) => i !== index))
+    onSectionsChange(bpmChanges.filter((_, i) => i !== index))
   }
 
   const updateChange = (index: number, patch: Partial<BpmChange>) => {
-    onBpmChangesChange(bpmChanges.map((c, i) => (i === index ? { ...c, ...patch } : c)))
-  }
-
-  const handleTap = () => {
-    const now = performance.now()
-    const times = [...tapTimesRef.current, now]
-    if (times.length < TAP_COUNT) {
-      tapTimesRef.current = times
-      setTapCount(times.length)
-      return
-    }
-    let total = 0
-    for (let i = 1; i < times.length; i++) {
-      total += times[i] - times[i - 1]
-    }
-    const avgInterval = total / (times.length - 1)
-    if (avgInterval > 0) {
-      const tappedBpm = Math.round(60000 / avgInterval)
-      if (tappedBpm >= BPM_MIN && tappedBpm <= BPM_MAX) {
-        onBpmChange(tappedBpm)
-      }
-    }
-    tapTimesRef.current = []
-    setTapCount(0)
-  }
-
-  const resetTap = () => {
-    tapTimesRef.current = []
-    setTapCount(0)
+    onSectionsChange(bpmChanges.map((c, i) => (i === index ? { ...c, ...patch } : c)))
   }
 
   return (
     <div>
-      <div className="editor-field">
-        <label className="editor-label" htmlFor="bpm">
-          基本BPM
-        </label>
-        <input
-          id="bpm"
-          className="editor-input"
-          type="number"
-          min={BPM_MIN}
-          max={BPM_MAX}
-          value={safeBpm(bpm)}
-          onChange={(e) => onBpmChange(safeBpm(Number(e.target.value)))}
-        />
-      </div>
-
       <div className="editor-field">
         <label className="editor-label" htmlFor="amplitude">
           速度係数 (BPM変更に注入する値)
@@ -128,21 +76,6 @@ export default function BpmEditor({
           onChange={(e) => onAmplitudeChange(Number(e.target.value))}
         />
         <p className="editor-hint">「BPM変更を追加」時にこの値を新規エントリーの振幅へスタンプします（直接の波形反映なし）</p>
-      </div>
-
-      <div className="editor-field">
-        <label className="editor-label" htmlFor="scroll-speed">
-          スクロール速度 (Scroll Speed px/s)
-        </label>
-        <input
-          id="scroll-speed"
-          className="editor-input"
-          type="number"
-          min={10}
-          max={1000}
-          value={Number.isFinite(scrollSpeed) ? scrollSpeed : 110}
-          onChange={(e) => onScrollSpeedChange(Number(e.target.value))}
-        />
       </div>
 
       <div className="editor-field">
@@ -183,19 +116,6 @@ export default function BpmEditor({
           }}
           data-testid="end-beat"
         />
-      </div>
-
-      <div className="editor-field">
-        <label className="editor-label">タップテンポ</label>
-        <div className="editor-controls">
-          <button type="button" onClick={handleTap}>
-            タップ ({tapCount}/{TAP_COUNT})
-          </button>
-          <button type="button" onClick={resetTap}>
-            リセット
-          </button>
-        </div>
-        <p className="editor-hint">リズムに合わせて{TAP_COUNT}回タップ → 平均BPMを基本BPMに反映</p>
       </div>
 
       <h3 className="editor-subhead">BPM変更</h3>
