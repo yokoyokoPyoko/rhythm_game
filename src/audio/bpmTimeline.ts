@@ -6,6 +6,7 @@ interface BpmSegment {
   bpm: number;
   beatMs: number;
   amplitude: number;
+  zoom: number;
 }
 
 const MIN_BPM = 1;
@@ -21,17 +22,23 @@ export class BpmTimeline {
   private readonly baseBpm: number;
   private readonly baseAmplitude: number;
   private readonly segments: BpmSegment[];
-  /** Sorted amplitude entries from bpm_changes (beat, amplitude). */
+  /** Sorted amplitude entries from sections (beat, amplitude). */
   private readonly amplitudeEntries: { beat: number; amplitude: number }[];
+  /** Sorted zoom entries from sections (beat, zoom). */
+  private readonly zoomEntries: { beat: number; zoom: number }[];
 
   constructor(baseBpm: number, bpmChanges: BpmChange[] = [], baseAmplitude = 1.0) {
-    this.baseBpm = sanitizeBpm(baseBpm);
     this.baseAmplitude = Number.isFinite(baseAmplitude) && baseAmplitude > 0 ? baseAmplitude : 1.0;
 
     const changes = (bpmChanges ?? [])
       .filter((c): c is BpmChange => !!c && Number.isFinite(c.beat) && Number.isFinite(c.bpm))
-      .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm), amplitude: c.amplitude }))
+      .map((c) => ({ beat: Math.max(0, Number(c.beat)), bpm: sanitizeBpm(c.bpm), amplitude: c.amplitude, zoom: c.zoom }))
       .sort((a, b) => a.beat - b.beat);
+
+    // T187: base BPM is derived from the first section (lowest beat). Fall back
+    // to the constructor's baseBpm (or 120) when there is no section.
+    const firstSection = changes.length > 0 ? changes[0] : null;
+    this.baseBpm = sanitizeBpm(firstSection ? firstSection.bpm : baseBpm);
 
     const segs: BpmSegment[] = [];
     let currentBpm = this.baseBpm;
@@ -45,6 +52,7 @@ export class BpmTimeline {
         bpm: currentBpm,
         beatMs: 60000 / currentBpm,
         amplitude: this.baseAmplitude,
+        zoom: 1.0,
       });
       currentBpm = change.bpm;
       currentBeat = change.beat;
@@ -56,14 +64,20 @@ export class BpmTimeline {
       bpm: currentBpm,
       beatMs: 60000 / currentBpm,
       amplitude: this.baseAmplitude,
+      zoom: 1.0,
     });
 
     this.segments = segs;
 
-    // Build amplitude step entries from bpm_changes that carry an amplitude value
+    // Build amplitude step entries from sections that carry an amplitude value
     this.amplitudeEntries = changes
       .filter((c) => Number.isFinite(c.amplitude) && (c.amplitude as number) > 0)
       .map((c) => ({ beat: c.beat, amplitude: c.amplitude as number }));
+
+    // Build zoom step entries from sections that carry a zoom value
+    this.zoomEntries = changes
+      .filter((c) => Number.isFinite(c.zoom) && (c.zoom as number) > 0)
+      .map((c) => ({ beat: c.beat, zoom: c.zoom as number }));
   }
 
   private segmentAt(beat: number): BpmSegment {
@@ -124,6 +138,24 @@ export class BpmTimeline {
     for (const entry of this.amplitudeEntries) {
       if (entry.beat <= b) {
         result = entry.amplitude;
+      } else {
+        break;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * T187: Returns the horizontal zoom (scroll speed coefficient) that applies
+   * at the given beat. Step function: returns the zoom from the most recent
+   * section at or before `beat`. Falls back to 1.0 if none is set.
+   */
+  zoomAt(beat: number): number {
+    let result = 1.0;
+    const b = Number.isFinite(beat) ? beat : 0;
+    for (const entry of this.zoomEntries) {
+      if (entry.beat <= b) {
+        result = entry.zoom;
       } else {
         break;
       }
