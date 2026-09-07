@@ -1684,9 +1684,18 @@
       "finished": 1788776732.2196965
     },
     "T196": {
-      "attempts": 0,
+      "attempts": 5,
       "status": "running",
-      "started": 1788776732.2233617
+      "started": 1788776732.2233617,
+      "cycles": 2,
+      "sessions": {
+        "qa": "ses_f846e9adaffehxWxOTg9dE6esv",
+        "postmortem": "ses_f8470817dffet3MiRbTbKIBJuv",
+        "coder": "ses_f846cb8bbffeZ0HebRWd4i29YI"
+      },
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788779515.1953595,
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

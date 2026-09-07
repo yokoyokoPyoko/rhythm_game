@@ -1,0 +1,39 @@
+title = "T196 E2E Custom"
+artist = "QA"
+audio = "test-audio.wav"
+audio_offset = 0
+amplitude = 1.0
+start_position = 0.0
+end_beat = 16.0
+
+[[sections]]
+beat = 0
+bpm = 120
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+
+[[rings]]
+beat = 12.0
+
+[[rings]]
+beat = 16.0

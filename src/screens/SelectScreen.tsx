@@ -21,6 +21,7 @@ export default function SelectScreen() {
   const [songs, setSongs] = useState<SongEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   const [chart, setChart] = useState<Chart | null>(null)
   const [chartFileName, setChartFileName] = useState<string>('')
@@ -106,10 +107,12 @@ beat = 8.0
       const parsed = parseChartText(text, fileName)
       setChart(parsed)
       setChartFileName(fileName)
+      setImportError(null)
       ChartCache.set(fileName, parsed)
       console.log('[SelectScreen] Chart loaded via drop/input:', fileName, parsed)
     } catch (e) {
       console.warn('Failed to parse chart file', e)
+      setImportError(e instanceof Error ? e.message : '譜面ファイルの解析に失敗しました')
     }
   }, [])
 
@@ -130,12 +133,14 @@ beat = 8.0
         setBuffer(buf)
         const base = getBasename(fileName)
         setAudioBasename(base)
+        setImportError(null)
         AudioCache.set(base, buf)
         AudioCache.set(fileName, buf)
         console.log('[SelectScreen] Audio loaded via drop/input:', fileName)
       }
     } catch (e) {
       console.warn('Failed to load audio file', e)
+      setImportError(e instanceof Error ? e.message : '音声ファイルの読み込みに失敗しました')
     }
   }, [])
 
@@ -310,8 +315,10 @@ beat = 8.0
                           bytes: new Uint8Array(raw),
                         })
                       }
+                      setImportError(null)
                     } catch (e) {
                       console.warn('[SelectScreen] Failed to persist to IndexedDB', e)
+                      setImportError(e instanceof Error ? e.message : 'カスタム譜面の保存に失敗しました（再読み込み後は消える場合があります）')
                     }
                   })()
                 }
@@ -334,6 +341,11 @@ beat = 8.0
           ここにTOMLファイルや音声ファイルをドラッグ＆ドロップ（またはファイル選択）してください。
           {chart && ` ターゲット音源: ${chart.audio}`}
         </p>
+        {importError && (
+          <p data-testid="select-import-error" style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>
+            {importError}
+          </p>
+        )}
       </div>
 
       {error ? (
@@ -407,8 +419,9 @@ beat = 8.0
                         try {
                           await deleteChart(song.id)
                           await deleteAudio(song.id)
-                        } catch {
-                          /* best effort */
+                        } catch (err) {
+                          console.warn('[SelectScreen] Failed to delete custom song', err)
+                          setImportError(err instanceof Error ? err.message : 'カスタム譜面の削除に失敗しました')
                         }
                         ChartCache.clear()
                         AudioCache.clear()
