@@ -1713,15 +1713,18 @@
       "finished": 1788815154.9699984
     },
     "T198": {
-      "attempts": 1,
+      "attempts": 2,
       "status": "running",
       "started": 1788815154.972541,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_f824eca6dffeVrasY3iMjUFWj2",
-        "coder": "ses_f824c711fffeLXJ7ZOt3LMlCmi"
+        "qa": "ses_f8243f601ffe96EEJ7T1k2FITb",
+        "coder": "ses_f824c711fffeLXJ7ZOt3LMlCmi",
+        "postmortem": "ses_f824a66dfffeJ4OrupQm0Vf8KJ"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true,
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788815864.0293036
     }
   },
   "consecutive_no_action": 0
