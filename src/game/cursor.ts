@@ -42,7 +42,7 @@ export class Cursor {
 
     // T163: Continuous snap towards nowWaveY every tick (PULL_STRENGTH = 0.04 - 0.05)
     if (typeof nowWaveY === 'number' && Number.isFinite(nowWaveY)) {
-      const PULL_STRENGTH = 0.045;
+      const PULL_STRENGTH = 0.008;
       const clampedTarget = Math.max(waveTop, Math.min(waveBottom, nowWaveY));
       this.y = Math.max(waveTop, Math.min(waveBottom, this.y + (clampedTarget - this.y) * PULL_STRENGTH));
     }
