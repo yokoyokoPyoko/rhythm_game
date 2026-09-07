@@ -1663,7 +1663,7 @@
         "qa": "ses_f84aaa824ffeJX99Ctmj4pyJks",
         "coder": "ses_f84a91f7fffe130574bdoY1OxW"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
