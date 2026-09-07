@@ -1610,7 +1610,7 @@
         "qa": "ses_f859febf7ffeqMGv5ZJit56JlO",
         "coder": "ses_f859d94e1ffeaXUhcbWYdANftz"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
