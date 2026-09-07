@@ -92,7 +92,15 @@ export default function BpmEditor({
       {bpmChanges.length === 0 ? (
         <p className="editor-empty">セクションなし</p>
       ) : (
-        <ul className="bpm-change-list">
+        <>
+          <div className="bpm-change-header">
+            <span>beat</span>
+            <span>BPM</span>
+            <span>速度係数</span>
+            <span>横拡大率</span>
+            <span />
+          </div>
+          <ul className="bpm-change-list">
           {bpmChanges.map((change, i) => (
             <li key={i} className="bpm-change-item">
               <input
@@ -149,11 +157,12 @@ export default function BpmEditor({
                 onClick={() => removeChange(i)}
                 aria-label={`セクション${i + 1}を削除`}
               >
-                削除
+                −
               </button>
             </li>
           ))}
-        </ul>
+          </ul>
+        </>
       )}
       <button type="button" className="bpm-change-add" onClick={onRequestAddSection}>
         セクションを追加

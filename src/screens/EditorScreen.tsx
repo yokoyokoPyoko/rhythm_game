@@ -136,6 +136,15 @@ export default function EditorScreen() {
   const [hoveredRing, setHoveredRing] = useState<number | null>(null)
   const [view, setView] = useState<WaveView>({ startBeat: 0, beats: 16 })
   const [recLive, setRecLive] = useState<{ beat: number; y: number; trajectory: { beat: number; y: number }[] } | null>(null)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('rhythmEditorSidebarWidth'))
+      return Number.isFinite(v) && v >= 240 && v <= 560 ? v : 320
+    } catch { return 320 }
+  })
+  const sidebarDraggingRef = useRef(false)
+  const sidebarStartXRef = useRef(0)
+  const sidebarStartWRef = useRef(320)
 
   useEffect(() => {
     if (rings.length > 0) {
@@ -1183,6 +1192,27 @@ export default function EditorScreen() {
     notify('譜面をクリアしました')
   }
 
+  // T192: sidebar resize drag
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!sidebarDraggingRef.current) return
+      const dx = e.clientX - sidebarStartXRef.current
+      const w = Math.max(240, Math.min(560, sidebarStartWRef.current + dx))
+      setSidebarWidth(w)
+    }
+    const onUp = () => {
+      if (!sidebarDraggingRef.current) return
+      sidebarDraggingRef.current = false
+      try { localStorage.setItem('rhythmEditorSidebarWidth', String(sidebarWidth)) } catch { /* ignore */ }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [sidebarWidth])
+
   const closePlaytest = useCallback(() => {
     playtestActiveRef.current = false
     setPlaytest(null)
@@ -1272,7 +1302,7 @@ export default function EditorScreen() {
       )}
 
       <div className="editor-body">
-        <aside className="editor-sidebar">
+        <aside className="editor-sidebar" style={{ flex: `0 0 ${sidebarWidth}px` }}>
           <section className="editor-pane">
             <h2>譜面情報</h2>
             <div className="editor-field">
@@ -1550,6 +1580,17 @@ export default function EditorScreen() {
             <p className="editor-hint">現在の状態をTOMLとしてファイルに書き出し。プレイテストはエクスポートせずその場で確認</p>
           </section>
         </aside>
+
+        <div
+          className="editor-resizer"
+          data-testid="editor-sidebar-resizer"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            sidebarDraggingRef.current = true
+            sidebarStartXRef.current = e.clientX
+            sidebarStartWRef.current = sidebarWidth
+          }}
+        />
 
         <main className="editor-main">
           <div className="editor-legend" data-testid="editor-legend">
