@@ -1,9 +1,9 @@
 {
   "started_at": 1787099390.9580224,
   "models": {
-    "coder": "opencode/big-pickle",
-    "qa": "opencode/muse-spark-1.2-contributor-free",
-    "reviewer": "google/gemini-3.5-flash-lite",
+    "coder": "google/gemini-3.5-flash-lite",
+    "qa": "google/gemini-3.5-flash-lite",
+    "reviewer": "google/gemini-3.1-flash-lite",
     "postmortem": "opencode/nemotron-3-ultra-free"
   },
   "tasks": {
@@ -1700,9 +1700,15 @@
       "finished": 1788781267.9169047
     },
     "T197": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788811528.762387
+      "started": 1788814969.1290662,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f82861ae6ffeMoNpf7dvR9hcbL",
+        "coder": null
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

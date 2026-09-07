@@ -1,4 +1,35 @@
 import { test, expect } from '@playwright/test';
+import { writeFileSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const CUSTOM_TOML = `title = "T42 Custom"
+artist = "QA"
+bpm = 120
+audio = "test-audio.wav"
+audio_offset = 0
+amplitude = 1.0
+start_position = 0.0
+end_beat = 8.0
+
+[[sections]]
+beat = 0
+bpm = 120
+
+[[segments]]
+direction = "up"
+beats = 2
+
+[[segments]]
+direction = "down"
+beats = 2
+
+[[rings]]
+beat = 4.0
+
+[[rings]]
+beat = 8.0
+`;
 
 test('T42 game and chart integration test', async ({ page }) => {
   const errors: string[] = [];
@@ -16,16 +47,31 @@ test('T42 game and chart integration test', async ({ page }) => {
     errors.push(err.message);
   });
 
-  // 1. Navigate to home and simulate user interaction
+  // 1. Navigate to home
   await page.goto('http://localhost:5173/');
   await page.waitForLoadState('networkidle', { timeout: 5000 });
   await expect(page.locator('#root')).toBeVisible();
 
-  // Frame 1: Select screen
+  // Frame 1: Select screen (0 built-in songs + import UI + empty message)
   await page.screenshot({ path: 'screenshots/frame_1.png' });
+  await expect(page.locator('[data-testid="empty-song-list"]')).toBeVisible();
 
-  // Click song card to navigate to GameScreen (songs.toml -> chart.toml -> audio load -> game loop)
-  const songCard = page.locator('.song-card').first();
+  // Import a chart via the custom import flow (home-chart-input)
+  const tmp = mkdtempSync(join(tmpdir(), 't42-'));
+  const tomlPath = join(tmp, 'custom.toml');
+  writeFileSync(tomlPath, CUSTOM_TOML, 'utf-8');
+  await page.locator('[data-testid="home-chart-input"]').setInputFiles(tomlPath);
+  await page.locator('[data-testid="home-audio-input"]').setInputFiles(
+    '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav'
+  );
+
+  // "追加" button becomes active once chart + audio are paired
+  const addButton = page.locator('[data-testid="home-play-button"]');
+  await expect(addButton).toBeEnabled();
+  await addButton.click();
+
+  // New custom song card appears
+  const songCard = page.locator('.song-card', { hasText: 'T42 Custom' });
   await expect(songCard).toBeVisible();
   await songCard.click();
   await page.waitForTimeout(1000);

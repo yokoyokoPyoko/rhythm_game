@@ -34,7 +34,8 @@ function parseSongs(v: unknown): SongEntry[] {
 export async function loadSongList(): Promise<SongEntry[]> {
   const res = await fetch(SONGS_URL);
   if (!res.ok) {
-    throw new Error(`曲リストの読み込みに失敗しました (${res.status}): ${SONGS_URL}`);
+    // 組込曲は削除済みのため、404（songs.toml 欠如）は空リストとして扱う
+    return [];
   }
   const text = await res.text();
 
@@ -42,7 +43,7 @@ export async function loadSongList(): Promise<SongEntry[]> {
   try {
     raw = parse(text) as Record<string, unknown>;
   } catch {
-    throw new Error(`曲リストのTOMLパースに失敗しました: ${SONGS_URL}`);
+    throw new Error(`曲リストの読み込みに失敗しました: ${SONGS_URL}`);
   }
 
   return parseSongs(raw.songs);

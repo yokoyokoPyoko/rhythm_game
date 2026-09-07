@@ -6,7 +6,7 @@ import { join } from 'path'
 const DEMO_TOML = `title = "Demo"
 artist = "Tester"
 bpm = 120
-audio = "/rhythm_game/audio/08.Reply.flac"
+audio = "test-audio.wav"
 audio_offset = 0
 scroll_speed = 110
 amplitude = 130

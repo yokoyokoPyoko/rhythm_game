@@ -33,7 +33,7 @@ test('T51 editor audio player and BPM setting test', async ({ page }) => {
   // Frame 2: Editor screen loaded
   const urlInput = page.locator('#audio-url');
   await expect(urlInput).toBeVisible();
-  await expect(urlInput).toHaveValue('/rhythm_game/audio/08.Reply.flac');
+  await expect(urlInput).toHaveValue('');
   await page.screenshot({ path: 'screenshots/frame_2.png' });
 
   // Simulate user interaction: modify BPM and audio URL / test play/stop button & position display

@@ -128,11 +128,14 @@ test('T98 Wave Model Unification + Editor Recording Mode + DAW-style Zoom/Pan', 
   // ============================================================
   // 2. Test Music Load, Play, Seek, Stop
   // ============================================================
+  // Built-in Reply audio has been removed (T197); use the fixture audio instead
+  const audioUrlInput = page.locator('#audio-url')
+  await audioUrlInput.fill('/rhythm_game/test-audio.wav')
   const playBtn = page.locator('[data-testid="editor-play"]')
   await expect(playBtn).toBeVisible()
   await playBtn.click()
   
-  // Wait for 68.8MB FLAC to load and decode
+  // Wait for fixture audio to load and decode
   await waitForAudioLoaded(page)
   await page.screenshot({ path: 'recordings/t98_03_music_playing.png' })
   await page.waitForTimeout(3000)
@@ -568,10 +571,18 @@ test('T98 Wave Model Unification + Editor Recording Mode + DAW-style Zoom/Pan', 
 
   // ============================================================
   // 15. Test Game Screen: Verify cursor and wave match (wave model unification)
+  //     Built-in Reply song removed (T197) - use the custom import flow
   // ============================================================
-  await page.evaluate(() => {
-    window.location.hash = '#/play/reply'
-  })
+  await page.locator('[data-testid="home-chart-input"]').setInputFiles(filePathForImport!)
+  await page.locator('[data-testid="home-audio-input"]').setInputFiles(
+    '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav'
+  )
+  const addCustomBtn = page.locator('[data-testid="home-play-button"]')
+  await expect(addCustomBtn).toBeEnabled()
+  await addCustomBtn.click()
+  const customSongCard = page.locator('.song-card').first()
+  await expect(customSongCard).toBeVisible()
+  await customSongCard.click()
   await page.waitForSelector('.game-screen', { timeout: 15000 })
   await page.waitForTimeout(4000)
   await page.screenshot({ path: 'recordings/t98_25_game_screen.png' })

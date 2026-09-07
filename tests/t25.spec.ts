@@ -1,5 +1,17 @@
 import { test, expect } from '@playwright/test';
 
+const CHART_FIXTURE = '/home/p-yoko/Program/TypeScript/rhythm_game/tests/fixtures/custom-song.toml';
+const AUDIO_FIXTURE = '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav';
+
+async function addCustomSong(page: import('@playwright/test').Page) {
+  await page.locator('input[data-testid="home-chart-input"]').setInputFiles(CHART_FIXTURE);
+  await page.locator('input[data-testid="home-audio-input"]').setInputFiles(AUDIO_FIXTURE);
+  const addBtn = page.locator('button[data-testid="home-play-button"]');
+  await expect(addBtn).toBeEnabled({ timeout: 10000 });
+  await addBtn.click();
+  await expect(page.locator('.song-card').first()).toBeVisible({ timeout: 10000 });
+}
+
 test('T25 canvas renderer visual test', async ({ page }) => {
   const errors: string[] = [];
 
@@ -20,6 +32,8 @@ test('T25 canvas renderer visual test', async ({ page }) => {
   await page.goto('http://localhost:5173/');
   await page.waitForLoadState('networkidle', { timeout: 5000 });
   await expect(page.locator('#root')).toBeVisible();
+
+  await addCustomSong(page);
 
   // Frame 1: Select screen (minimal dark UI)
   await page.screenshot({ path: 'screenshots/t25_frame_1.png' });

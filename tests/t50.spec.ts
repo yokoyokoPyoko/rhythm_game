@@ -40,7 +40,7 @@ test('T50 EditorScreen layout and interaction test', async ({ page }) => {
   // Simulate user interaction 1: Interact with audio controls / BPM settings in left pane
   const urlInput = page.locator('#audio-url');
   await expect(urlInput).toBeVisible();
-  await urlInput.fill('/rhythm_game/audio/08.Reply.flac');
+  await urlInput.fill('/rhythm_game/test-audio.wav');
 
   // Frame 3: Interaction in left pane
   await page.screenshot({ path: 'screenshots/frame_3.png' });

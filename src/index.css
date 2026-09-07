@@ -89,6 +89,21 @@ button:focus-visible {
   color: var(--danger);
 }
 
+.song-grid-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.empty-message {
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
 .song-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

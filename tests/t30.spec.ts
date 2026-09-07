@@ -1,5 +1,17 @@
 import { test, expect } from '@playwright/test';
 
+const CHART_FIXTURE = '/home/p-yoko/Program/TypeScript/rhythm_game/tests/fixtures/custom-song.toml';
+const AUDIO_FIXTURE = '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav';
+
+async function addCustomSong(page: import('@playwright/test').Page) {
+  await page.locator('input[data-testid="home-chart-input"]').setInputFiles(CHART_FIXTURE);
+  await page.locator('input[data-testid="home-audio-input"]').setInputFiles(AUDIO_FIXTURE);
+  const addBtn = page.locator('button[data-testid="home-play-button"]');
+  await expect(addBtn).toBeEnabled({ timeout: 10000 });
+  await addBtn.click();
+  await expect(page.locator('.song-card').first()).toBeVisible({ timeout: 10000 });
+}
+
 test('T30 React app shell routing test', async ({ page }) => {
   const errors: string[] = [];
 
@@ -21,6 +33,7 @@ test('T30 React app shell routing test', async ({ page }) => {
   await page.waitForLoadState('domcontentloaded');
   await expect(page.locator('.select-screen')).toBeVisible();
   await page.waitForTimeout(1500);
+  await addCustomSong(page);
 
   // Route 2: /play/:songId -> GameScreen (click song card)
   const songCard = page.locator('.song-card').first();

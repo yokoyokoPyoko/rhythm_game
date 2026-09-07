@@ -364,6 +364,12 @@ beat = 8.0
             </div>
           ))}
         </div>
+      ) : songs.length === 0 ? (
+        <div className="song-grid-empty" data-testid="empty-song-list">
+          <p className="empty-message">
+            曲がありません。上のエリアから譜面TOMLと音声をインポートしてください。
+          </p>
+        </div>
       ) : (
         <div className="song-grid">
           {songs.map((song) => {
