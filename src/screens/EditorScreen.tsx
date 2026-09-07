@@ -208,20 +208,16 @@ export default function EditorScreen() {
   useEffect(() => { autosaveIntervalRef.current = autosaveInterval }, [autosaveInterval])
 
   const buildChart = useCallback((): Chart => {
-    // title artist bpm metadata is serialized for autosave/export
+    // title artist metadata is serialized for autosave/export
     const safeAmp = Number.isFinite(amplitude) && amplitude > 0 ? amplitude : 1.0
-    const safeScroll = Number.isFinite(scrollSpeed) && scrollSpeed > 0 ? scrollSpeed : 110
     const safeOffset = Number.isFinite(audioOffset) ? audioOffset : 0
     const safeStartPosition = Number.isFinite(startPosition) ? Math.max(-1.0, Math.min(1.0, startPosition)) : 0.0
     const safeEndBeat = endBeat !== undefined && Number.isFinite(endBeat) && endBeat >= 0 ? endBeat : undefined
-    const safeBpm = bpm > 0 ? bpm : 120
     return {
       title: title.trim() || 'Untitled',
       artist: artist.trim(),
-      bpm: safeBpm,
       audio: url.trim(),
       audio_offset: safeOffset,
-      scroll_speed: safeScroll,
       amplitude: safeAmp,
       start_position: safeStartPosition,
       end_beat: safeEndBeat,
@@ -229,7 +225,7 @@ export default function EditorScreen() {
       segments,
       rings,
     }
-  }, [bpm, title, artist, url, audioOffset, scrollSpeed, amplitude, startPosition, endBeat, bpmChanges, segments, rings])
+  }, [title, artist, url, audioOffset, amplitude, startPosition, endBeat, bpmChanges, segments, rings])
 
   const saveCurrent = useCallback((chart: Chart) => {
     try {
@@ -1108,10 +1104,9 @@ export default function EditorScreen() {
     pushHistory()
     setTitle(chart.title)
     setArtist(chart.artist)
-    setBpm(chart.bpm)
+    setBpm(chart.bpm_changes[0]?.bpm && chart.bpm_changes[0].bpm > 0 ? chart.bpm_changes[0].bpm : 120)
     setUrl(chart.audio)
     setAudioOffset(chart.audio_offset)
-    setScrollSpeed(chart.scroll_speed)
     setAmplitude(chart.amplitude)
     setStartPosition(chart.start_position ?? 0.0)
     setEndBeat(chart.end_beat)

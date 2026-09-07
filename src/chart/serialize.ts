@@ -14,24 +14,27 @@ export function chartToToml(chart: Chart): string {
   const lines: string[] = []
   lines.push(`title = ${tomlString(chart.title)}`)
   lines.push(`artist = ${tomlString(chart.artist)}`)
-  lines.push(`bpm = ${fmt(chart.bpm)}`)
   lines.push(`audio = ${tomlString(getBasename(chart.audio))}`)
   lines.push(`audio_offset = ${fmt(chart.audio_offset)}`)
-  lines.push(`scroll_speed = ${fmt(chart.scroll_speed)}`)
   lines.push(`amplitude = ${fmt(chart.amplitude)}`)
   lines.push(`start_position = ${fmt(chart.start_position)}`)
   if (typeof chart.end_beat === 'number' && Number.isFinite(chart.end_beat) && chart.end_beat >= 0) {
     lines.push(`end_beat = ${fmt(chart.end_beat)}`)
   }
 
+  // T186: sections (beat/bpm/amplitude?/zoom?) are serialized as [[sections]]
   if (chart.bpm_changes.length === 0) {
-    lines.push(`bpm_changes = []`)
+    lines.push(`[[sections]]`, `beat = 0`, `bpm = 120`)
   } else {
     for (const change of chart.bpm_changes) {
-      const changeLines = ['', '[[bpm_changes]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`]
+      const changeLines = ['', '[[sections]]', `beat = ${fmt(change.beat)}`, `bpm = ${fmt(change.bpm)}`]
       // T131: output per-entry amplitude (speed coefficient) only when set
       if (typeof change.amplitude === 'number' && Number.isFinite(change.amplitude) && change.amplitude > 0) {
         changeLines.push(`amplitude = ${fmt(change.amplitude)}`)
+      }
+      // T186: output per-section zoom only when set
+      if (typeof change.zoom === 'number' && Number.isFinite(change.zoom) && change.zoom > 0) {
+        changeLines.push(`zoom = ${fmt(change.zoom)}`)
       }
       lines.push(...changeLines)
     }

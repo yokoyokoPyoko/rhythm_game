@@ -59,13 +59,11 @@ export function generateCalibrationChart(totalBeats = DEFAULT_TOTAL_BEATS): Char
   return {
     title: 'Calibration Practice',
     artist: '',
-    bpm: CAL_BPM,
     audio: '',
     audio_offset: 0,
-    scroll_speed: 110,
     amplitude: 1.0,
     start_position: 0.0,
-    bpm_changes: [],
+    bpm_changes: [{ beat: 0, bpm: CAL_BPM }],
     segments,
     rings,
   }
@@ -306,7 +304,7 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
         songTimeMs,
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
-        scrollSpeed: chart.scroll_speed,
+        scrollSpeed: 110,
       })
 
       raf = requestAnimationFrame(tick)

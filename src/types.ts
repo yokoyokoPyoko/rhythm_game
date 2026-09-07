@@ -1,14 +1,13 @@
 export interface Segment { direction: 'up' | 'down' | 'stay'; beats: number; }
-export interface BpmChange { beat: number; bpm: number; amplitude?: number; }
+export interface BpmChange { beat: number; bpm: number; amplitude?: number; zoom?: number; }
 export interface RingDef {
   beat: number;
   duration?: number;
   type?: 'single' | 'hold';
 }
 export interface Chart {
-  title: string; artist: string; bpm: number; audio: string;
+  title: string; artist: string; audio: string;
   audio_offset: number;
-  scroll_speed: number;
   amplitude: number;
   start_position: number;
   end_beat?: number;

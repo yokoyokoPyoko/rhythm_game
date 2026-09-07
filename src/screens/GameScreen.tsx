@@ -243,7 +243,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           }
         }
         await audioMgr.ensure()
-        const timeline = new BpmTimeline(chart.bpm, chart.bpm_changes, chart.amplitude)
+        // T186: base tempo is carried by the first (beat-min) section
+        const baseBpm = chart.bpm_changes[0]?.bpm && chart.bpm_changes[0].bpm > 0 ? chart.bpm_changes[0].bpm : 120
+        const timeline = new BpmTimeline(baseBpm, chart.bpm_changes, chart.amplitude)
         chartRef.current = chart
         timelineRef.current = timeline
         waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)
@@ -382,7 +384,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         songTimeMs: songTimeMs,
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
-        scrollSpeed: chart.scroll_speed,
+        scrollSpeed: 110,
       })
 
       const buffer = bufferRef.current
