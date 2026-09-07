@@ -1522,9 +1522,15 @@
       "finished": 1788706939.6244814
     },
     "T185": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788739562.5898733
+      "started": 1788739562.5898733,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f86d034fdffeDeFa599syx8qG3",
+        "coder": "ses_f86cefbafffeXBM4ywsam13pQm"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
