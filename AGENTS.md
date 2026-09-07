@@ -2294,3 +2294,86 @@ const minorStep =
 1. autosave保存→復元でセクション（4値）が再現されること。
 2. 旧TOMLが読めて `scroll_speed` 以外が維持されること。
 3. `tsc --noEmit`、T55・T102/T103・T155・T186〜T190の回帰なし。
+
+---
+
+### [T192] 左ペインのリサイズ＋セクションリストの表形式高密度化＋削除ボタンの小型化
+
+**要求（ユーザー確定）**:
+1. 左ペインをドラッグで横幅変更できるようにする（幅はlocalStorageに永続化）。
+2. セクションリストの各行が別々の枠に見えて情報が詰められないため、行間を狭めた表形式表示にする（ヘッダ行付き）。
+3. 「削除」ボタンが冗長なので小型の「−」ボタンにする。
+
+**修正**:
+- `src/screens/EditorScreen.tsx`: `</aside>` と `<main className="editor-main">` の間にリサイズハンドル `<div className="editor-resizer" data-testid="editor-sidebar-resizer">` を追加。幅state（初期320px、240〜560pxにclamp）を新設し `aside` に `style={{ flex: '0 0 ${w}px' }}` で適用。ドラッグ中は `mousemove` で更新、`mouseup` で確定＋localStorage保存。
+- `src/screens/editor/BpmEditor.tsx`: リスト先頭にヘッダ行（beat／BPM／速度係数／横拡大率／操作）を追加。行構造・クラス名（`bpm-change-item`、`bpm-change-delete` 等）は維持。削除ボタンの表示テキストを「削除」→「−」に変更（`aria-label` の「〜を削除」は維持し、`.gateb_T190.test.ts:172` の `'削除'` 含有要求を満たす）。
+- `src/index.css`: `.editor-resizer`（幅5px程度、`cursor: ew-resize`、ホバーでaccent色）を追加。`.bpm-change-list` の行間を2px程度に縮小し、行区切りは下線のみ・inputをcompact化して表らしくする。`.bpm-change-delete` を小型の正方形に近い最小ボタン化（danger色維持）。
+
+**完了条件**:
+1. ハンドルのドラッグで左ペイン幅が変わり、リロード後も維持されること。
+2. セクションリストがヘッダ付きの表形式で高密度表示され、各行の直接編集・削除が従来通り機能すること。
+3. 削除ボタンが小型「−」表示であり、`aria-label` に「削除」が残ること。
+4. `tsc --noEmit`、T190の回帰なし。
+
+---
+
+### [T193] カスタム譜面ライブラリのIndexedDB基盤
+
+**要求（ユーザー確定）**: リロードやプレイのたびに読み込んだ譜面・音源がリセットされる問題を、B案（IndexedDB永続化）で解消する。その基盤モジュール。
+
+**背景**: カスタム譜面・音源は `ChartCache`／`AudioCache`（インメモリMap）と `useState` にしかなく、リロードで全消去される。
+
+**修正**（新規 `src/storage/libraryDb.ts`）:
+- DB名 `trace-wave-library`、2ストア：`charts`（key=曲ID、value=`{ id, title, artist, difficulty, toml, audioId, addedAt }`）、`audio`（key=audioId、value=`{ id, name, mime, bytes }`）。
+- 音源はデコード済みではなく元のファイルバイト列（圧縮形式のまま）を格納。復元時は `decodeAudioData(bytes.slice(0))` でデコードする（5分曲でも数MB〜十数MBに収まる）。
+- `put/get/list/delete` のCRUD＋容量超過時（`QuotaExceededError`）のエラー通知・古い順削除方針。
+
+**完了条件**:
+1. TOML文字列と音源バイト列の保存・取得・一覧・削除ができること。
+2. `tsc --noEmit` エラーなし。
+
+---
+
+### [T194] SelectScreenの永続化・復元・削除
+
+**要求（ユーザー確定）**: T193の基盤を使い、カスタム曲の追加・リロード復元・削除を実現する。
+
+**修正**（`src/screens/SelectScreen.tsx`）:
+- 「追加」ボタン押下時：TOML文字列＋音源バイトをIndexedDBへ保存。ID（`custom-${Date.now()}`）は確定・永続化し、リロード後も同一IDで参照できるようにする。
+- マウント時：`loadSongList()`（組込曲）＋IndexedDBのカスタム一覧を結合して表示。音源デコードは再生時まで遅延。
+- カスタム曲カードに削除ボタンを追加（IndexedDBからも削除）。
+
+**完了条件**:
+1. 追加→リロード→曲カードが残り、譜面内容が再現されること。
+2. カスタム曲を削除でき、IndexedDBからも消えること。
+3. `tsc --noEmit`、T110/T120の回帰なし。
+
+---
+
+### [T195] GameScreenのIndexedDBフォールバック取得
+
+**要求（ユーザー確定）**: リロード後に直接 `/play/custom-xxx` を開いてもプレイできるようにする。
+
+**修正**（`src/screens/GameScreen.tsx`）:
+- 譜面の解決順序を `ChartCache → IndexedDB（TOMLをparseしてCacheへ）→ songs.toml` に拡張。
+- 音源の解決順序を `AudioCache → IndexedDB（bytesをdecodeしてCacheへ）→ fetch` に拡張（`AudioContext.ensure()` 後にデコード）。
+- 既存の `location.state` 直渡し経路は維持。
+
+**完了条件**:
+1. リロード後に `/play/custom-xxx` を開いて譜面・音源付きでプレイできること。
+2. `tsc --noEmit`、既存経路の回帰なし。
+
+---
+
+### [T196] カスタム譜面ライブラリの結合・回帰
+
+**要求（ユーザー確定）**: T193〜T195の結合仕上げ。
+
+**修正**:
+- 追加→リロード→一覧表示→プレイ（音あり）→削除の一連フロー確認。
+- 容量上限・破損データ時の異常系ハンドリング。
+
+**完了条件**:
+1. 一連フローが破綻なく完了すること。
+2. 異常系でクラッシュせず分かりやすいエラーになること。
+3. `tsc --noEmit`、T110/T120/T194/T195の回帰なし。
