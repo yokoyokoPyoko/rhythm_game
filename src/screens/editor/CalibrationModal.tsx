@@ -270,7 +270,6 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
     const renderer = new Renderer()
     let raf = 0
     let lastTime = performance.now()
-    let prevBeatFloor = 0
 
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - lastTime) / 1000)
@@ -290,12 +289,6 @@ export default function CalibrationModal({ onClose }: CalibrationModalProps) {
 
       cursorRef.current.setAmplitude(timeline.amplitudeAt(currentBeat))
        cursorRef.current.update(dt, keysRef.current.up, keysRef.current.down, currentBeatMs, wave.waveYAtMs(renderTimeMs))
-
-      const beatFloor = Math.floor(currentBeat)
-      if (beatFloor !== prevBeatFloor) {
-        cursorRef.current.pullTowards(wave.waveYAtMs(renderTimeMs), 0.28)
-        prevBeatFloor = beatFloor
-      }
 
       for (const ring of ringsRef.current) {
         if (ring.resolved) continue
