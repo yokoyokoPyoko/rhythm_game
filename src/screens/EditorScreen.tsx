@@ -22,6 +22,7 @@ import { TW_AMP, TW_CENTER_Y, WaveEngine } from '../game/waveEngine'
 import { segmentize, quantizeBeat, type TrajPoint } from '../chart/quantize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
 import BpmEditor from './editor/BpmEditor'
+import SectionAddDialog from './editor/SectionAddDialog'
 import SegmentEditor from './editor/SegmentEditor'
 import WavePreview, { type WaveView } from './editor/WavePreview'
 import CalibrationModal from './editor/CalibrationModal'
@@ -111,6 +112,7 @@ export default function EditorScreen() {
   const [metronomeVolume, setMetronomeVolume] = useState(100)
   const [offsetMs, setOffsetMs] = useState(getManualOffsetMs())
   const [calibrationOpen, setCalibrationOpen] = useState(false)
+  const [sectionDialogOpen, setSectionDialogOpen] = useState(false)
   const savedOffsetRef = useRef(getManualOffsetMs())
   // T159: autosave config + restore dropdown state
   const [autosaveInterval, setAutosaveIntervalState] = useState<number>(() => {
@@ -1519,11 +1521,11 @@ export default function EditorScreen() {
               bpmChanges={bpmChanges}
               onSectionsChange={setBpmChanges}
               amplitude={amplitude}
-              onAmplitudeChange={setAmplitude}
               startPosition={startPosition}
               onStartPositionChange={setStartPosition}
               endBeat={endBeat}
               onEndBeatChange={setEndBeat}
+              onRequestAddSection={() => setSectionDialogOpen(true)}
             />
           </section>
 
@@ -1747,6 +1749,14 @@ export default function EditorScreen() {
         <div className="playtest-overlay">
           <GameScreen playtest={playtest} onExit={closePlaytest} />
         </div>
+      )}
+      {sectionDialogOpen && (
+        <SectionAddDialog
+          sections={bpmChanges}
+          onSectionsChange={setBpmChanges}
+          baseAmplitude={amplitude}
+          onClose={() => setSectionDialogOpen(false)}
+        />
       )}
       {calibrationOpen && (
         <CalibrationModal

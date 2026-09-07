@@ -13,7 +13,7 @@ function safeBeat (v: number): number {
   return v
 }
 
-function safeAmp (v: number): number {
+function safeZoom (v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 1.0
 }
 
@@ -21,36 +21,23 @@ interface BpmEditorProps {
   bpmChanges: BpmChange[]
   onSectionsChange: (next: BpmChange[]) => void
   amplitude: number
-  onAmplitudeChange: (val: number) => void
   startPosition: number
   onStartPositionChange: (val: number) => void
   endBeat?: number
   onEndBeatChange: (val: number | undefined) => void
+  onRequestAddSection: () => void
 }
 
 export default function BpmEditor({
   bpmChanges,
   onSectionsChange,
   amplitude,
-  onAmplitudeChange,
   startPosition,
   onStartPositionChange,
   endBeat,
   onEndBeatChange,
+  onRequestAddSection,
 }: BpmEditorProps) {
-  const addChange = () => {
-    const last = bpmChanges[bpmChanges.length - 1]
-    const defaultBeat = last ? Math.floor(last.beat) + 4 : 4
-    // T131: stamp the current main #amplitude value into the new entry.
-    // T189: the base tempo is derived from the first section; a new section
-    // defaults to the last section's BPM (120 when the list is empty).
-    const injectedBpm = last ? last.bpm : 120
-    onSectionsChange([
-      ...bpmChanges,
-      { beat: defaultBeat, bpm: safeBpm(injectedBpm), amplitude: safeAmp(amplitude) },
-    ])
-  }
-
   const removeChange = (index: number) => {
     onSectionsChange(bpmChanges.filter((_, i) => i !== index))
   }
@@ -61,23 +48,6 @@ export default function BpmEditor({
 
   return (
     <div>
-      <div className="editor-field">
-        <label className="editor-label" htmlFor="amplitude">
-          速度係数 (BPM変更に注入する値)
-        </label>
-        <input
-          id="amplitude"
-          className="editor-input"
-          type="number"
-          min={0.1}
-          max={5.0}
-          step={0.1}
-          value={Number.isFinite(amplitude) ? amplitude : 1.0}
-          onChange={(e) => onAmplitudeChange(Number(e.target.value))}
-        />
-        <p className="editor-hint">「BPM変更を追加」時にこの値を新規エントリーの振幅へスタンプします（直接の波形反映なし）</p>
-      </div>
-
       <div className="editor-field">
         <label className="editor-label" htmlFor="start-position">
           開始位置 (-1.0=下端, 0=中央, 1.0=上端)
@@ -118,9 +88,9 @@ export default function BpmEditor({
         />
       </div>
 
-      <h3 className="editor-subhead">BPM変更</h3>
+      <h3 className="editor-subhead">セクション設定</h3>
       {bpmChanges.length === 0 ? (
-        <p className="editor-empty">BPM変更なし</p>
+        <p className="editor-empty">セクションなし</p>
       ) : (
         <ul className="bpm-change-list">
           {bpmChanges.map((change, i) => (
@@ -132,7 +102,7 @@ export default function BpmEditor({
                 step={0.25}
                 value={safeBeat(change.beat)}
                 onChange={(e) => updateChange(i, { beat: safeBeat(Number(e.target.value)) })}
-                aria-label={`BPM変更${i + 1}のbeat`}
+                aria-label={`セクション${i + 1}のbeat`}
               />
               <input
                 className="editor-input bpm-change-bpm"
@@ -141,7 +111,7 @@ export default function BpmEditor({
                 max={BPM_MAX}
                 value={safeBpm(change.bpm)}
                 onChange={(e) => updateChange(i, { bpm: safeBpm(Number(e.target.value)) })}
-                aria-label={`BPM変更${i + 1}のBPM`}
+                aria-label={`セクション${i + 1}のBPM`}
               />
               <input
                 className="editor-input bpm-change-amplitude"
@@ -156,14 +126,28 @@ export default function BpmEditor({
                   const val = Number.isFinite(v) && v > 0 ? v : undefined
                   updateChange(i, { amplitude: val })
                 }}
-                aria-label={`BPM変更${i + 1}の振幅`}
+                aria-label={`セクション${i + 1}の振幅`}
                 title="空欄なら基本振幅を継続"
+              />
+              <input
+                className="editor-input bpm-change-zoom"
+                type="number"
+                min={0.1}
+                step={0.1}
+                value={change.zoom !== undefined ? safeZoom(change.zoom) : 1.0}
+                placeholder="1.0"
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  updateChange(i, { zoom: Number.isFinite(v) && v > 0 ? v : undefined })
+                }}
+                aria-label={`セクション${i + 1}の横拡大率`}
+                title="空欄なら横拡大率1.0を継続"
               />
               <button
                 type="button"
                 className="bpm-change-delete"
                 onClick={() => removeChange(i)}
-                aria-label={`BPM変更${i + 1}を削除`}
+                aria-label={`セクション${i + 1}を削除`}
               >
                 削除
               </button>
@@ -171,8 +155,8 @@ export default function BpmEditor({
           ))}
         </ul>
       )}
-      <button type="button" className="bpm-change-add" onClick={addChange}>
-        BPM変更を追加
+      <button type="button" className="bpm-change-add" onClick={onRequestAddSection}>
+        セクションを追加
       </button>
     </div>
   )
