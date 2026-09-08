@@ -1,564 +1,525 @@
 /**
- * @vitest-environment node
- * T201 パブリックビュー関連のテスト手直し・結合 — Vitest acceptance test (node, TDD Red->Green)
- * Covers T198 (viewMode基盤 + ルートガード), T199 (SelectScreen分岐 + L/E撤廃), T200 (GameScreen ablations)
- * PLUS preserved editor/calibration regressions, and T127-style numeric consistency.
- * Every test follows 3-step pattern: [Capture Before] -> [Perform Action] -> [Assert Transition]
- * that FAILS on unimplemented code.
+ * T202 — セクション間イージングの型・TOML・補間計算 Vitest pure acceptance
+ * node environment — pure engine math, no DOM, TDD Red->Green
+ * Spec: easeToNext?: 'linear'|'ease-out'|'ease-in' on BpmChange,
+ *       BpmTimeline amplitudeAt/zoomAt interpolation,
+ *       loader/serialize ease_to_next, t=0.5 0.5/0.75/0.25 off-grid required,
+ *       no-ease => step, zero-length fallback.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as path from 'path';
-import { getViewMode, setViewMode, toggleViewMode } from '../src/viewMode';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
-import { Cursor } from '../src/game/cursor';
+import { parseChartText } from '../src/chart/loader';
+import { chartToToml } from '../src/chart/serialize';
+import type { BpmChange, Chart } from '../src/types';
 
 vi.useFakeTimers();
 
-class MemoryStorage {
-  private m = new Map<string, string>();
-  getItem(k: string): string | null { return this.m.has(k) ? this.m.get(k)! : null; }
-  setItem(k: string, v: string): void { this.m.set(k, String(v)); }
-  removeItem(k: string): void { this.m.delete(k); }
-  clear(): void { this.m.clear(); }
-  key(i: number): string | null { return [...this.m.keys()][i] ?? null; }
-  get length(): number { return this.m.size; }
-}
-
-class MockEventTarget {
-  private listeners = new Map<string, EventListenerOrEventListenerObject[]>();
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-    if (!this.listeners.has(type)) this.listeners.set(type, []);
-    this.listeners.get(type)!.push(listener);
-  }
-  removeEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-    const list = this.listeners.get(type);
-    if (list) {
-      const idx = list.indexOf(listener);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
-  dispatchEvent(event: Event): boolean {
-    const list = this.listeners.get(event.type);
-    if (list) {
-      for (const l of list) {
-        if (typeof l === 'function') (l as EventListener)(event);
-        else if (l && typeof (l as EventListenerObject).handleEvent === 'function') (l as EventListenerObject).handleEvent(event);
-      }
-    }
-    return true;
-  }
-}
-
-function installStorageAndWindow(): MemoryStorage {
-  const s = new MemoryStorage();
-  (globalThis as unknown as Record<string, unknown>).localStorage = s as unknown as Storage;
-  (globalThis as unknown as Record<string, unknown>).window = new MockEventTarget() as unknown as Window & typeof globalThis;
-  return s;
-}
-
 beforeEach(() => {
-  installStorageAndWindow();
-  vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
 });
-
 afterEach(() => {
   vi.clearAllTimers();
-  vi.restoreAllMocks();
 });
 
-function readSrc(rel: string): string {
-  const p = path.join(process.cwd(), rel);
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : '';
+function makeTimeline(sections: BpmChange[], baseAmp = 1.0): BpmTimeline {
+  return new (BpmTimeline as unknown as new (a: unknown, b: unknown) => BpmTimeline)(sections as unknown, baseAmp as unknown);
 }
 
-// =============================================================================
-// T201-1: viewMode基盤 — 既定public, toggle永続化, App shortcut + badge + route guard
-// =============================================================================
-describe('T201-1 viewMode基盤とApp全体ガード (T198結合)', () => {
-  it('Step1: Capture initial public default -> Step2: toggle to debug -> Step3: storage and getter reflect debug', () => {
-    // Step1: capture before
-    const before = getViewMode();
-    expect(before).toBe('public');
-    expect(localStorage.getItem('traceWaveViewMode')).toBeNull();
-    // Step2: perform toggle action (simulates Ctrl+Alt+Shift+@ handler calling toggleViewMode)
-    const afterToggle = toggleViewMode();
-    // Step3: assert transition
-    expect(afterToggle).toBe('debug');
-    expect(getViewMode()).toBe('debug');
-    expect(localStorage.getItem('traceWaveViewMode')).toBe('debug');
-  });
+function eased(t: number, kind: 'linear' | 'ease-out' | 'ease-in'): number {
+  if (kind === 'linear') return t;
+  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 2);
+  if (kind === 'ease-in') return Math.pow(t, 2);
+  return t;
+}
 
-  it('Step1: Capture debug state -> Step2: toggle back to public -> Step3: public restored and persisted', () => {
-    // Step1: establish debug
-    setViewMode('debug');
-    expect(getViewMode()).toBe('debug');
-    // Step2: toggle back (second press of combo)
-    const next = toggleViewMode();
-    // Step3: assert public and storage updated
-    expect(next).toBe('public');
-    expect(getViewMode()).toBe('public');
-    expect(localStorage.getItem('traceWaveViewMode')).toBe('public');
-  });
-
-  it('Step1: Capture stored debug value -> Step2: simulate reload via fresh getViewMode() read -> Step3: still debug', () => {
-    // Step1: set debug and capture raw storage
-    setViewMode('debug');
-    const raw = localStorage.getItem('traceWaveViewMode');
-    expect(raw).toBe('debug');
-    // Step2: re-read (simulates reload without clearing storage)
-    const reloadedMode = getViewMode();
-    // Step3: must remain debug, not fallback to public
-    expect(reloadedMode).toBe('debug');
-    expect(raw).not.toBe('public');
-  });
-
-  it('Step1: Read App.tsx source -> Step2: search for Combo Ctrl+Alt+Shift+@ -> Step3: assert handler calls toggleViewMode', () => {
-    // Step1: capture source before assertion
-    const src = readSrc('src/App.tsx');
-    expect(src.length).toBeGreaterThan(0);
-    // Step2: perform pattern extraction (simulates verifying user action plumbing)
-    const hasCtrl = src.includes('ctrlKey');
-    const hasAlt = src.includes('altKey');
-    const hasShift = src.includes('shiftKey');
-    const hasAt = src.includes("'@'") || src.includes('"@"');
-    const callsToggle = src.includes('toggleViewMode');
-    const listensKeydown = src.includes("addEventListener('keydown'") || src.includes('addEventListener("keydown"');
-    // Step3: assert full combo guard present, would FAIL if handler missing
-    expect(hasCtrl).toBe(true);
-    expect(hasAlt).toBe(true);
-    expect(hasShift).toBe(true);
-    expect(hasAt).toBe(true);
-    expect(callsToggle).toBe(true);
-    expect(listensKeydown).toBe(true);
-  });
-
-  it('Step1: Read App.tsx -> Step2: inspect debug badge and route guard -> Step3: badge conditional and /editor redirect present', () => {
-    // Step1: capture
-    const src = readSrc('src/App.tsx');
-    // Step2: extract badge and guard snippets
-    const hasBadgeTestId = src.includes('data-testid="debug-badge"');
-    const hasDebugCondition = src.includes("mode === 'debug'") || src.includes('mode==="debug"');
-    const hasEditorRoute = src.includes('path="/editor"');
-    const hasRedirect = src.includes('Navigate to="/"') || src.includes("Navigate to='/'");
-    const hasPublicGuard = src.includes("mode === 'debug' ?") || src.includes('mode==="debug"?');
-    // Step3: assert both features wired, else public/debug flow broken
-    expect(hasBadgeTestId).toBe(true);
-    expect(hasDebugCondition).toBe(true);
-    expect(hasEditorRoute).toBe(true);
-    expect(hasRedirect).toBe(true);
-    expect(hasPublicGuard).toBe(true);
-  });
-});
-
-// =============================================================================
-// T201-2: SelectScreen モード別分岐 — publicでは非表示, debugでは表示
-// =============================================================================
-describe('T201-2 SelectScreen public/debug分岐 (T199結合)', () => {
-  it('Step1: Capture source has custom-import-section guarded by debug -> Step2: toggle viewMode public->debug -> Step3: guard and file inputs present only in debug path', () => {
-    // Step1: capture source structure before state change
-    const src = readSrc('src/screens/SelectScreen.tsx');
-    expect(src.length).toBeGreaterThan(0);
-    const initialMode = getViewMode();
-    expect(initialMode).toBe('public');
-    // Step2: perform mode toggle to debug (user presses combo)
-    setViewMode('debug');
-    const afterMode = getViewMode();
-    // Step3: assert source guards import section behind debug check and inputs exist
-    expect(afterMode).toBe('debug');
-    // Source must guard custom-import-section behind viewMode/debug
-    const guardedImport = src.includes('custom-import-section') && src.includes("viewMode === 'debug'");
-    expect(guardedImport).toBe(true);
-    // Both file inputs must be inside that guarded block
-    expect(src).toContain('data-testid="home-chart-input"');
-    expect(src).toContain('data-testid="home-audio-input"');
-    expect(src).toContain('data-testid="home-dropzone"');
-    // Button text must be "追加" not old "この譜面でプレイ"
-    expect(src).toContain('追加');
-    expect(src).not.toContain('この譜面でプレイ');
-  });
-
-  it('Step1: Capture debug mode -> Step2: toggle back to public -> Step3: delete/calibration/editor/hint remain guarded (would be hidden in public render)', () => {
-    // Step1: start debug
-    setViewMode('debug');
-    expect(getViewMode()).toBe('debug');
-    const src = readSrc('src/screens/SelectScreen.tsx');
-    // Step2: toggle back to public
-    const back = toggleViewMode();
-    // Step3: assert transition and that guarded elements exist in source but behind debug check
-    expect(back).toBe('public');
-    expect(getViewMode()).toBe('public');
-    // All debug-only UI must be conditional on viewMode==='debug'
-    const guardedDelete = src.includes('song-card-delete') && src.includes("viewMode === 'debug'");
-    const guardedCalibrationBtn = src.includes('select-calibration-button') && src.includes("viewMode === 'debug'");
-    const guardedHint = src.includes('select-hint') && src.includes("viewMode === 'debug'");
-    const guardedNav = src.includes('select-nav') && src.includes("viewMode === 'debug'");
-    expect(guardedDelete).toBe(true);
-    expect(guardedCalibrationBtn).toBe(true);
-    expect(guardedHint).toBe(true);
-    expect(guardedNav).toBe(true);
-    // Click navigation must remain unconditional (both modes can play)
-    expect(src).toContain("navigate('/play/' + song.id)");
-  });
-
-  it('Step1: Capture SelectScreen key handling area -> Step2: scan for L/E navigation listeners -> Step3: assert L/E handlers removed (regression guard)', () => {
-    // Step1: capture source before scan
-    const src = readSrc('src/screens/SelectScreen.tsx');
-    const beforeHasL = src.includes("key === 'l'") || src.includes('key === "l"');
-    const beforeHasE = src.includes("key === 'e'") || src.includes('key === "e"');
-    // Step2: scan for the old navigate-on-key pattern
-    const hasNavigateEditorOnKey = src.includes("navigate('/editor')") && (src.includes("'l'") || src.includes("'e'") || src.includes('"l"') || src.includes('"e"'));
-    const hasNavigateCalibrationOnKey = src.includes("navigate('/calibration')") || src.includes("setCalibrationOpen") && src.includes("key === 'l'");
-    // Actually setCalibrationOpen via key is old pattern; check that no keydown effect handles l/e for navigation
-    const keyHandlerHasLE = (() => {
-      // Rough: find any e.key === 'l'/'L'/'e'/'E' that triggers navigate or setCalibrationOpen
-      const idx = src.indexOf('addEventListener');
-      // If there's no addEventListener at all for keys in SelectScreen, then LE is already removed (desired)
-      return src.includes("e.key === 'l'") || src.includes('e.key === "l"') || src.includes("e.key === 'L'");
-    })();
-    // Step3: L/E navigation must be absent — would FAIL if old L/E listeners still present
-    expect(hasNavigateEditorOnKey).toBe(false);
-    expect(keyHandlerHasLE).toBe(false);
-    void beforeHasL; void beforeHasE; void hasNavigateCalibrationOnKey;
-    // EditorScreen/CalibrationModal retain their own V/E/R and ,. — not checked here but in next suites
-  });
-
-  it('Step1: Capture public mode initial -> Step2: verify delete button selector guarded + empty message present -> Step3: both conditions hold', () => {
-    // Step1: capture initial public mode
-    expect(getViewMode()).toBe('public');
-    const src = readSrc('src/screens/SelectScreen.tsx');
-    // Step2: perform inspection for empty state and delete guard
-    const hasEmptyMessage = src.includes('曲がありません') && src.includes('empty-song-list');
-    const deleteGuardedPattern = src.includes('song-card-delete') && src.includes("isCustom &&") ;
-    // Step3: assert transition would show/hide correctly
-    expect(hasEmptyMessage).toBe(true);
-    expect(deleteGuardedPattern).toBe(true);
-    // After toggling to debug, empty message still present (structural), but delete becomes reachable
-    setViewMode('debug');
-    expect(getViewMode()).toBe('debug');
-    expect(deleteGuardedPattern).toBe(true);
-  });
-});
-
-// =============================================================================
-// T201-3: GameScreenプレイ時機能廃止 — ,/. R K キー完全撤廃、offset表示維持
-// =============================================================================
-describe('T201-3 GameScreen ablation (T200結合) — ,/. R K removed, offset display retained', () => {
-  function gameSrc(): string { return readSrc('src/screens/GameScreen.tsx'); }
-
-  it('Step1: Capture keySound.ts existence -> Step2: check file + import -> Step3: deleted and not imported', () => {
-    // Step1: capture FS state
-    const keySoundPath = path.join(process.cwd(), 'src/audio/keySound.ts');
-    const existsBefore = fs.existsSync(keySoundPath);
-    const src = gameSrc();
-    // Step2: check import absence
-    const hasImport = /from\s+['"]\.\.\/audio\/keySound['"]/.test(src) || /keySound/i.test(src) && src.includes('playKeyClick');
-    // Step3: file must be deleted and no import remains (FAIL if keySound still wired)
-    expect(existsBefore).toBe(false);
-    expect(hasImport).toBe(false);
-    expect(src).not.toMatch(/playKeyClick/);
-    expect(src).not.toMatch(/keySoundOn/);
-  });
-
-  it('Step1: Capture GameScreen source -> Step2: scan for ,/. offset handler + setManualOffset -> Step3: absent and offset read-only', () => {
-    // Step1: capture before (public default)
-    const src = gameSrc();
-    const hasAdjustOffsetBefore = src.includes('adjustOffset');
-    // Step2: scan forbidden adjusters
-    const hasAdjustOffset = /adjustOffset/.test(src);
-    const hasSetManualOffset = /setManualOffset/.test(src);
-    const hasCommaHandler = /e\.key\s*===\s*['"][,\.<>]['"]/.test(src) && src.includes('getManualOffsetMs');
-    const hasOffsetSetter = /const\s*\[\s*offsetMs\s*,\s*setOffsetMs\s*\]/.test(src);
-    const hasReadOnlyOffset = /const\s*\[\s*offsetMs\s*\]\s*=\s*useState\(getManualOffsetMs\)/.test(src) || /const\s*\[offsetMs\]/.test(src);
-    // Step3: assert removed and read-only retained (FAIL if offset still mutable in Game)
-    expect(hasAdjustOffsetBefore).toBe(false);
-    expect(hasAdjustOffset).toBe(false);
-    expect(hasSetManualOffset).toBe(false);
-    expect(hasCommaHandler).toBe(false);
-    expect(hasOffsetSetter).toBe(false);
-    expect(hasReadOnlyOffset).toBe(true);
-    expect(src).toContain('getManualOffsetMs');
-    const clockImportLine = src.split('\n').find(l => l.includes('clock')) ?? '';
-    expect(clockImportLine).not.toContain('setManualOffset');
-  });
-
-  it('Step1: Capture onKeyDown block -> Step2: verify R/resetGame absent but Escape/Arrow/Space retained -> Step3: selective removal confirmed', () => {
-    // Step1: capture
-    const src = gameSrc();
-    const onDownIdx = src.indexOf('const onKeyDown');
-    const block = onDownIdx >= 0 ? src.slice(onDownIdx, onDownIdx + 3000) : src;
-    // Step2: scan for R handler vs allowed handlers
-    const hasRBranch = /e\.key\s*===\s*['"]r['"]/i.test(block) && /resetGame/.test(src);
-    const hasAnyRKey = /e\.key\s*===\s*['"]R['"]/.test(block) || /e\.key\s*===\s*['"]r['"]/.test(block);
-    const hasEscape = block.includes("e.key === 'Escape'");
-    const hasArrowUp = block.includes("e.key === 'ArrowUp'");
-    const hasArrowDown = block.includes("e.key === 'ArrowDown'");
-    const hasSpace = block.includes("e.code === 'Space'");
-    // Step3: R must be gone, essentials must remain (FAIL if over-deleted or R still present)
-    expect(hasRBranch).toBe(false);
-    expect(hasAnyRKey).toBe(false);
-    expect(src).not.toMatch(/resetGame/);
-    expect(hasEscape).toBe(true);
-    expect(hasArrowUp).toBe(true);
-    expect(hasArrowDown).toBe(true);
-    expect(hasSpace).toBe(true);
-  });
-
-  it('Step1: Capture source -> Step2: scan for K handler and keySound state -> Step3: absent, no dead setters', () => {
-    // Step1: capture
-    const src = gameSrc();
-    // Step2: scan
-    const hasKHandler = /e\.key\s*===\s*['"]k['"]/i.test(src);
-    const hasKeySoundState = /keySoundOn/.test(src) || /setKeySoundOn/.test(src);
-    const hasPlayClick = /playKeyClick/.test(src);
-    const onDownIdx = src.indexOf('const onKeyDown');
-    const block = onDownIdx >= 0 ? src.slice(onDownIdx, onDownIdx + 2500) : '';
-    const blockHasK = /['"]k['"]/i.test(block);
-    // Step3: assert stripped
-    expect(hasKHandler).toBe(false);
-    expect(hasKeySoundState).toBe(false);
-    expect(hasPlayClick).toBe(false);
-    expect(blockHasK).toBe(false);
-    // getManualOffsetMs import must survive (display only)
-    expect(src).toContain('getManualOffsetMs');
-  });
-
-  it('Step1: Capture game-offset and game-hint divs -> Step2: extract content -> Step3: offset display + updated hint without removed keys', () => {
-    // Step1: capture
-    const src = gameSrc();
-    // Step2: check offset div and hint
-    const hasOffsetDiv = src.includes('game-offset') && src.includes('offsetMs');
-    const hasOffsetMsPattern = src.includes('offset:') && src.includes('ms');
-    const hintMatch = src.match(/className="game-hint"[^>]*>([^<]*)</);
-    const hintText = hintMatch ? hintMatch[1] : src.slice(src.indexOf('game-hint'), src.indexOf('game-hint') + 400);
-    const mentionsOffsetKeys = hintText.includes(',') && hintText.includes('.') && hintText.toLowerCase().includes('offset');
-    const mentionsReset = /\bR\b/.test(hintText) && hintText.toLowerCase().includes('reset');
-    const mentionsK = /\bK\b/.test(hintText) && /key/i.test(hintText);
-    // Step3: offset div must persist, hint must NOT mention removed shortcuts but must mention remaining controls
-    expect(hasOffsetDiv).toBe(true);
-    expect(hasOffsetMsPattern).toBe(true);
-    expect(mentionsOffsetKeys).toBe(false);
-    expect(mentionsReset).toBe(false);
-    expect(mentionsK).toBe(false);
-    expect(hintText).toContain('Space');
-    expect(hintText).toContain('ESC');
-    expect(src).toContain('Space: 判定 / ↑↓: 移動 / ESC: 戻る');
-  });
-});
-
-// =============================================================================
-// T201-4: 廃止しないもの — Editor内R録音・,/.微調整・CalibrationModal内キー の回帰確認
-// =============================================================================
-describe('T201-4 preserved editor/calibration keys regression (must NOT be removed)', () => {
-  it('Step1: Capture EditorScreen source -> Step2: verify R toggles record and ,/. adjusts offset still present -> Step3: both retained', () => {
-    // Step1: capture
-    const src = readSrc('src/screens/EditorScreen.tsx');
-    expect(src.length).toBeGreaterThan(0);
-    // Step2: scan preserved handlers
-    const hasRRecordToggle = src.includes("e.code === 'KeyR'") && src.includes('setEditMode') && (src.includes('startRecording') || src.includes('finishRecording'));
-    const hasCommaEditor = src.includes("e.key === ','") || src.includes('e.key === ","');
-    const hasDotEditor = src.includes("e.key === '.'") || src.includes('e.key === "."');
-    const hasOffsetEditor = src.includes('setManualOffset') && src.includes('getManualOffsetMs');
-    const hasRingSpaceInRecord = src.includes("modeRef.current === 'record'") && src.includes("e.code === 'Space'");
-    // Step3: editor must retain all of these (FAIL if T200 over-deleted editor)
-    expect(hasRRecordToggle).toBe(true);
-    expect(hasCommaEditor).toBe(true);
-    expect(hasDotEditor).toBe(true);
-    expect(hasOffsetEditor).toBe(true);
-    expect(hasRingSpaceInRecord).toBe(true);
-  });
-
-  it('Step1: Capture CalibrationModal source -> Step2: verify ,/. Space ESC Enter handlers retained -> Step3: assert all present', () => {
-    // Step1: capture
-    const src = readSrc('src/screens/editor/CalibrationModal.tsx');
-    expect(src.length).toBeGreaterThan(0);
-    // Step2: scan preserved calibration handlers
-    const hasCommaCal = src.includes("e.key === ','") || src.includes("e.key === '<'");
-    const hasDotCal = src.includes("e.key === '.'") || src.includes("e.key === '>'");
-    const hasSpaceCal = src.includes("e.code === 'Space'") && src.includes('handleHit');
-    const hasEscCal = src.includes("e.key === 'Escape'") && src.includes('cancel');
-    const hasEnterCal = src.includes("e.key === 'Enter'") && src.includes('save');
-    const hasAdjustOffsetCal = src.includes('adjustOffset') && src.includes('setManualOffset');
-    // Step3: calibration must retain fine-tuning and hit handling
-    expect(hasCommaCal).toBe(true);
-    expect(hasDotCal).toBe(true);
-    expect(hasSpaceCal).toBe(true);
-    expect(hasEscCal).toBe(true);
-    expect(hasEnterCal).toBe(true);
-    expect(hasAdjustOffsetCal).toBe(true);
-  });
-
-  it('Step1: Capture EditorScreen and CalibrationModal -> Step2: verify editor still imports setManualOffset while GameScreen does not -> Step3: differential retained/abandoned correct', () => {
-    // Step1: capture all three
-    const editorSrc = readSrc('src/screens/EditorScreen.tsx');
-    const calSrc = readSrc('src/screens/editor/CalibrationModal.tsx');
-    const gameSrc = readSrc('src/screens/GameScreen.tsx');
-    // Step2: compare imports
-    const editorHasSet = editorSrc.includes('setManualOffset');
-    const calHasSet = calSrc.includes('setManualOffset');
-    const gameHasSet = gameSrc.includes('setManualOffset');
-    // Step3: editor & cal must keep, game must NOT (differential guard)
-    expect(editorHasSet).toBe(true);
-    expect(calHasSet).toBe(true);
-    expect(gameHasSet).toBe(false);
-  });
-});
-
-// =============================================================================
-// T201-5: 統合フロー — public既定 -> debug表示 -> public非表示 -> キー無効
-// =============================================================================
-describe('T201-5 public既定・デバッグ切替の一連フローが破綻なく動く', () => {
-  it('Step1: Capture initial public -> Step2: toggle to debug -> Step3: localStorage debug persists and re-read correct', () => {
-    // Step1: capture initial (simulates fresh load)
-    expect(getViewMode()).toBe('public');
-    expect(localStorage.getItem('traceWaveViewMode')).toBeNull();
-    // Step2: user presses Ctrl+Alt+Shift+@ (calls toggleViewMode)
-    const first = toggleViewMode();
-    const storedAfterFirst = localStorage.getItem('traceWaveViewMode');
-    // Step3: debug active and storage matches
-    expect(first).toBe('debug');
-    expect(storedAfterFirst).toBe('debug');
-    expect(getViewMode()).toBe('debug');
-    // Simulate reload: re-read without clearing storage
-    expect(getViewMode()).toBe('debug');
-  });
-
-  it('Step1: Start from debug -> Step2: toggle back to public -> Step3: public persisted and source guards confirm hidden UI', () => {
-    // Step1: ensure debug first
-    setViewMode('debug');
-    expect(getViewMode()).toBe('debug');
-    const src = readSrc('src/screens/SelectScreen.tsx');
-    // Step2: second combo press back to public
-    const second = toggleViewMode();
-    const stored = localStorage.getItem('traceWaveViewMode');
-    // Step3: public restored
-    expect(second).toBe('public');
-    expect(stored).toBe('public');
-    expect(getViewMode()).toBe('public');
-    // Source guards prove that public render would hide debug UI (net effect = hidden in public)
-    expect(src).toContain('custom-import-section');
-    expect(src).toContain("viewMode === 'debug'");
-  });
-
-  it('Step1: Capture public mode offset value -> Step2: attempt GameScreen ,/. toggle (should be no-op) -> Step3: offset unchanged and display selector intact', () => {
-    // Step1: capture GameScreen source state and initial offset mock
-    const src = readSrc('src/screens/GameScreen.tsx');
-    const s = installStorageAndWindow();
-    s.setItem('rhythmManualOffsetMs', '42');
-    s.setItem('rhythmManualOffsetVersion', '2');
-    // Simulate GameScreen import of offset (read-only)
-    const beforeOffsetRaw = s.getItem('rhythmManualOffsetMs');
-    expect(beforeOffsetRaw).toBe('42');
-    // Step2: verify GameScreen has no setManualOffset to change it (no-op path)
-    const hasSetInGame = src.includes('setManualOffset');
-    expect(hasSetInGame).toBe(false);
-    // Step3: offset must remain 42, not mutated, and display still references it
-    expect(s.getItem('rhythmManualOffsetMs')).toBe('42');
-    expect(src).toContain('offset:');
-    expect(src).toContain('getManualOffsetMs');
-  });
-});
-
-// =============================================================================
-// T201-6: T127-style pure numeric consistency — WaveEngine/Cursor off-grid with complex amps
-// =============================================================================
-describe('T201-6 純粋エンジン回帰 — WaveEngine.waveYAt vs Cursor.update 数値整合 (complex amps + off-grid)', () => {
-  const complexAmps = [0.7, 1.3, 2.7, 3.4];
-  const offGridBeats = [0.37, 1.23, 4.37, 2.73];
-
-  for (const amp of complexAmps) {
-    it(`amp=${amp} 4パターン off-gridで waveYAtが cursor速度式 2*TW_AMP*amp と整合 (3-step)`, () => {
-      // Step1: capture initial timeline/wave state with complex amp
-      const timeline = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-      const segments: { direction: 'up' | 'down' | 'stay'; beats: number }[] = [
-        { direction: 'up', beats: 2 },
-        { direction: 'down', beats: 2 },
-        { direction: 'stay', beats: 1 },
-      ];
-      const wave = new WaveEngine(segments, timeline, amp, 0.0);
-      const waveTop = TW_CENTER_Y - TW_AMP;
-      const waveBottom = TW_CENTER_Y + TW_AMP;
-
-      // Step2: perform off-grid sampling + cursor tick
-      for (const ob of offGridBeats) {
-        const y = wave.waveYAt(ob);
-        // Must be finite and bounded (fixed height invariant T123/T124)
-        expect(Number.isFinite(y)).toBe(true);
-        expect(y).toBeGreaterThanOrEqual(waveTop - 0.01);
-        expect(y).toBeLessThanOrEqual(waveBottom + 0.01);
-      }
-      const points = wave.getPoints();
-      expect(points.length).toBe(segments.length + 1);
-      const totalBeats = segments.reduce((s, seg) => s + seg.beats, 0);
-      expect(points[0].beat).toBeCloseTo(0, 6);
-      expect(points[points.length - 1].beat).toBeCloseTo(totalBeats, 6);
-
-      // Step3: cursor consistency — per-beat displacement must equal the wave slope 2*TW_AMP*amp
-      const cursor = new Cursor(amp, 0.0);
-      const beatMs = timeline.beatMsAt(0);
-      const expectedPerBeatPx = 2 * TW_AMP * amp;
-      // Start from the TOP and hold down for a partial beat so the movement
-      // stays well within [waveTop, waveBottom] regardless of amp (no clamp distortion):
-      // 0.25 beat => 0.25 * perBeat px, bounded because max perBeat here is for amp=3.4 => 884 * 0.25 = 221 < 260.
-      cursor.y = waveTop;
-      const dtBeat = 0.25;
-      const dtSec = (dtBeat * beatMs) / 1000;
-      const yBefore = cursor.y;
-      cursor.update(dtSec, false, true, beatMs, undefined);
-      const moved = cursor.y - yBefore;
-      // Scale partial-beat movement back to a full-beat equivalent and compare to the slope.
-      const measuredPerBeatPx = moved / dtBeat;
-      // Direction down should increase Y.
-      expect(cursor.y).toBeGreaterThan(yBefore);
-      // Cursor must remain inside the physical field.
-      expect(cursor.y).toBeGreaterThanOrEqual(waveTop);
-      expect(cursor.y).toBeLessThanOrEqual(waveBottom);
-      // Per-beat displacement must match the waveform slope 2*TW_AMP*amp (T127/T128 numeric consistency).
-      expect(Math.abs(measuredPerBeatPx - expectedPerBeatPx)).toBeLessThan(2);
-      // Full-beat displacement is only bounded by the clamp for amps whose full-beat travel exceeds 260px.
-      if (expectedPerBeatPx > 260) {
-        expect(moved).toBeLessThanOrEqual(expectedPerBeatPx + 1);
-      }
+describe('T202 セクション間イージング — Vitest pure engine (TDD Red)', () => {
+  describe('0. BpmChange.easeToNext 型定義', () => {
+    it('types.ts に easeToNext?: linear|ease-out|ease-in が定義される (3-step)', () => {
+      const beforeSrc = fs.readFileSync('src/types.ts', 'utf-8');
+      const hasBeforePattern = beforeSrc.includes('easeToNext');
+      void hasBeforePattern;
+      const src = fs.readFileSync('src/types.ts', 'utf-8');
+      expect(src).toMatch(/easeToNext\?\s*:\s*['"]linear['"]\s*\|\s*['"]ease-out['"]\s*\|\s*['"]ease-in['"]/);
+      expect(src).toMatch(/interface BpmChange[\s\S]*?easeToNext/);
     });
-  }
-
-  it('Step1: amp=1.3 down 3beats off-grid -> Step2: sample waveYAt 0.25/0.37/0.5/1.23 -> Step3: clamp-interpolated and within bounds', () => {
-    // Step1: capture wave
-    const amp = 1.3;
-    const timeline = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-    const wave = new WaveEngine([{ direction: 'down', beats: 3 }], timeline, amp, 0.0);
-    const waveBottom = TW_CENTER_Y + TW_AMP;
-    // Step2: perform samplings
-    const y025 = wave.waveYAt(0.25);
-    const y037 = wave.waveYAt(0.37);
-    const y05 = wave.waveYAt(0.5);
-    const y123 = wave.waveYAt(1.23);
-    // Step3: assert climbing then clamped stay
-    expect(y025).toBeGreaterThan(TW_CENTER_Y);
-    expect(y037).toBeGreaterThan(y025);
-    expect(y05).toBeCloseTo(waveBottom, 0);
-    expect(y123).toBeCloseTo(waveBottom, 0);
-    // After reaching bottom, stays flat
-    expect(wave.waveYAt(2.0)).toBeCloseTo(waveBottom, 0);
   });
 
-  it('Step1: Cursor amp=2.7 with off-grid wave pulls -> Step2: tick at renderTimeMs 0.37/1.23/2.7 -> Step3: bounded and finite', () => {
-    // Step1: build timeline/wave/cursor
-    const amp = 2.7;
-    const timeline = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-    const wave = new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], timeline, amp, 0.0);
-    const cursor = new Cursor(amp, 0.0);
-    // Step2: simulate ticks pulling toward off-grid waveY
-    const beats = [0.37, 1.23, 2.7];
-    for (const b of beats) {
-      const waveY = wave.waveYAt(b);
-      const curBeatMs = timeline.beatMsAt(b);
-      cursor.update(0.016, false, false, curBeatMs, waveY);
-    }
-    // Step3: cursor must remain within physical field and finite
-    expect(cursor.y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1);
-    expect(cursor.y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1);
-    expect(Number.isFinite(cursor.y)).toBe(true);
+  describe('1. amplitudeAt linear イージング (t=0.5で0.5) off-grid', () => {
+    it('beat 0 amp0.7 -> beat4 amp1.5 linear: 中間2.0で0.5補間, 端数0.37で線形一致 (3-step)', () => {
+      const tlStep = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.7 },
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      const beforeMid = tlStep.amplitudeAt(2);
+      expect(beforeMid).toBeCloseTo(0.7, 5);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      const start = 0.7, end = 1.5;
+      const atMid = tl.amplitudeAt(2);
+      expect(atMid).toBeCloseTo(start + (end - start) * 0.5, 4);
+      const t037 = (0.37 - 0) / 4;
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(start + (end - start) * eased(t037, 'linear'), 4);
+      const t123 = (1.23 - 0) / 4;
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(start + (end - start) * eased(t123, 'linear'), 4);
+      expect(tl.amplitudeAt(0)).toBeCloseTo(start, 5);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(end, 5);
+      expect(tl.amplitudeAt(4.01)).toBeCloseTo(end, 5);
+      expect(atMid).not.toBeCloseTo(beforeMid, 4);
+    });
+
+    it('複雑振幅 1.3<->2.7 linear off-grid 3.37等で数値整合 (3-step)', () => {
+      const tlBefore = makeTimeline([
+        { beat: 2, bpm: 130, amplitude: 1.3 },
+        { beat: 6, bpm: 130, amplitude: 2.7 },
+      ], 1.0);
+      expect(tlBefore.amplitudeAt(4)).toBeCloseTo(1.3, 5);
+      const tl = makeTimeline([
+        { beat: 2, bpm: 130, amplitude: 1.3, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 6, bpm: 130, amplitude: 2.7 },
+      ], 1.0);
+      const start = 1.3, end = 2.7, span = 4;
+      expect(tl.amplitudeAt(2)).toBeCloseTo(start, 5);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(start + (end - start) * 0.5, 4);
+      expect(tl.amplitudeAt(6)).toBeCloseTo(end, 5);
+      const t337 = (3.37 - 2) / span;
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(start + (end - start) * t337, 4);
+      const t523 = (5.23 - 2) / span;
+      expect(tl.amplitudeAt(5.23)).toBeCloseTo(start + (end - start) * t523, 4);
+    });
+  });
+
+  describe('2. amplitudeAt ease-out (t=0.5で0.75) off-grid', () => {
+    it('beat0 amp0.5->beat4 amp1.5 ease-out: mid 0.75, 端数0.37/1.23で曲線一致 (3-step)', () => {
+      const tlStep = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.5 },
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      const beforeMid = tlStep.amplitudeAt(2);
+      expect(beforeMid).toBeCloseTo(0.5, 5);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.5, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      const start = 0.5, end = 1.5;
+      expect(tl.amplitudeAt(2)).toBeCloseTo(start + (end - start) * 0.75, 4);
+      expect(tl.amplitudeAt(2)).not.toBeCloseTo(beforeMid, 4);
+      const t037 = (0.37 - 0) / 4;
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(start + (end - start) * eased(t037, 'ease-out'), 4);
+      const t123 = (1.23 - 0) / 4;
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(start + (end - start) * eased(t123, 'ease-out'), 4);
+      expect(tl.amplitudeAt(1.0)).toBeCloseTo(start + (end - start) * eased(0.25, 'ease-out'), 4);
+      expect(tl.amplitudeAt(3.0)).toBeCloseTo(start + (end - start) * eased(0.75, 'ease-out'), 4);
+      expect(tl.amplitudeAt(0)).toBeCloseTo(start, 5);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(end, 5);
+    });
+
+    it('複雑amp 2.7 -> 0.7 ease-out でも数値整合 (降順) (3-step)', () => {
+      const tl = makeTimeline([
+        { beat: 1, bpm: 120, amplitude: 2.7, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 5, bpm: 120, amplitude: 0.7 },
+      ], 1.0);
+      const start = 2.7, end = 0.7;
+      expect(tl.amplitudeAt(3.0)).toBeCloseTo(start + (end - start) * 0.75, 4);
+      const tOff = (2.37 - 1) / 4;
+      expect(tl.amplitudeAt(2.37)).toBeCloseTo(start + (end - start) * eased(tOff, 'ease-out'), 4);
+    });
+  });
+
+  describe('3. amplitudeAt ease-in (t=0.5で0.25) off-grid', () => {
+    it('beat0 amp0.5->beat4 amp1.5 ease-in: mid 0.25, 端数0.37/1.23で曲線一致 (3-step)', () => {
+      const tlStep = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.5 },
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      const beforeMid = tlStep.amplitudeAt(2);
+      expect(beforeMid).toBeCloseTo(0.5, 5);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.5, easeToNext: 'ease-in' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      const start = 0.5, end = 1.5;
+      expect(tl.amplitudeAt(2)).toBeCloseTo(start + (end - start) * 0.25, 4);
+      expect(tl.amplitudeAt(2)).not.toBeCloseTo(beforeMid, 4);
+      const t037 = (0.37) / 4;
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(start + (end - start) * eased(t037, 'ease-in'), 4);
+      const t123 = (1.23) / 4;
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(start + (end - start) * eased(t123, 'ease-in'), 4);
+      expect(tl.amplitudeAt(1.0)).toBeCloseTo(start + (end - start) * eased(0.25, 'ease-in'), 4);
+      expect(tl.amplitudeAt(3.0)).toBeCloseTo(start + (end - start) * eased(0.75, 'ease-in'), 4);
+      expect(tl.amplitudeAt(0)).toBeCloseTo(start, 5);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(end, 5);
+    });
+  });
+
+  describe('4. zoomAt イージング (amplitudeと同ロジック) off-grid', () => {
+    it('zoom linear ease-out ease-in の t=0.5 で 0.5/0.75/0.25 (3-step)', () => {
+      const tlStep = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0 } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
+      expect(tlStep.zoomAt(2)).toBeCloseTo(1.0, 5);
+      const tlLin = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'linear' } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
+      expect(tlLin.zoomAt(2)).toBeCloseTo(1.5, 4);
+      expect(tlLin.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.0925, 'linear'), 4);
+      expect(tlLin.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(0.3075, 'linear'), 4);
+      const tlOut = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
+      expect(tlOut.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlOut.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.0925, 'ease-out'), 4);
+      expect(tlOut.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(0.3075, 'ease-out'), 4);
+      const tlIn = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-in' } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
+      expect(tlIn.zoomAt(2)).toBeCloseTo(1.25, 4);
+      expect(tlIn.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.0925, 'ease-in'), 4);
+    });
+
+    it('zoom 複雑値 0.7->1.3 linear と 2.7 off-grid で数値整合 (3-step)', () => {
+      const tl = makeTimeline([
+        { beat: 2, bpm: 120, zoom: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 6, bpm: 120, zoom: 1.3 } as unknown as BpmChange,
+      ], 1.0);
+      expect(tl.zoomAt(4)).toBeCloseTo(1.0, 4);
+      expect(tl.zoomAt(3.37)).toBeCloseTo(0.7 + 0.6 * eased((3.37 - 2) / 4, 'linear'), 4);
+      expect(tl.zoomAt(2.37)).toBeCloseTo(0.7 + 0.6 * eased((2.37 - 2) / 4, 'linear'), 4);
+    });
+  });
+
+  describe('5. イージング無し区間は従来通りのステップ', () => {
+    it('easeToNext無しはステップ: 途中は開始値、beat到達で瞬間切替 (3-step off-grid)', () => {
+      const tlEase = makeTimeline([{ beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange, { beat: 4, bpm: 120, amplitude: 1.5 }], 1.0);
+      expect(tlEase.amplitudeAt(2)).toBeCloseTo(1.1, 4);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.7 },
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+      ], 1.0);
+      expect(tl.amplitudeAt(0)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(3.99)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(1.5, 5);
+      expect(tl.amplitudeAt(4.23)).toBeCloseTo(1.5, 5);
+      const tlZoomStep = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0 } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
+      expect(tlZoomStep.zoomAt(2)).toBeCloseTo(1.0, 5);
+      expect(tlZoomStep.zoomAt(3.99)).toBeCloseTo(1.0, 5);
+      expect(tlZoomStep.zoomAt(4)).toBeCloseTo(2.0, 5);
+    });
+
+    it('混合: 区間A has ease, 区間B has no ease — それぞれ挙動が分離 (3-step)', () => {
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, amplitude: 1.5 },
+        { beat: 8, bpm: 120, amplitude: 2.5 },
+      ], 1.0);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(1.1, 4);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(1.5, 5);
+      expect(tl.amplitudeAt(6)).toBeCloseTo(1.5, 5);
+      expect(tl.amplitudeAt(7.99)).toBeCloseTo(1.5, 5);
+      expect(tl.amplitudeAt(8)).toBeCloseTo(2.5, 5);
+      const tlZ = makeTimeline([
+        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
+        { beat: 8, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
+      ], 1.0);
+      expect(tlZ.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlZ.zoomAt(6)).toBeCloseTo(2.0, 5);
+    });
+  });
+
+  describe('6. ゼロ長区間 (A.beat==B.beat) は瞬間切替フォールバック', () => {
+    it('同beat 4に2エントリ(collocated)でease linearでも瞬間切替 (3-step)', () => {
+      const tlNormal = makeTimeline([{ beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange, { beat: 4, bpm: 120, amplitude: 1.5 }], 1.0);
+      expect(tlNormal.amplitudeAt(2)).toBeCloseTo(1.1, 4);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, amplitude: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, amplitude: 1.8 },
+      ], 1.0);
+      expect(tl.amplitudeAt(0)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(0.85, 4);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(1.8, 5);
+      expect(tl.amplitudeAt(3.99)).not.toBeCloseTo(1.8, 1);
+      expect(Number.isFinite(tl.amplitudeAt(2))).toBe(true);
+      expect(Number.isFinite(tl.amplitudeAt(4))).toBe(true);
+    });
+
+    it('ゼロ長 zoom でも stepフォールバック (3-step)', () => {
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, zoom: 2.0, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
+      ], 1.0);
+      expect(tl.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tl.zoomAt(4)).toBeCloseTo(3.0, 5);
+      expect(Number.isFinite(tl.zoomAt(3.99))).toBe(true);
+    });
+  });
+
+  describe('7. 端点値は既存解決規則 — 未設定なら継承値で補間', () => {
+    it('amplitude: start定義・end未定義 => フラット補間 (start->start) (3-step off-grid)', () => {
+      const tlStep = makeTimeline([{ beat: 0, bpm: 120, amplitude: 0.8 }, { beat: 4, bpm: 120 }, { beat: 8, bpm: 120, amplitude: 1.6 }], 1.0);
+      expect(tlStep.amplitudeAt(2)).toBeCloseTo(0.8, 5);
+      expect(tlStep.amplitudeAt(6)).toBeCloseTo(0.8, 5);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.8, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 4, bpm: 120 },
+        { beat: 8, bpm: 120, amplitude: 1.6 },
+      ], 1.0);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(0.8, 4);
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.8, 4);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(0.8, 4);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(0.8, 5);
+      expect(tl.amplitudeAt(6)).toBeCloseTo(0.8, 5);
+    });
+
+    it('zoom: baseフォールバック: 未定義start => base(1.0)から開始 (3-step)', () => {
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
+      ], 1.0);
+      expect(tl.zoomAt(0)).toBeCloseTo(1.0, 5);
+      expect(tl.zoomAt(2)).toBeCloseTo(1.5, 4);
+      expect(tl.zoomAt(4)).toBeCloseTo(2.0, 5);
+    });
+
+    it('baseAmplitudeカスタム(0.7) が始値として引き継がれる (3-step)', () => {
+      const tl = makeTimeline([
+        { beat: 4, bpm: 120, amplitude: 1.5, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 8, bpm: 120, amplitude: 2.5 },
+      ], 0.7);
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(0.7, 5);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(1.5, 5);
+      expect(tl.amplitudeAt(6)).toBeCloseTo(2.0, 4);
+    });
+  });
+
+  describe('8. BPM/時刻写像はイージング影響なし（瞬間切替）', () => {
+    it('ease有無がbeatToMs/bpmAt/beatMsAtに影響しない (3-step off-grid)', () => {
+      const sectionsNoEase: BpmChange[] = [
+        { beat: 0, bpm: 120, amplitude: 0.7, zoom: 1.0 },
+        { beat: 4, bpm: 150, amplitude: 1.5, zoom: 2.0 },
+      ];
+      const sectionsWithEase: BpmChange[] = [
+        { beat: 0, bpm: 120, amplitude: 0.7, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 4, bpm: 150, amplitude: 1.5, zoom: 2.0, easeToNext: 'linear' } as unknown as BpmChange,
+      ];
+      const tlNo = makeTimeline(sectionsNoEase, 1.0);
+      const tlWith = makeTimeline(sectionsWithEase, 1.0);
+      expect(tlNo.beatToMs(0.37)).toBeCloseTo(tlWith.beatToMs(0.37), 5);
+      expect(tlNo.beatToMs(1.23)).toBeCloseTo(tlWith.beatToMs(1.23), 5);
+      expect(tlNo.beatToMs(4.37)).toBeCloseTo(tlWith.beatToMs(4.37), 5);
+      expect(tlNo.bpmAt(0.37)).toBeCloseTo(120, 5);
+      expect(tlWith.bpmAt(0.37)).toBeCloseTo(120, 5);
+      expect(tlNo.bpmAt(4.37)).toBeCloseTo(150, 5);
+      expect(tlWith.bpmAt(4.37)).toBeCloseTo(150, 5);
+      expect(tlNo.beatMsAt(0.37)).toBeCloseTo(500, 5);
+      expect(tlWith.beatMsAt(4.37)).toBeCloseTo(400, 5);
+      expect(tlWith.msToBeat(tlWith.beatToMs(2.37))).toBeCloseTo(2.37, 3);
+    });
+  });
+
+  describe('9. TOML loader/serialize ease_to_next 入出力と不正値無視', () => {
+    it('parseChartTextが [[sections]] ease_to_next 3種を読み込む (3-step)', () => {
+      const tomlNoEase = `
+title = "NoEase"
+artist = ""
+audio = "a.flac"
+[[sections]]
+beat = 0
+bpm = 120
+amplitude = 0.7
+[[sections]]
+beat = 4
+bpm = 150
+amplitude = 1.5
+`;
+      const parsedNo = parseChartText(tomlNoEase);
+      expect((parsedNo.bpm_changes[0] as any).easeToNext).toBeUndefined();
+      expect((parsedNo.bpm_changes[1] as any).easeToNext).toBeUndefined();
+      const tomlWithEase = `
+title = "WithEase"
+artist = ""
+audio = "a.flac"
+[[sections]]
+beat = 0
+bpm = 120
+amplitude = 0.7
+ease_to_next = "linear"
+[[sections]]
+beat = 4
+bpm = 150
+amplitude = 1.5
+ease_to_next = "ease-out"
+[[sections]]
+beat = 8
+bpm = 140
+amplitude = 2.0
+ease_to_next = "ease-in"
+`;
+      const parsed = parseChartText(tomlWithEase);
+      expect((parsed.bpm_changes[0] as any).easeToNext).toBe('linear');
+      expect((parsed.bpm_changes[1] as any).easeToNext).toBe('ease-out');
+      expect((parsed.bpm_changes[2] as any).easeToNext).toBe('ease-in');
+    });
+
+    it('不正なease_to_next値(bogus/empty/number)は無視してundefined扱い (3-step)', () => {
+      const tomlInvalid = `
+title = "Invalid"
+artist = ""
+audio = "a.flac"
+[[sections]]
+beat = 0
+bpm = 120
+ease_to_next = "bogus"
+[[sections]]
+beat = 4
+bpm = 130
+ease_to_next = ""
+[[sections]]
+beat = 8
+bpm = 140
+ease_to_next = "LINEAR"
+`;
+      const parsed = parseChartText(tomlInvalid);
+      expect((parsed.bpm_changes[0] as any).easeToNext).toBeUndefined();
+      expect((parsed.bpm_changes[1] as any).easeToNext).toBeUndefined();
+      expect((parsed.bpm_changes[2] as any).easeToNext).toBeUndefined();
+      const chartObj: Chart = {
+        title: 'Garbage',
+        artist: '',
+        audio: 'g.flac',
+        audio_offset: 0,
+        amplitude: 1.0,
+        start_position: 0,
+        bpm_changes: [
+          { beat: 0, bpm: 120, easeToNext: 'bogus' } as unknown as BpmChange,
+          { beat: 4, bpm: 120, easeToNext: '' } as unknown as BpmChange,
+          { beat: 8, bpm: 120, easeToNext: 'linear' } as unknown as BpmChange,
+        ],
+        segments: [],
+        rings: [],
+      };
+      const tomlFromGarbage = chartToToml(chartObj as unknown as Chart);
+      const reparsed = parseChartText(tomlFromGarbage);
+      expect((reparsed.bpm_changes[0] as any).easeToNext).toBeUndefined();
+      expect((reparsed.bpm_changes[1] as any).easeToNext).toBeUndefined();
+      expect((reparsed.bpm_changes[2] as any).easeToNext).toBe('linear');
+    });
+
+    it('chartToTomlが ease_to_next を有効値のみ出力し、読み戻し(TOML往復)で一致 (3-step off-grid)', () => {
+      const chartBefore: Chart = {
+        title: 'RoundTrip Ease 0.37',
+        artist: 'Tester',
+        audio: 'rt.flac',
+        audio_offset: 0,
+        amplitude: 1.0,
+        start_position: 0,
+        bpm_changes: [
+          { beat: 0, bpm: 120, amplitude: 0.7, zoom: 0.5, easeToNext: 'linear' } as unknown as BpmChange,
+          { beat: 4.37, bpm: 150, amplitude: 1.3, zoom: 1.5, easeToNext: 'ease-out' } as unknown as BpmChange,
+          { beat: 8.25, bpm: 140, amplitude: 2.7 } as unknown as BpmChange,
+          { beat: 12.125, bpm: 130, zoom: 2.0, easeToNext: 'ease-in' } as unknown as BpmChange,
+        ],
+        segments: [],
+        rings: [],
+      };
+      const beforeToml = chartToToml(chartBefore);
+      const beforeLines = beforeToml.split('\n').filter(l => l.includes('ease_to_next'));
+      expect(beforeLines.length).toBe(3);
+      expect(beforeToml).toContain('ease_to_next = "linear"');
+      expect(beforeToml).toContain('ease_to_next = "ease-out"');
+      expect(beforeToml).toContain('ease_to_next = "ease-in"');
+      const reparsed = parseChartText(beforeToml);
+      expect(reparsed.bpm_changes.length).toBe(4);
+      expect((reparsed.bpm_changes[0] as any).easeToNext).toBe('linear');
+      expect((reparsed.bpm_changes[1] as any).easeToNext).toBe('ease-out');
+      expect((reparsed.bpm_changes[2] as any).easeToNext).toBeUndefined();
+      expect((reparsed.bpm_changes[3] as any).easeToNext).toBe('ease-in');
+      expect(reparsed.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
+      expect(reparsed.bpm_changes[2].beat).toBeCloseTo(8.25, 3);
+      expect(reparsed.bpm_changes[3].beat).toBeCloseTo(12.125, 3);
+      expect((reparsed.bpm_changes[0] as any).zoom).toBeCloseTo(0.5, 3);
+      expect(reparsed.bpm_changes[0].amplitude).toBeCloseTo(0.7, 3);
+      const tl = makeTimeline(reparsed.bpm_changes, reparsed.amplitude);
+      const midBeat = 4.37 + (8.25 - 4.37) / 2;
+      const expectedMid = 1.3 + (2.7 - 1.3) * 0.75;
+      expect(tl.amplitudeAt(midBeat)).toBeCloseTo(expectedMid, 3);
+    });
+
+    it('旧 [[bpm_changes]] エイリアスでも ease_to_next が読み込まれる (3-step)', () => {
+      const oldToml = `
+title = "OldAlias"
+artist = ""
+audio = "a.flac"
+[[bpm_changes]]
+beat = 0
+bpm = 120
+amplitude = 0.7
+ease_to_next = "linear"
+[[bpm_changes]]
+beat = 4
+bpm = 130
+amplitude = 1.5
+`;
+      const parsed = parseChartText(oldToml);
+      expect((parsed.bpm_changes[0] as any).easeToNext).toBe('linear');
+      const out = chartToToml(parsed);
+      expect(out).toContain('[[sections]]');
+      expect(out).not.toContain('[[bpm_changes]]');
+      expect(out).toContain('ease_to_next = "linear"');
+    });
+  });
+
+  describe('10. 総合回帰 — 複雑振幅 + オフグリッド + 複数区間混合', () => {
+    it('多区間混合 ease(linear/out/in) + ステップで各区間の mid/off-grid が正確 (3-step)', () => {
+      const tlSingle = makeTimeline([{ beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' } as unknown as BpmChange, { beat: 2, bpm: 120, amplitude: 2.0 }], 1.0);
+      expect(tlSingle.amplitudeAt(1)).toBeCloseTo(1.5, 4);
+      const tl = makeTimeline([
+        { beat: 0, bpm: 120, amplitude: 0.7, zoom: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
+        { beat: 2.37, bpm: 130, amplitude: 1.3, zoom: 1.3, easeToNext: 'ease-out' } as unknown as BpmChange,
+        { beat: 4, bpm: 140, amplitude: 2.7, zoom: 2.7 } as unknown as BpmChange,
+        { beat: 8, bpm: 150, amplitude: 2.7, zoom: 2.0, easeToNext: 'ease-in' } as unknown as BpmChange,
+      ], 1.0);
+      expect(tl.amplitudeAt(1.185)).toBeCloseTo(0.7 + 0.6 * 0.5, 4);
+      expect(tl.zoomAt(1.185)).toBeCloseTo(1.0 + 0.3 * 0.5, 4);
+      const t0 = 0.37 / 2.37;
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.6 * eased(t0, 'linear'), 4);
+      const mid2 = 2.37 + (4 - 2.37) / 2;
+      expect(tl.amplitudeAt(mid2)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
+      expect(tl.zoomAt(mid2)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
+      const t337 = (3.37 - 2.37) / (4 - 2.37);
+      expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.3 + 1.4 * eased(t337, 'ease-out'), 4);
+      expect(tl.amplitudeAt(6)).toBeCloseTo(2.7, 5);
+      expect(tl.amplitudeAt(7.99)).toBeCloseTo(2.7, 5);
+      expect(tl.zoomAt(6)).toBeCloseTo(2.7, 5);
+    });
+
+    it('TOML往復後の複合chartでtimeline補間とbeatToMs両立 (3-step)', () => {
+      const chartOrig: Chart = {
+        title: 'Complex Easing Whole',
+        artist: 'QA',
+        audio: 'c.flac',
+        audio_offset: 0,
+        amplitude: 1.0,
+        start_position: 0,
+        bpm_changes: [
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
+          { beat: 2, bpm: 150, amplitude: 2.0, zoom: 2.0, easeToNext: 'ease-out' } as unknown as BpmChange,
+          { beat: 4.37, bpm: 180, amplitude: 0.5, zoom: 0.5 } as unknown as BpmChange,
+        ],
+        segments: [],
+        rings: [],
+      };
+      const tomlStr = chartToToml(chartOrig);
+      const parsed = parseChartText(tomlStr);
+      const tl = makeTimeline(parsed.bpm_changes, parsed.amplitude);
+      expect(tl.amplitudeAt(1)).toBeCloseTo(1.5, 4);
+      const midOut = 2 + (4.37 - 2) / 2;
+      expect(tl.amplitudeAt(midOut)).toBeCloseTo(2.0 + (0.5 - 2.0) * 0.75, 4);
+      expect(tl.bpmAt(1)).toBeCloseTo(120, 5);
+      expect(tl.bpmAt(3)).toBeCloseTo(150, 5);
+      expect(tl.bpmAt(4.37)).toBeCloseTo(180, 5);
+      const tlNoEase = makeTimeline([{ beat: 0, bpm: 120 }, { beat: 2, bpm: 150 }, { beat: 4.37, bpm: 180 }], 1.0);
+      expect(tl.beatToMs(3.37)).toBeCloseTo(tlNoEase.beatToMs(3.37), 5);
+    });
   });
 });

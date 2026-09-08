@@ -1,5 +1,6 @@
 export interface Segment { direction: 'up' | 'down' | 'stay'; beats: number; }
-export interface BpmChange { beat: number; bpm: number; amplitude?: number; zoom?: number; }
+export type EasingType = 'linear' | 'ease-out' | 'ease-in';
+export interface BpmChange { beat: number; bpm: number; amplitude?: number; zoom?: number; easeToNext?: EasingType; }
 export interface RingDef {
   beat: number;
   duration?: number;

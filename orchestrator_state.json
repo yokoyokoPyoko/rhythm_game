@@ -1777,9 +1777,15 @@
       "finished": 1788829881.861352
     },
     "T202": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788839418.475192
+      "started": 1788839418.475192,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f80dc8921ffexejVpxqoEFt3AE",
+        "coder": "ses_f80d9a115ffeE4XrjdIt9GIXU7"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

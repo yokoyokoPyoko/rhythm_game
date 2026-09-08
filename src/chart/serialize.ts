@@ -38,6 +38,10 @@ export function chartToToml(chart: Chart): string {
       if (typeof change.zoom === 'number' && Number.isFinite(change.zoom) && change.zoom > 0) {
         changeLines.push(`zoom = ${fmt(change.zoom)}`)
       }
+      // T202: output per-section easing only when set
+      if (change.easeToNext === 'linear' || change.easeToNext === 'ease-out' || change.easeToNext === 'ease-in') {
+        changeLines.push(`ease_to_next = "${change.easeToNext}"`)
+      }
       lines.push(...changeLines)
     }
   }

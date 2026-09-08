@@ -1,5 +1,5 @@
 import { parse } from 'smol-toml';
-import type { BpmChange, Chart, RingDef, Segment } from '../types';
+import type { BpmChange, Chart, EasingType, RingDef, Segment } from '../types';
 import { getBasename } from '../audio/AudioCache';
 
 function isFiniteNumber(v: unknown): v is number {
@@ -26,8 +26,15 @@ function parseBpmChanges(v: unknown): BpmChange[] {
       amplitude: isFiniteNumber(item.amplitude) && (item.amplitude as number) > 0 ? (item.amplitude as number) : undefined,
       // T186: preserve per-section zoom when set
       zoom: isFiniteNumber(item.zoom) && (item.zoom as number) > 0 ? (item.zoom as number) : undefined,
+      // T202: preserve per-section easing when it is a valid easing type (invalid deserialized as undefined = ignored)
+      easeToNext: parseEase(item.ease_to_next),
     }))
     .sort((a, b) => a.beat - b.beat);
+}
+
+function parseEase(v: unknown): EasingType | undefined {
+  if (v === 'linear' || v === 'ease-out' || v === 'ease-in') return v;
+  return undefined;
 }
 
 function parseRings(v: unknown): RingDef[] {
