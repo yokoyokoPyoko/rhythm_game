@@ -17,6 +17,10 @@ function safeZoom (v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 1.0
 }
 
+function sortByBeat (arr: BpmChange[]): BpmChange[] {
+  return [...arr].sort((a, b) => a.beat - b.beat)
+}
+
 interface BpmEditorProps {
   bpmChanges: BpmChange[]
   onSectionsChange: (next: BpmChange[]) => void
@@ -39,11 +43,16 @@ export default function BpmEditor({
   onRequestAddSection,
 }: BpmEditorProps) {
   const removeChange = (index: number) => {
-    onSectionsChange(bpmChanges.filter((_, i) => i !== index))
+    onSectionsChange(sortByBeat(bpmChanges.filter((_, i) => i !== index)))
   }
 
   const updateChange = (index: number, patch: Partial<BpmChange>) => {
     onSectionsChange(bpmChanges.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+  }
+
+  const commitBeatChange = (index: number, newBeat: number) => {
+    const next = bpmChanges.map((c, i) => (i === index ? { ...c, beat: newBeat } : c))
+    onSectionsChange(sortByBeat(next))
   }
 
   return (
@@ -108,8 +117,14 @@ export default function BpmEditor({
                 type="number"
                 min={0}
                 step={0.25}
-                value={safeBeat(change.beat)}
-                onChange={(e) => updateChange(i, { beat: safeBeat(Number(e.target.value)) })}
+                defaultValue={safeBeat(change.beat)}
+                onBlur={(e) => commitBeatChange(i, safeBeat(Number(e.target.value)))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitBeatChange(i, safeBeat(Number((e.target as HTMLInputElement).value)))
+                  }
+                }}
                 aria-label={`セクション${i + 1}のbeat`}
               />
               <input
