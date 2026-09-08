@@ -1839,15 +1839,18 @@
       "last_postmortem_at": 1788857568.990597
     },
     "T206": {
-      "attempts": 1,
+      "attempts": 2,
       "status": "running",
       "started": 1788857808.760986,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_f7fc3eb66ffeLwfVz4kIkvwmnF",
-        "coder": "ses_f7fc25714ffeOwvdiNMglMjjMz"
+        "qa": "ses_f7fb23108ffebL900po3tGeBPy",
+        "coder": "ses_f7fc25714ffeOwvdiNMglMjjMz",
+        "postmortem": "ses_f7fc1ae30ffeksFsGCzYeTGRmK"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true,
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788858972.3835187
     }
   },
   "consecutive_no_action": 0
