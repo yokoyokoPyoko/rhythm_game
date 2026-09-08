@@ -1825,18 +1825,23 @@
       "finished": 1788844226.4242449
     },
     "T205": {
-      "attempts": 9,
-      "status": "running",
+      "attempts": 10,
+      "status": "passed",
       "started": 1788856966.866991,
       "cycles": 1,
       "sessions": {
         "qa": "ses_f7fd0bff5ffeQXeyi70x03RzPb",
-        "coder": "ses_f7fcf3cc0ffexY1H7Y53zJ7lcL",
-        "postmortem": null
+        "coder": null,
+        "postmortem": "ses_f7fca38ffffej45cOjRgrX5GAZ"
       },
-      "gate_b_golden": true,
-      "last_retry_from": "qa",
-      "last_postmortem_at": 1788847286.337276
+      "gate_b_golden": false,
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1788857568.990597
+    },
+    "T206": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788857808.760986
     }
   },
   "consecutive_no_action": 0
