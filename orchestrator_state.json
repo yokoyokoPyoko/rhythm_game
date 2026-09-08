@@ -1800,7 +1800,8 @@
       "sessions": {
         "qa": "ses_f80d0a028ffeLUZweFSa7dgkqO",
         "coder": "ses_f80a83c82ffeycHtoy53lXZf4E",
-        "postmortem": "ses_f80cd9896ffelOE0zl6WoAYGpw"
+        "postmortem": "ses_f80cd9896ffelOE0zl6WoAYGpw",
+        "reviewer": "ses_f80a76ebeffejn1s9VHwuhDuWw"
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
