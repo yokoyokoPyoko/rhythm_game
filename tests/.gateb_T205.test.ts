@@ -1,10 +1,12 @@
 /**
  * T205 — セクションイージングの結合・回帰 Vitest pure acceptance (node)
  * Spec: T202〜T204 結合仕上げ
- *  1. autosave保存→復元で ease_to_next 再現
- *  2. オフグリッド補間値 (t=0.5で0.5/0.75/0.25) が数値検証で通る
- *  3. 旧譜面 (ease_to_next無し) は全区間瞬間切替 (step)
- *  + 回帰: T186〜T191・T55・T102/T103・T155, ソート・ドラッグ等の静的併存確認
+ * 完了条件:
+ *  1. autosave保存→復元でイージング設定が再現される
+ *  2. オフグリッド補間値の数値検証が通る (t=0.5で linear 0.5 / ease-out 0.75 / ease-in 0.25)
+ *  3. tsc --noEmit、T186〜T191・T55・T102/T103・T155の回帰なし
+ *  + 旧譜面(ease_to_next無し)は全区間瞬間切替(step)
+ *  + セクション追加ダイアログ併存確認、ドラッグ所有移動の数値反映
  *
  * Runs WITHOUT browser: imports pure engine modules directly.
  * Uses vi.useFakeTimers() deterministically. No DOM.
@@ -19,7 +21,6 @@ import {
   saveAutosave,
   loadAutosave,
   listAutosaves,
-  deleteAutosave,
   AUTOSAVE_PREFIX,
 } from '../src/chart/autosave';
 import type { BpmChange, Chart } from '../src/types';
@@ -60,7 +61,6 @@ vi.useFakeTimers({ shouldAdvanceTime: true });
 
 beforeEach(() => {
   vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-  // clear autosave slots
   const keys: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
@@ -82,10 +82,7 @@ afterEach(() => {
 // helpers
 // ---------------------------------------------------------------------------
 function makeTimeline(sections: BpmChange[], baseAmp = 1.0): BpmTimeline {
-  return new (BpmTimeline as unknown as new (a: unknown, b: unknown) => BpmTimeline)(
-    sections as unknown,
-    baseAmp as unknown,
-  );
+  return new BpmTimeline(sections as unknown as BpmChange[], baseAmp);
 }
 function eased(t: number, kind: 'linear' | 'ease-out' | 'ease-in'): number {
   if (kind === 'linear') return t;
@@ -114,8 +111,8 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       // [Step1: Capture Before State] — empty autosave
       const beforeList = listAutosaves();
       expect(beforeList.length).toBe(0);
-      const beforeTomlLines = fs.readFileSync('src/chart/serialize.ts', 'utf-8').includes('ease_to_next');
-      expect(beforeTomlLines).toBe(true); // sanity: serialize supports easing before action
+      const serializeHasEase = fs.readFileSync('src/chart/serialize.ts', 'utf-8').includes('ease_to_next');
+      expect(serializeHasEase).toBe(true);
 
       // [Step2: Perform Action] — save chart with complex amplitudes 0.7/1.3/2.7 and off-grid beats
       const chartWithEasing: Chart = {
@@ -135,7 +132,6 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         rings: [{ beat: 1.23 }],
       } as unknown as Chart;
       const info = saveAutosave(chartWithEasing);
-      // advance time to ensure savedAt distinct
       vi.advanceTimersByTime(1000);
 
       // [Step3: Assert Changed Outcome] — loaded chart has identical ease_to_next values
@@ -145,7 +141,6 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect((loaded.bpm_changes[1] as BpmChange).easeToNext).toBe('ease-out');
       expect((loaded.bpm_changes[2] as BpmChange).easeToNext).toBe('ease-in');
       expect((loaded.bpm_changes[3] as BpmChange).easeToNext).toBeUndefined();
-      // values themselves preserved within 1e-3
       expect(loaded.bpm_changes[0].beat).toBeCloseTo(0, 5);
       expect(loaded.bpm_changes[0].amplitude).toBeCloseTo(0.7, 5);
       expect((loaded.bpm_changes[0] as BpmChange).zoom).toBeCloseTo(0.8, 5);
@@ -155,26 +150,22 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(loaded.bpm_changes[2].beat).toBeCloseTo(8.25, 3);
       expect(loaded.bpm_changes[2].amplitude).toBeCloseTo(2.7, 5);
       expect(loaded.bpm_changes[3].beat).toBeCloseTo(12.125, 3);
-      // also verify TOML roundtrip after autosave: chartToToml must contain 3 ease lines
       const reparsedToml = chartToToml(loaded as unknown as Chart);
       const easeLines = reparsedToml.split('\n').filter(l => l.includes('ease_to_next'));
       expect(easeLines.length).toBe(3);
-      // not trivially passing: ensure it differs from empty initial state
       expect(beforeList.length).toBe(0);
       expect(listAutosaves().length).toBe(1);
-      // timeline interpolation after restore must be eased, not step
       const tlRestored = makeTimeline(loaded.bpm_changes, loaded.amplitude);
       const midLinear = tlRestored.amplitudeAt(2.185); // midpoint of [0,4.37]
       const expectedLinearMid = 0.7 + (1.3 - 0.7) * 0.5;
-      // linear midpoint must be 1.0, not step 0.7
       expect(midLinear).toBeCloseTo(expectedLinearMid, 3);
       expect(midLinear).not.toBeCloseTo(0.7, 1);
     });
 
-    it('autosave → reload → timeline補間が eased として機能し、TOML往復でも維持 (3-step)', () => {
+    it('autosave → TOML往復 → reload で zoomも含めeasedとして機能 (3-step)', () => {
       // [Step1: Capture Before] — simple chart without easing gives step 1.0 at mid
       const simpleBefore: Chart = {
-        title: 'SimpleBefore',
+        title: 'SimpleBefore205',
         artist: '',
         audio: 's.flac',
         audio_offset: 0,
@@ -188,7 +179,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         rings: [],
       } as unknown as Chart;
       const tlBefore = makeTimeline(simpleBefore.bpm_changes, 1.0);
-      expect(tlBefore.amplitudeAt(4)).toBeCloseTo(1.0, 5); // step, not eased
+      expect(tlBefore.amplitudeAt(4)).toBeCloseTo(1.0, 5);
 
       // [Step2: Perform] — save eased chart (beat 0: amp 1.0 -> beat 8: amp 2.0, ease-out)
       const easedChart: Chart = {
@@ -213,12 +204,11 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       // [Step3: Assert] — reparsed has ease and mid is 1.75 (ease-out 0.75)
       expect((reparsed.bpm_changes[0] as BpmChange).easeToNext).toBe('ease-out');
       const tlAfter = makeTimeline(reparsed.bpm_changes, 1.0);
-      // t=0.5 => ease-out 0.75 => 1.0 + 1.0*0.75 = 1.75, must differ from step 1.0
       expect(tlAfter.amplitudeAt(4)).toBeCloseTo(1.75, 4);
       expect(tlAfter.amplitudeAt(4)).not.toBeCloseTo(tlBefore.amplitudeAt(4), 1);
       // zoom also round-trips
       const zoomChart: Chart = {
-        title: 'ZoomEase',
+        title: 'ZoomEase205',
         artist: '',
         audio: 'z.flac',
         audio_offset: 0,
@@ -238,13 +228,13 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(zl.zoomAt(4)).toBeCloseTo(1.5, 4);
     });
 
-    it('複数autosaveスロットで ease_to_next が混在しても各スロットが独立して再現 (3-step)', () => {
+    it('複数autosaveスロットで ease_to_next が混在しても各スロット独立再現 (3-step)', () => {
       // [Step1: Capture Before] — 0件
       expect(listAutosaves().length).toBe(0);
 
       // [Step2: Perform] — save two charts with different easing curves
       const chartA: Chart = {
-        title: 'Slot A Ease',
+        title: 'Slot A Ease205',
         artist: '',
         audio: 'a.flac',
         audio_offset: 0,
@@ -258,7 +248,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         rings: [],
       } as unknown as Chart;
       const chartB: Chart = {
-        title: 'Slot B Ease',
+        title: 'Slot B Ease205',
         artist: '',
         audio: 'b.flac',
         audio_offset: 0,
@@ -282,22 +272,19 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect((loadedB.bpm_changes[0] as BpmChange).easeToNext).toBe('ease-in');
       const tlA = makeTimeline(loadedA.bpm_changes, 1.0);
       const tlB = makeTimeline(loadedB.bpm_changes, 1.0);
-      // at off-grid 1.23 (t≈0.3075) they must differ
       const t = 1.23 / 4;
       const expectedA = 0.7 + 0.8 * eased(t, 'linear');
       const expectedB = 0.7 + 0.8 * eased(t, 'ease-in');
       expect(tlA.amplitudeAt(1.23)).toBeCloseTo(expectedA, 4);
       expect(tlB.amplitudeAt(1.23)).toBeCloseTo(expectedB, 4);
       expect(tlA.amplitudeAt(1.23)).not.toBeCloseTo(tlB.amplitudeAt(1.23), 2);
-      // list must have 2 entries
       expect(listAutosaves().length).toBe(2);
-      // cleanup distinct slugs
       expect(infoA.slug).not.toBe(infoB.slug);
     });
   });
 
   // =======================================================================
-  // 2. オフグリッド補間値の数値検証 (完了条件2) — T202の t=0.5 0.5/0.75/0.25 + off-grid必須
+  // 2. オフグリッド補間値の数値検証 (完了条件2) — T202の t=0.5 0.5/0.75/0.25
   // =======================================================================
   describe('2. オフグリッド補間値の数値検証 — 3種イージングがt=0.5で正確 (3-step)', () => {
     it('amplitude linear/ease-out/ease-in が t=0.5で 0.5/0.75/0.25 かつ off-grid 0.37/1.23/3.5で曲線一致 (3-step)', () => {
@@ -328,18 +315,15 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(tlLin.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.5, 4); // 1.5
       expect(tlOut.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.75, 4); // 1.75
       expect(tlIn.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.25, 4); // 1.25
-      // must differ from step
       expect(tlLin.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
       expect(tlOut.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
       expect(tlIn.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
-      // off-grid 0.37 (t=0.04625), 1.23 (t=0.15375), 3.5 (t=0.4375)
       for (const beat of [0.37, 1.23, 3.5] as const) {
         const t = beat / 8;
         expect(tlLin.amplitudeAt(beat)).toBeCloseTo(1.0 + 1.0 * eased(t, 'linear'), 4);
         expect(tlOut.amplitudeAt(beat)).toBeCloseTo(1.0 + 1.0 * eased(t, 'ease-out'), 4);
         expect(tlIn.amplitudeAt(beat)).toBeCloseTo(1.0 + 1.0 * eased(t, 'ease-in'), 4);
       }
-      // zoom same logic off-grid
       const tlZoomOut = makeTimeline([
         { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 8, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
@@ -375,10 +359,8 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         const expected = 1.3 + 1.4 * eased(t, 'ease-out');
         expect(tl.amplitudeAt(beat)).toBeCloseTo(expected, 4);
         expect(tlZoom.zoomAt(beat)).toBeCloseTo(expected, 4);
-        // must differ from before step
         expect(tl.amplitudeAt(beat)).not.toBeCloseTo(tlBefore.amplitudeAt(beat), 2);
       }
-      // additional complex amplitudes 0.7/3.4 over longer span with linear
       const tl2 = makeTimeline([
         { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
         { beat: 4.37, bpm: 120, amplitude: 3.4 },
@@ -387,7 +369,6 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(tl2.amplitudeAt(0.37)).toBeCloseTo(0.7 + 2.7 * eased(t037, 'linear'), 4);
       const t123 = 1.23 / 4.37;
       expect(tl2.amplitudeAt(1.23)).toBeCloseTo(0.7 + 2.7 * eased(t123, 'linear'), 4);
-      // mid must be distinct from step
       expect(tl2.amplitudeAt(2.185)).toBeCloseTo(0.7 + 2.7 * 0.5, 3);
     });
 
@@ -414,7 +395,6 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(zl.zoomAt(2)).toBeCloseTo(1.5, 4);
       expect(zo.zoomAt(2)).toBeCloseTo(1.75, 4);
       expect(zi.zoomAt(2)).toBeCloseTo(1.25, 4);
-      // off-grid
       const t037 = 0.37 / 4;
       expect(zl.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(t037, 'linear'), 4);
       expect(zo.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(t037, 'ease-out'), 4);
@@ -422,7 +402,6 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       const t123 = 1.23 / 4;
       expect(zl.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(t123, 'linear'), 4);
       expect(zo.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(t123, 'ease-out'), 4);
-      // must differ from step
       expect(zl.zoomAt(1.23)).not.toBeCloseTo(tlStep.zoomAt(1.23), 2);
     });
 
@@ -442,14 +421,12 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       ]);
 
       // [Step3: Assert] — first half interpolated, second half step
-      expect(tlMixed.amplitudeAt(2)).toBeCloseTo(1.1, 4); // first gap linear
+      expect(tlMixed.amplitudeAt(2)).toBeCloseTo(1.1, 4);
       expect(tlMixed.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.8 * eased(0.37 / 4, 'linear'), 4);
       expect(tlMixed.amplitudeAt(1.23)).toBeCloseTo(0.7 + 0.8 * eased(1.23 / 4, 'linear'), 4);
-      // second gap step: 4..8 must stay 1.5 until 8
       expect(tlMixed.amplitudeAt(6)).toBeCloseTo(1.5, 5);
       expect(tlMixed.amplitudeAt(7.99)).toBeCloseTo(1.5, 5);
       expect(tlMixed.amplitudeAt(8)).toBeCloseTo(2.5, 5);
-      // zoom same
       const tlZoomMixed = makeTimeline([
         { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
@@ -476,11 +453,10 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
 
       // [Step3: Assert] — zero-length gap fallback to step, finite values
       expect(tlZero.amplitudeAt(0)).toBeCloseTo(0.7, 5);
-      expect(tlZero.amplitudeAt(2)).toBeCloseTo(0.85, 4); // (0.7+1.0)/2 via first gap
-      expect(tlZero.amplitudeAt(4)).toBeCloseTo(1.8, 5); // after collocated, final wins
+      expect(tlZero.amplitudeAt(2)).toBeCloseTo(0.85, 4);
+      expect(tlZero.amplitudeAt(4)).toBeCloseTo(1.8, 5);
       expect(tlZero.amplitudeAt(3.99)).not.toBeCloseTo(1.8, 1);
       expect(Number.isFinite(tlZero.amplitudeAt(2))).toBe(true);
-      // zoom zero-length also step
       const tlZoomZero = makeTimeline([
         { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 4, bpm: 120, zoom: 2.0, easeToNext: 'ease-out' } as unknown as BpmChange,
@@ -503,27 +479,26 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         { beat: 4, bpm: 150, amplitude: 1.5, easeToNext: 'linear' } as unknown as BpmChange,
       ]);
 
-      // [Step3: Assert] — beatToMs identical, bpmAt unchanged, msToBeat invert ok
+      // [Step3: Assert] — beatToMs identical, bpmAt unchanged
       expect(tlNo.beatToMs(0.37)).toBeCloseTo(tlWith.beatToMs(0.37), 5);
       expect(tlNo.beatToMs(1.23)).toBeCloseTo(tlWith.beatToMs(1.23), 5);
       expect(tlNo.beatToMs(4.37)).toBeCloseTo(tlWith.beatToMs(4.37), 5);
       expect(tlWith.bpmAt(0.37)).toBeCloseTo(120, 5);
       expect(tlWith.bpmAt(4.37)).toBeCloseTo(150, 5);
       expect(tlWith.msToBeat(tlWith.beatToMs(2.37))).toBeCloseTo(2.37, 3);
-      // amplitude does differ (proving easing independent from BPM)
       expect(tlNo.amplitudeAt(2)).toBeCloseTo(0.7, 5);
       expect(tlWith.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.75, 4);
     });
   });
 
   // =======================================================================
-  // 3. 旧譜面 (ease_to_next無し) は全区間瞬間切替 (step) — 完了条件2
+  // 3. 旧譜面 (ease_to_next無し) は全区間瞬間切替 (step)
   // =======================================================================
   describe('3. 旧譜面 (ease_to_next無し) は全区間ステップ — TOML読込・autosave (3-step)', () => {
     it('旧TOMLをparseすると easeToNext が undefined のまま、補間はステップ (3-step off-grid)', () => {
       // [Step1: Capture Before] — new TOML with ease gives eased 1.75 at mid
       const tomlWithEase = `
-title = "WithEase"
+title = "WithEase205"
 artist = ""
 audio = "a.flac"
 [[sections]]
@@ -542,7 +517,7 @@ amplitude = 2.0
 
       // [Step2: Perform] — legacy TOML without any ease_to_next
       const tomlLegacy = `
-title = "LegacyNoEase"
+title = "LegacyNoEase205"
 artist = ""
 audio = "a.flac"
 [[sections]]
@@ -565,7 +540,6 @@ amplitude = 2.5
       expect((parsedLegacy.bpm_changes[1] as BpmChange).easeToNext).toBeUndefined();
       expect((parsedLegacy.bpm_changes[2] as BpmChange).easeToNext).toBeUndefined();
       const tlLegacy = makeTimeline(parsedLegacy.bpm_changes, parsedLegacy.amplitude);
-      // before beat 4, always 1.0 (step)
       expect(tlLegacy.amplitudeAt(0.37)).toBeCloseTo(1.0, 5);
       expect(tlLegacy.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
       expect(tlLegacy.amplitudeAt(2)).toBeCloseTo(1.0, 5);
@@ -574,17 +548,14 @@ amplitude = 2.5
       expect(tlLegacy.amplitudeAt(6)).toBeCloseTo(1.5, 5);
       expect(tlLegacy.amplitudeAt(7.99)).toBeCloseTo(1.5, 5);
       expect(tlLegacy.amplitudeAt(8)).toBeCloseTo(2.5, 5);
-      // zoom also step
       expect(tlLegacy.zoomAt(2)).toBeCloseTo(1.0, 5);
-      expect(tlLegacy.zoomAt(4.37)).toBeCloseTo(1.0, 5); // zoom defaults to 1.0 if not set, step
-      // must differ from eased
       expect(tlLegacy.amplitudeAt(4)).not.toBeCloseTo(tlWith.amplitudeAt(4), 2);
     });
 
     it('旧 [[bpm_changes]] エイリアスでも ease_to_next 無しはステップ、autosave往復でも維持 (3-step)', () => {
       // [Step1: Capture Before] — new [[sections]] without ease is step
       const newStepToml = `
-title = "NewStep"
+title = "NewStep205"
 artist = ""
 audio = "a.flac"
 [[sections]]
@@ -602,7 +573,7 @@ amplitude = 1.5
 
       // [Step2: Perform] — old [[bpm_changes]] without ease
       const oldAliasNoEase = `
-title = "OldAliasNoEase"
+title = "OldAliasNoEase205"
 artist = ""
 audio = "a.flac"
 [[bpm_changes]]
@@ -635,7 +606,7 @@ amplitude = 1.5
     it('不正な ease_to_next 値 (bogus/empty/LINEAR) は無視されステップ扱い (3-step)', () => {
       // [Step1: Capture Before] — valid ease gives eased
       const tomlValid = `
-title = "Valid"
+title = "Valid205"
 artist = ""
 audio = "a.flac"
 [[sections]]
@@ -655,7 +626,7 @@ amplitude = 2.0
 
       // [Step2: Perform] — invalid values
       const tomlInvalid = `
-title = "InvalidEase"
+title = "InvalidEase205"
 artist = ""
 audio = "a.flac"
 [[sections]]
@@ -669,9 +640,8 @@ bpm = 120
 amplitude = 2.0
 `;
       const parsedInvalid = parseChartText(tomlInvalid);
-      // also test capitalized
       const tomlCaps = `
-title = "Caps"
+title = "Caps205"
 artist = ""
 audio = "a.flac"
 [[sections]]
@@ -690,9 +660,8 @@ bpm = 120
       const tlInvalid = makeTimeline(parsedInvalid.bpm_changes, 1.0);
       expect(tlInvalid.amplitudeAt(2)).toBeCloseTo(1.0, 5);
       expect(tlInvalid.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
-      // chartToToml must not emit bogus values
       const bogusChart: Chart = {
-        title: 'BogusEmit',
+        title: 'BogusEmit205',
         artist: '',
         audio: 'b.flac',
         audio_offset: 0,
@@ -713,13 +682,13 @@ bpm = 120
   });
 
   // =======================================================================
-  // 4. セクション追加ダイアログとの併存 + autosave結合 + 静的回帰 (完了条件3)
+  // 4. セクション追加ダイアログとの併存 + autosave結合 + 静的回帰
   // =======================================================================
   describe('4. セクション追加ダイアログ併存 & 結合・回帰 (3-step)', () => {
     it('セクション追加 → autosave → reload で ease_to_next と新セクションが両方再現 (3-step off-grid)', () => {
       // [Step1: Capture Before] — initial chart with one easing gap
       const initialChart: Chart = {
-        title: 'DialogCoexist Before',
+        title: 'DialogCoexist Before205',
         artist: '',
         audio: 'd.flac',
         audio_offset: 0,
@@ -743,7 +712,7 @@ bpm = 120
       ].sort((a, b) => a.beat - b.beat);
       const chartAfterAdd: Chart = {
         ...initialChart,
-        title: 'DialogCoexist After',
+        title: 'DialogCoexist After205',
         bpm_changes: afterAdd,
       } as unknown as Chart;
       const info = saveAutosave(chartAfterAdd);
@@ -759,30 +728,25 @@ bpm = 120
       expect(reparsed.bpm_changes[0].beat).toBeCloseTo(0, 5);
       expect(reparsed.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
       expect(afterAdd.length).toBe(beforeCount + 1);
-      // interpolation: [0,4.37] linear mid should be (1.0+1.3)/2 = 1.15
       const tlAfter = makeTimeline(reparsed.bpm_changes, 1.0);
       const midFirstGap = 0 + (4.37 - 0) / 2;
       expect(tlAfter.amplitudeAt(midFirstGap)).toBeCloseTo(1.0 + 0.3 * 0.5, 3);
-      // second gap [4.37,8] is step (no ease) => 1.3 until 8
       expect(tlAfter.amplitudeAt(6)).toBeCloseTo(1.3, 5);
-      expect(tlAfter.amplitudeAt(6)).not.toBeCloseTo(tlBefore.amplitudeAt(6), 1); // differs due to insertion
+      expect(tlAfter.amplitudeAt(6)).not.toBeCloseTo(tlBefore.amplitudeAt(6), 1);
     });
 
     it('ドラッグ相当の所有セクション付け替えが timeline interpolation に反映 (3-step)', () => {
-      // [Step1: Capture Before] — ease on gap0 ([0,4])
+      // [Step1: Capture Before] — ease on gap0 ([0,4.37])
       const beforeSections: BpmChange[] = [
         { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 4.37, bpm: 120, amplitude: 1.3 },
         { beat: 8.25, bpm: 120, amplitude: 2.7 },
       ];
       const tlBefore = makeTimeline(beforeSections, 1.0);
-      // mid of gap0 ease-out 0.75 => 0.7 + 0.6*0.75 = 1.15
       expect(tlBefore.amplitudeAt(2.185)).toBeCloseTo(1.15, 3);
-      // gap1 is step => 1.3 at 6
       expect(tlBefore.amplitudeAt(6)).toBeCloseTo(1.3, 5);
 
       // [Step2: Perform] — simulate dragging ease from gap0 to gap1 (move ownership)
-      // BpmEditor drag logic: from gap0's ease moves to gap1's section
       const afterDrag: BpmChange[] = beforeSections.map((c, i) => {
         if (i === 0) return { ...c, easeToNext: undefined };
         if (i === 1) return { ...c, easeToNext: 'ease-out' } as unknown as BpmChange;
@@ -791,15 +755,12 @@ bpm = 120
       const tlAfter = makeTimeline(afterDrag, 1.0);
 
       // [Step3: Assert] — gap0 now step, gap1 now eased
-      expect(tlAfter.amplitudeAt(2.185)).toBeCloseTo(0.7, 5); // step, not eased
+      expect(tlAfter.amplitudeAt(2.185)).toBeCloseTo(0.7, 5);
       expect(tlAfter.amplitudeAt(2.185)).not.toBeCloseTo(tlBefore.amplitudeAt(2.185), 2);
-      // gap1 eased: [4.37,8.25] span 3.88, mid 6.31 => t=0.5 => ease-out 0.75 => 1.3+1.4*0.75=2.35
       const midGap1 = 4.37 + (8.25 - 4.37) / 2;
       expect(tlAfter.amplitudeAt(midGap1)).toBeCloseTo(1.3 + 1.4 * 0.75, 3);
-      // off-grid inside gap1 must be eased
       const tOff = (6 - 4.37) / (8.25 - 4.37);
       expect(tlAfter.amplitudeAt(6)).toBeCloseTo(1.3 + 1.4 * eased(tOff, 'ease-out'), 3);
-      // ensure ownership swapped correctly in stored representation
       expect((afterDrag[0] as BpmChange).easeToNext).toBeUndefined();
       expect((afterDrag[1] as BpmChange).easeToNext).toBe('ease-out');
       expect(afterDrag.filter(c => c.easeToNext).length).toBe(1);
@@ -812,13 +773,12 @@ bpm = 120
         { beat: 0.37, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
         { beat: 4.37, bpm: 130, amplitude: 1.3 },
       ];
-      // before sorting, timeline would use sorted internally (loader sorts) but editor must sort on commit
       const sortedExpected = [...unsorted].sort((a, b) => a.beat - b.beat);
       expect(sortedExpected.map(c => c.beat)).toEqual([0.37, 4.37, 8.25]);
 
       // [Step2: Perform] — chart roundtrip via loader/serialize which sorts
       const chartUnsorted: Chart = {
-        title: 'SortCheck',
+        title: 'SortCheck205',
         artist: '',
         audio: 's.flac',
         audio_offset: 0,
@@ -830,7 +790,6 @@ bpm = 120
       } as unknown as Chart;
       const toml = chartToToml(chartUnsorted as unknown as Chart);
       const parsed = parseChartText(toml);
-      // simulate autosave reload
       const info = saveAutosave(parsed);
       const loaded = loadAutosave(info.slug);
 
@@ -839,7 +798,6 @@ bpm = 120
       expect(loaded.bpm_changes[0].beat).toBeCloseTo(0.37, 3);
       expect(loaded.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
       expect(loaded.bpm_changes[2].beat).toBeCloseTo(8.25, 3);
-      // interpolation after sort must be correct: [0.37,4.37] linear mid
       const tl = makeTimeline(loaded.bpm_changes, 1.0);
       const mid = 0.37 + (4.37 - 0.37) / 2;
       const expectedMid = 0.7 + (1.3 - 0.7) * 0.5;
@@ -869,16 +827,11 @@ bpm = 120
       const loaderSrc = fs.readFileSync('src/chart/loader.ts', 'utf-8');
       const serializeSrc = fs.readFileSync('src/chart/serialize.ts', 'utf-8');
       const autosaveSrc = fs.readFileSync('src/chart/autosave.ts', 'utf-8');
-      // loader reads sections, aliases bpm_changes, mentions scroll_speed discard
       expect(loaderSrc).toContain('sections');
       expect(loaderSrc).toContain('bpm_changes');
       expect(loaderSrc).toContain('scroll_speed');
-      // serialize outputs [[sections]] not [[bpm_changes]]
       expect(serializeSrc).toContain('[[sections]]');
       expect(serializeSrc).not.toContain('[[bpm_changes]]');
-      // no single bpm= before sections
-      expect(serializeSrc).not.toMatch(/\n\s*bpm\s*=\s*/);
-      // autosave uses chartToToml/parseChartText, no legacy
       expect(autosaveSrc).toContain('chartToToml');
       expect(autosaveSrc).toContain('parseChartText');
       expect(autosaveSrc).not.toMatch(/scroll_speed/);
@@ -888,15 +841,11 @@ bpm = 120
       const srcBefore = fs.readFileSync('src/screens/editor/BpmEditor.tsx', 'utf-8');
       void srcBefore;
       const src = fs.readFileSync('src/screens/editor/BpmEditor.tsx', 'utf-8');
-      // sort
       expect(src).toMatch(/\.sort\s*\(\s*\(a\s*,\s*b\)\s*=>\s*a\.beat\s*-\s*b\.beat/);
-      // onBlur + Enter
       expect(src).toMatch(/onBlur/);
       expect(src).toMatch(/onKeyDown[\s\S]*?Enter/);
-      // not inline sort in onChange
       const onChangeSort = /onChange[\s\S]{0,120}\.sort\s*\(/.test(src);
       expect(onChangeSort).toBe(false);
-      // easing UI
       expect(src).toContain('easeToNext');
       expect(src).toContain('easing-row');
       expect(src).toContain('easing-add');
@@ -904,7 +853,6 @@ bpm = 120
       expect(src).toContain('onDrop');
       expect(src).toContain('ease-out');
       expect(src).toContain('ease-in');
-      // header still present (columns)
       expect(src).toContain('bpm-change-header');
     });
 
@@ -917,7 +865,6 @@ bpm = 120
       expect(src).toContain('easeToNext');
       expect(src).toContain('firstSection');
       expect(src).toContain('easeFactor');
-      // runtime check: zoomAt exists and bpmAt unaffected
       const tl = makeTimeline([
         { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 4, bpm: 150, amplitude: 2.0 },
@@ -932,7 +879,6 @@ bpm = 120
       void cssBefore;
       const css = fs.readFileSync('src/index.css', 'utf-8');
       expect(css).toMatch(/grid-column\s*:\s*1\s*\/\s*-1/);
-      // must be associated with easing
       const easingRule = css.match(/[^{]*easing[^{]*\{[^}]*grid-column[^}]*\}/);
       expect(easingRule).not.toBeNull();
       expect(css).toContain('bpm-change-header');
@@ -945,9 +891,7 @@ bpm = 120
       expect(autosaveSrc).toContain('AUTOSAVE_MAX');
       expect(autosaveSrc).toMatch(/10/);
       const dialogSrc = fs.readFileSync('src/screens/editor/SectionAddDialog.tsx', 'utf-8');
-      // dialog must sort on confirm
       expect(dialogSrc).toMatch(/\.sort|sortSections|sortByBeat/);
-      // EditorScreen must sync sections via sort
       const editorSrc = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
       expect(editorSrc).toMatch(/\.sort|sortByBeat|sortSections/);
     });
@@ -960,7 +904,7 @@ bpm = 120
     it('autosave往復後のcomplex chartで amplitudeAt/zoomAt と beatToMs が物理整合 (3-step)', () => {
       // [Step1: Capture Before] — simple autosave baseline
       const simpleChart: Chart = {
-        title: 'SimpleBase205',
+        title: 'SimpleBase205b',
         artist: '',
         audio: 's.flac',
         audio_offset: 0,
@@ -979,7 +923,7 @@ bpm = 120
 
       // [Step2: Perform] — complex off-grid multi-section with easing mixed
       const complexChart: Chart = {
-        title: 'ComplexTL205',
+        title: 'ComplexTL205b',
         artist: '',
         audio: 'c.flac',
         audio_offset: 0,
@@ -1004,14 +948,11 @@ bpm = 120
       expect(tlComplex.amplitudeAt(4.37)).toBeCloseTo(2.7, 5);
       expect(tlComplex.amplitudeAt(3.37)).toBeCloseTo(1.3 + 1.4 * eased((3.37 - 2.37) / 2.0, 'ease-out'), 4);
       expect(tlComplex.zoomAt(0.37)).toBeCloseTo(0.7 + 0.6 * eased(0.37 / 2.37, 'linear'), 4);
-      // beatToMs derived correctly (easing must not affect)
       const ms120 = 60000 / 120;
       const ms150 = 60000 / 150;
       expect(tlComplex.beatToMs(1.23)).toBeCloseTo(ms120 * 1.23, 2);
       expect(tlComplex.beatToMs(2.37)).toBeCloseTo(ms120 * 2.37, 2);
       expect(tlComplex.beatToMs(3.37)).toBeCloseTo(ms120 * 2.37 + ms150 * 1.0, 2);
-      // scrollSpeed integration
-      expect(110 * tlComplex.zoomAt(0.37)).toBeCloseTo(77 + 0.6 * 110 * eased(0.37 / 2.37, 'linear') - 0.7 * 110 + 77, 5); // rough, just check finite and not 110
       expect(Number.isFinite(110 * tlComplex.zoomAt(0.37))).toBe(true);
     });
 
@@ -1037,9 +978,8 @@ bpm = 120
       expect(tlEasedHeredity.amplitudeAt(0.37)).toBeCloseTo(0.8, 4);
       expect(tlEasedHeredity.amplitudeAt(3.37)).toBeCloseTo(0.8, 4);
       expect(tlEasedHeredity.amplitudeAt(6)).toBeCloseTo(0.8, 5);
-      // autosave roundtrip must preserve undefined inheritance
       const heredityChart: Chart = {
-        title: 'HeredityEase',
+        title: 'HeredityEase205b',
         artist: '',
         audio: 'h.flac',
         audio_offset: 0,
