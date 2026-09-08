@@ -1869,7 +1869,7 @@
     },
     "T208": {
       "attempts": 8,
-      "status": "running",
+      "status": "passed",
       "started": 1788859647.0538263,
       "cycles": 3,
       "sessions": {
@@ -1880,7 +1880,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788861234.24264
+      "last_postmortem_at": 1788861234.24264,
+      "finished": 1788861756.5983682
+    },
+    "T209": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788862688.2379377
     }
   },
   "consecutive_no_action": 0

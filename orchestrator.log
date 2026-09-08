@@ -9617,3 +9617,7 @@ src/screens/GameScreen.tsx(61,20): error TS6133: 'setOffsetMs' is declared but i
 2026-09-08 17:55:37,985 [INFO] Orchestrator range execution: 3 tasks (from=T206, to=T208, budget=600m)
 2026-09-08 17:55:37,985 [WARNING] [T206] Blocked by incomplete dependency: T205 (running)
 2026-09-08 17:55:37,987 [WARNING] Task T206 did not pass (blocked). Stopping range.
+2026-09-08 19:05:09,250 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-08 19:10:12,364 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-08 19:18:08,237 [INFO] Orchestrator range execution: 1 tasks (from=T209, to=T209, budget=600m)
+2026-09-08 19:18:08,237 [INFO] [T209] --only mode: skipping dependency checks.
