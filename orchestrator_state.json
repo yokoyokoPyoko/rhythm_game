@@ -1897,16 +1897,18 @@
       "finished": 1788865690.0668147
     },
     "T210": {
-      "attempts": 2,
+      "attempts": 4,
       "status": "running",
       "started": 1788906817.3291845,
       "cycles": 1,
       "sessions": {
-        "qa": null,
-        "postmortem": "ses_f7d014f36ffek1MylbMRoR15CV"
+        "qa": "ses_f7cd7aaa2ffe7hHsM8TdtbKG3h",
+        "postmortem": "ses_f7cd82264ffexn2umfnqLpStdw",
+        "coder": "ses_f7cd54960ffeE6TwIY4AYKvlWB"
       },
-      "last_retry_from": "coder",
-      "last_postmortem_at": 1788904148.938039
+      "last_retry_from": "qa",
+      "last_postmortem_at": 1788906846.9054775,
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

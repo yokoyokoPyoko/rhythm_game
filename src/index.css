@@ -309,6 +309,47 @@ button:focus-visible {
   color: var(--text-muted);
 }
 
+.tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  background: rgba(10, 10, 10, 0.35);
+  pointer-events: none;
+  z-index: 100;
+}
+
+.tutorial-instruction {
+  color: var(--text);
+  font-size: 1.5rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.6;
+  max-width: 560px;
+  padding: 0 1rem;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
+}
+
+.tutorial-skip {
+  pointer-events: auto;
+  padding: 0.5rem 1rem;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+
+.tutorial-skip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .game-error {
   display: flex;
   flex-direction: column;

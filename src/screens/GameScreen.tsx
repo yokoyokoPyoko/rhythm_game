@@ -15,6 +15,7 @@ import { judgeHit } from '../game/hitJudge'
 import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
 import { ScoreManager, type ScoreStats } from '../game/score'
+import { generateTutorialChart, getTutorialInstruction } from '../game/tutorial'
 import { WaveEngine } from '../game/waveEngine'
 import { getViewMode } from '../viewMode'
 import type { Chart, RingState } from '../types'
@@ -45,6 +46,16 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   const chartRef = useRef<Chart | null>(null)
   const timelineRef = useRef<BpmTimeline | null>(null)
   const waveRef = useRef<WaveEngine | null>(null)
+  // T210: the main chart is loaded up-front ("別本編先行完了") while the tutorial
+  // runs on the same engine. Keep the main engines aside and swap them in on
+  // tutorial completion / skip.
+  const mainChartRef = useRef<Chart | null>(null)
+  const mainTimelineRef = useRef<BpmTimeline | null>(null)
+  const mainWaveRef = useRef<WaveEngine | null>(null)
+  const tutorialChartRef = useRef<Chart | null>(null)
+  const tutorialTimelineRef = useRef<BpmTimeline | null>(null)
+  const tutorialWaveRef = useRef<WaveEngine | null>(null)
+  const tutorialEndRef = useRef(0)
   const cursorRef = useRef(new Cursor())
   const spawnerRef = useRef(new RingSpawner())
   const scoreRef = useRef(new ScoreManager())
@@ -57,11 +68,24 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   const startedRef = useRef(false)
   const endedRef = useRef(false)
 
+  // T210: tutorial is only shown in public mode for normal play.
+  // Debug mode and playtest (playtest* / onExit) never show the tutorial.
+  const isPlaytest = !!(playtest || playtestChart || playtestBuffer || onExit)
+  const [phase, setPhase] = useState<'tutorial' | 'main'>(() =>
+    getViewMode() === 'public' && !isPlaytest ? 'tutorial' : 'main',
+  )
+  const phaseRef = useRef(phase)
+  const [tutorialInstruction, setTutorialInstruction] = useState('')
+
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
   const [offsetMs] = useState(getManualOffsetMs)
   const statusRef = useRef<LoadStatus>('loading')
   const onExitRef = useRef(onExit)
+
+  useEffect(() => {
+    phaseRef.current = phase
+  }, [phase])
 
   useEffect(() => {
     statusRef.current = status
@@ -139,10 +163,49 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     const ctx = audioMgr.ctx
     resetClock(ctx)
     startedRef.current = true
-    const chart = chartRef.current
-    playMusic(ctx, chart?.audio_offset ?? 0)
+    if (phaseRef.current === 'main') {
+      // T210: the tutorial phase plays the metronome only (~8s, no music).
+      // Music starts when the main chart begins (auto-advance or skip).
+      playMusic(ctx, chartRef.current?.audio_offset ?? 0)
+    }
     startMetronome(ctx)
   }, [playMusic, startMetronome])
+
+  // T210: swap the tutorial engines for the main chart, discard any tutorial
+  // score / combo / trace bonus, and start the main game seamlessly.
+  const enterMain = useCallback(() => {
+    const chart = mainChartRef.current
+    const timeline = mainTimelineRef.current
+    const wave = mainWaveRef.current
+    if (!chart || !timeline || !wave) return
+    stopMusic()
+    stopMetronome()
+    chartRef.current = chart
+    timelineRef.current = timeline
+    waveRef.current = wave
+    scoreRef.current = new ScoreManager()
+    ringsRef.current = []
+    judgementEventsRef.current = []
+    cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+    keysRef.current = { up: false, down: false, space: false }
+    phaseRef.current = 'main'
+    setPhase('main')
+    if (startedRef.current) {
+      try {
+        const ctx = AudioManager.getInstance().ctx
+        resetClock(ctx)
+        playMusic(ctx, chart.audio_offset ?? 0)
+        startMetronome(ctx)
+      } catch {
+        // AudioContext not initialized yet
+      }
+    }
+  }, [playMusic, startMetronome, stopMusic, stopMetronome])
+
+  const skipTutorial = useCallback(() => {
+    if (phaseRef.current !== 'tutorial') return
+    enterMain()
+  }, [enterMain])
 
   const handleHit = useCallback(() => {
     try {
@@ -240,10 +303,46 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         await audioMgr.ensure()
         // T187: base tempo is derived internally from the first (beat-min) section
         const timeline = new BpmTimeline(chart.bpm_changes, chart.amplitude)
-        chartRef.current = chart
-        timelineRef.current = timeline
-        waveRef.current = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)
-        cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+        const mainWave = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)
+        mainChartRef.current = chart
+        mainTimelineRef.current = timeline
+        mainWaveRef.current = mainWave
+
+        // T210: fixed, code-generated tutorial chart (~8s, metronome only).
+        const tutorialChart = generateTutorialChart()
+        const tutorialTimeline = new BpmTimeline(tutorialChart.bpm_changes, tutorialChart.amplitude)
+        const tutorialWave = new WaveEngine(
+          tutorialChart.segments,
+          tutorialTimeline,
+          tutorialChart.amplitude,
+          tutorialChart.start_position,
+        )
+        tutorialChartRef.current = tutorialChart
+        tutorialTimelineRef.current = tutorialTimeline
+        tutorialWaveRef.current = tutorialWave
+        tutorialEndRef.current =
+          tutorialTimeline.beatToMs(
+            tutorialChart.rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity),
+          ) + END_DELAY_MS
+
+        // T210: tutorial only for public normal play. Debug / playtest go straight
+        // to the main chart (本編先行読込済み).
+        const useTutorial = getViewMode() === 'public' && !isPlaytest
+        if (useTutorial) {
+          chartRef.current = tutorialChart
+          timelineRef.current = tutorialTimeline
+          waveRef.current = tutorialWave
+          cursorRef.current = new Cursor(tutorialChart.amplitude, tutorialChart.start_position)
+          phaseRef.current = 'tutorial'
+          setPhase('tutorial')
+        } else {
+          chartRef.current = chart
+          timelineRef.current = timeline
+          waveRef.current = mainWave
+          cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+          phaseRef.current = 'main'
+          setPhase('main')
+        }
 
         if (effectiveBuffer !== undefined) {
           buf = effectiveBuffer
@@ -311,12 +410,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     let raf = 0
     let lastTime = performance.now()
 
-    const initChart = chartRef.current
-    const initTimeline = timelineRef.current
-    const lastHitTime =
-      initChart && initTimeline && initChart.rings.length > 0
-        ? initTimeline.beatToMs(initChart.rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity))
-        : null
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - lastTime) / 1000)
       lastTime = now
@@ -339,7 +432,22 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           songTimeMs = 0
         }
       }
+      // T210: tutorial auto-advances after the last ring + 2s (成否不問・時間で自動進行).
+      if (startedRef.current && phaseRef.current === 'tutorial' && songTimeMs > tutorialEndRef.current) {
+        enterMain()
+        try {
+          songTimeMs = songNow()
+        } catch {
+          songTimeMs = 0
+        }
+      }
       const renderTimeMs = songTimeMs - getManualOffsetMs()
+
+      // T210: beat-synced instruction overlay while the tutorial runs
+      if (phaseRef.current === 'tutorial') {
+        const text = getTutorialInstruction(timeline.msToBeat(renderTimeMs))
+        setTutorialInstruction((prev) => (prev === text ? prev : text))
+      }
 
       ringsRef.current = spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
 
@@ -423,6 +531,12 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         showJudgementDetail: getViewMode() === 'debug',
       })
 
+      // T206: end-of-song priority = end_beat → last ring (incl. hold tail) +2s → audio length.
+      // T210: only the main phase ends the song; the tutorial auto-advances instead.
+      const lastHitTime =
+        chart.rings.length > 0
+          ? timeline.beatToMs(chart.rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity))
+          : null
       const buffer = bufferRef.current
       const fallbackEnd = lastHitTime !== null ? lastHitTime + END_DELAY_MS : 60000
       const baseEnd = chart.end_beat !== undefined
@@ -432,7 +546,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           : (buffer ? buffer.duration * 1000 : fallbackEnd)
       const endThreshold = baseEnd + (chart?.audio_offset ?? 0)
 
-      if (!endedRef.current && songTimeMs > endThreshold) {
+      if (!endedRef.current && phaseRef.current === 'main' && songTimeMs > endThreshold) {
         endedRef.current = true
         stopMusic()
         stopMetronome()
@@ -456,6 +570,14 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       stopMetronome()
     }
   }, [status, navigate, stopMusic, stopMetronome, songId])
+
+  // T210: auto-play the tutorial once the chart is loaded (public mode only).
+  // Skipping sets phase to 'main' so this never re-runs for the main chart.
+  useEffect(() => {
+    if (status !== 'ready') return
+    if (phase !== 'tutorial') return
+    void startGame()
+  }, [status, phase, startGame])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -581,6 +703,21 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             >
               終了
             </button>
+          )}
+          {phase === 'tutorial' && (
+            <div className="tutorial-overlay" data-testid="tutorial-overlay">
+              <div className="tutorial-instruction" data-testid="tutorial-instruction">
+                {tutorialInstruction || getTutorialInstruction(0)}
+              </div>
+              <button
+                type="button"
+                className="tutorial-skip"
+                data-testid="tutorial-skip"
+                onClick={skipTutorial}
+              >
+                スキップ (本編へ)
+              </button>
+            </div>
           )}
           <div className="game-offset">
             offset: {offsetMs >= 0 ? '+' : ''}
