@@ -1868,9 +1868,18 @@
       "finished": 1788859647.0522294
     },
     "T208": {
-      "attempts": 0,
+      "attempts": 8,
       "status": "running",
-      "started": 1788859647.0538263
+      "started": 1788859647.0538263,
+      "cycles": 3,
+      "sessions": {
+        "qa": "ses_f7f8faabbffe74Xkhs56yvltmO",
+        "coder": "ses_f7f8df5d7ffecrHQFIaca8DvhY",
+        "postmortem": "ses_f7f913dd2ffeQhapE83jiPYGUQ"
+      },
+      "gate_b_golden": false,
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1788861234.24264
     }
   },
   "consecutive_no_action": 0

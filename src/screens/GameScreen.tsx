@@ -16,6 +16,7 @@ import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
 import { ScoreManager, type ScoreStats } from '../game/score'
 import { WaveEngine } from '../game/waveEngine'
+import { getViewMode } from '../viewMode'
 import type { Chart, RingState } from '../types'
 
 const CANVAS_WIDTH = 800
@@ -419,6 +420,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         bpmTimeline: timeline,
         judgementEvents: judgementEventsRef.current,
         scrollSpeed: 110 * timeline.zoomAt(currentBeat),
+        showJudgementDetail: getViewMode() === 'debug',
       })
 
       const buffer = bufferRef.current

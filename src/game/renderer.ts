@@ -66,6 +66,7 @@ export interface RenderParams {
   scrollSpeed?: number;
   isTracing?: boolean;
   cursorVelocity?: { x: number; y: number };
+  showJudgementDetail?: boolean;
 }
 
 function safe(value: number, fallback: number): number {
@@ -224,7 +225,7 @@ export class Renderer {
     this.drawParticles(ctx, score);
     this.drawCursor(ctx, cursor, score);
     this.drawHud(ctx, score);
-    this.drawJudgements(ctx, events, songTimeMs);
+    this.drawJudgements(ctx, events, songTimeMs, params.showJudgementDetail);
   }
 
   private drawBackground(ctx: CanvasRenderingContext2D): void {
@@ -367,6 +368,7 @@ export class Renderer {
     ctx: CanvasRenderingContext2D,
     events: JudgementEvent[],
     songTimeMs: number,
+    showJudgementDetail?: boolean,
   ): void {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -383,7 +385,7 @@ export class Renderer {
       let text = label;
       if (e.result === 'miss') {
         text = `${label} --`;
-      } else if (e.errorMs !== null) {
+      } else if (showJudgementDetail !== false && e.errorMs !== null) {
         const ms = Math.round(e.errorMs);
         const sign = ms >= 0 ? '+' : '';
         text = `${label} ${sign}${ms}ms`;

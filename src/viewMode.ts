@@ -12,7 +12,7 @@ export function getViewMode(): ViewMode {
 
 export function setViewMode(mode: ViewMode): void {
   localStorage.setItem(STORAGE_KEY, mode)
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof (window as { dispatchEvent?: unknown }).dispatchEvent === 'function') {
     window.dispatchEvent(new Event('trace-wave-view-mode-changed'))
   }
 }
