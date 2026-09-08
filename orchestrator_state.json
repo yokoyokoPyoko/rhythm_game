@@ -1802,7 +1802,7 @@
         "coder": "ses_f80a83c82ffeycHtoy53lXZf4E",
         "postmortem": "ses_f80cd9896ffelOE0zl6WoAYGpw"
       },
-      "gate_b_golden": false,
+      "gate_b_golden": true,
       "last_retry_from": "coder",
       "last_postmortem_at": 1788842846.64198
     }
