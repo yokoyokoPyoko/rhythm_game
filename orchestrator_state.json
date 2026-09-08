@@ -1861,7 +1861,8 @@
       "cycles": 1,
       "sessions": {
         "qa": "ses_f7fae1cb5ffehiL7RCc7sYeiSr",
-        "coder": "ses_f7fab4000ffe3e0ae2EHhMR4kl"
+        "coder": "ses_f7fab4000ffe3e0ae2EHhMR4kl",
+        "reviewer": "ses_f7fa85a9cffeahRPXWFzmSrYzP"
       },
       "gate_b_golden": true
     }
