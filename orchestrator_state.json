@@ -1810,7 +1810,7 @@
     },
     "T204": {
       "attempts": 3,
-      "status": "running",
+      "status": "passed",
       "started": 1788842996.2552233,
       "cycles": 1,
       "sessions": {
@@ -1821,7 +1821,13 @@
       },
       "last_retry_from": "coder",
       "last_postmortem_at": 1788844078.8705795,
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788844226.4242449
+    },
+    "T205": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788844226.4284449
     }
   },
   "consecutive_no_action": 0
