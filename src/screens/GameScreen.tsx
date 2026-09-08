@@ -357,16 +357,38 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         for (const ring of ringsRef.current) {
           if (ring.resolved) continue
           if (ring.type === 'hold' && ring.hit && ring.holding) {
-            if (songTimeMs - getManualOffsetMs() >= (ring.releaseTime ?? ring.hitTime)) {
-              ring.resolved = true
-              ring.holdCompleted = true
-              scoreRef.current.recordHit('perfect')
-              judgementEventsRef.current.push({ result: 'perfect', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
-            } else if (!keysRef.current.space) {
+            const releaseTime = ring.releaseTime ?? ring.hitTime
+            const windowMs = timeline.beatMsAt(timeline.msToBeat(ring.hitTime)) * 0.4
+            if (songTimeMs - getManualOffsetMs() >= releaseTime + windowMs) {
               ring.holding = false
               ring.resolved = true
-              scoreRef.current.recordHit('miss')
-              judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
+              ring.holdCompleted = true
+              scoreRef.current.recordHit('good')
+              judgementEventsRef.current.push({ result: 'good', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
+            } else if (!keysRef.current.space) {
+              const e = (songTimeMs - getManualOffsetMs()) - releaseTime
+              if (e < -windowMs) {
+                ring.holding = false
+                ring.resolved = true
+                scoreRef.current.recordHit('miss')
+                judgementEventsRef.current.push({ result: 'miss', y: ring.targetY, at: songTimeMs, errorMs: null, yDist: null })
+              } else if (Math.abs(e) <= windowMs) {
+                let releaseResult: 'perfect' | 'great' | 'good'
+                if (Math.abs(e) < 50) releaseResult = 'perfect'
+                else if (Math.abs(e) < 100) releaseResult = 'great'
+                else releaseResult = 'good'
+                ring.holding = false
+                ring.resolved = true
+                ring.holdCompleted = true
+                scoreRef.current.recordHit(releaseResult)
+                judgementEventsRef.current.push({ result: releaseResult, y: ring.targetY, at: songTimeMs, errorMs: e, yDist: null })
+              } else {
+                ring.holding = false
+                ring.resolved = true
+                ring.holdCompleted = true
+                scoreRef.current.recordHit('good')
+                judgementEventsRef.current.push({ result: 'good', y: ring.targetY, at: songTimeMs, errorMs: e, yDist: null })
+              }
             }
             continue
           }
@@ -466,7 +488,58 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'ArrowUp') keysRef.current.up = false
       if (e.key === 'ArrowDown') keysRef.current.down = false
-      if (e.code === 'Space') keysRef.current.space = false
+      if (e.code === 'Space') {
+        if (startedRef.current && statusRef.current === 'ready') {
+          try {
+            const songTimeMs = songNow()
+            const timeline = timelineRef.current
+            const chart = chartRef.current
+            if (!timeline || !chart) return
+            let bestRing: RingState | null = null
+            let bestDist = Infinity
+            const beatMs = timeline.beatMsAt(timeline.msToBeat(songTimeMs))
+            const windowMs = beatMs * 0.4
+            for (const ring of ringsRef.current) {
+              if (ring.resolved || !ring.hit || ring.type !== 'hold' || !ring.holding) continue
+              const releaseTime = ring.releaseTime ?? ring.hitTime
+              const dist = Math.abs(releaseTime - (songTimeMs - getManualOffsetMs()))
+              if (dist < bestDist) {
+                bestDist = dist
+                bestRing = ring
+              }
+            }
+            if (bestRing) {
+              const releaseTime = bestRing.releaseTime ?? bestRing.hitTime
+              const e = (songTimeMs - getManualOffsetMs()) - releaseTime
+              if (e < -windowMs) {
+                bestRing.holding = false
+                bestRing.resolved = true
+                scoreRef.current.recordHit('miss')
+                judgementEventsRef.current.push({ result: 'miss', y: bestRing.targetY, at: songTimeMs, errorMs: null, yDist: null })
+              } else if (Math.abs(e) <= windowMs) {
+                let releaseResult: 'perfect' | 'great' | 'good'
+                if (Math.abs(e) < 50) releaseResult = 'perfect'
+                else if (Math.abs(e) < 100) releaseResult = 'great'
+                else releaseResult = 'good'
+                bestRing.holding = false
+                bestRing.resolved = true
+                bestRing.holdCompleted = true
+                scoreRef.current.recordHit(releaseResult)
+                judgementEventsRef.current.push({ result: releaseResult, y: bestRing.targetY, at: songTimeMs, errorMs: e, yDist: null })
+              } else {
+                bestRing.holding = false
+                bestRing.resolved = true
+                bestRing.holdCompleted = true
+                scoreRef.current.recordHit('good')
+                judgementEventsRef.current.push({ result: 'good', y: bestRing.targetY, at: songTimeMs, errorMs: e, yDist: null })
+              }
+            }
+          } catch {
+            // AudioContext not ready
+          }
+        }
+        keysRef.current.space = false
+      }
     }
 
     window.addEventListener('keydown', onKeyDown)
