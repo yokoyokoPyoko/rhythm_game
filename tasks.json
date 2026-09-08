@@ -1310,7 +1310,7 @@
   },
   {
     "id": "T202",
-    "desc": "セクション間イージングの型・TOML・補間計算。要求: セクション間遷移をイージング補間で繋ぐ。対象は速度係数・横拡大率のみ（BPM・時刻写像は不変で常に瞬間切替）。イージングは値も拍も持たず前側セクションの属性easeToNextとして保持。区間は前後セクションの開始拍から自動確定。曲線は直線/イーズアウト/イーズインの3択。無し区間は瞬間切替。修正: types.tsでBpmChangeにeaseToNext?:'linear'|'ease-out'|'ease-in'追加。bpmTimeline.tsでamplitudeAt/zoomAtを区間補間化（t=(beat-A.beat)/(B.beat-A.beat)、直線t/アウト1-(1-t)^2/インt^2、ゼロ長区間は瞬間切替フォールバック、端点値は既存解決規則流用）。loader.ts/serialize.tsで[[sections]]内のease_to_next入出力（不正値無視）。完了条件: (1) t=0.5で直線0.5/アウト0.75/イン0.25（オフグリッド必須） (2) 無し区間はステップ (3) tsc --noEmit。",
+    "desc": "セクション間イージングの型・TOML・補間計算。要求: セクション間遷移をイージング補間で繋ぐ。対象は速度係数・横拡大率のみ（BPM・時刻写像は不変で常に瞬間切替）。イージングは値も拍も持たず前側セクションの属性easeToNextとして保持。区間は前後セクションの開始拍から自動確定。曲線は直線/イーズアウト/イーズインの3択。無し区間は瞬間切替。修正: types.tsでBpmChangeにeaseToNext?:'linear'|'ease-out'|'ease-in'追加。bpmTimeline.tsでamplitudeAt/zoomAtを区間補間化（t=(beat-A.beat)/(B.beat-A.beat)、直線t/アウト1-(1-t)^3（T209で3次式化）/インt^2、ゼロ長区間は瞬間切替フォールバック、端点値は既存解決規則流用）。loader.ts/serialize.tsで[[sections]]内のease_to_next入出力（不正値無視）。完了条件: (1) t=0.5で直線0.5/アウト0.875/イン0.25（オフグリッド必須） (2) 無し区間はステップ (3) tsc --noEmit。",
     "depends_on": [
       "T201"
     ],
@@ -1369,6 +1369,15 @@
       "T207"
     ],
     "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T209",
+    "desc": "数値入力の下書き確定化＋イーズアウト3次式化。要求: (1)セグメントリスト（＋BpmEditorのbeat欄）で直接入力しようとすると中間状態が矯正されてまともに入力できない (2)イーズアウトの立ち上がりを急にする（2次式→3次式）。根本原因: SegmentEditor.tsx:46-49のupdateBeatsがキー入力のたびに即確定し中間状態（空欄→Number('')=0、先頭の0等）を1に矯正。BpmEditor.tsxのbeat欄（safeBeat即確定）も同型。bpmTimeline.ts:239-240のイーズアウトが2次式（1-(1-t)^2、t=0.5で75%到達）で緩やか。修正: SegmentEditor.tsxのbeats欄に下書きテキストstate（行ごと）を持ち表示は下書き優先・確定はonBlur／Enterのみ。確定時は有限・>0検証＋snap量子化してonSegmentsChange。無効値は直前値に戻す（undo履歴も確定時の1回pushのみ）。BpmEditor.tsxのbeat欄も同様に下書き＋確定方式へ（T203の確定時ソートと結合）。bpmTimeline.tsのイーズアウトを3次式1-(1-t)^3に変更（t=0.5で87.5%到達）。linear・ease-inは不変。T202のゴールデン値（t=0.5で0.75→0.875）および関連テスト（dynamic.test.ts・.gateb_T202.test.ts等）の期待値を3次式に合わせて更新。AGENTS.md T202の「アウト0.75」記述も0.875に訂正。完了条件: (1) beats／beat欄で途中入力が矯正されず確定時のみ反映。無効値で直前値に復帰 (2) イーズアウトが1-(1-t)^3でt=0.5到達率87.5% (3) 関連ゴールデンテストの期待値更新＋通過 (4) tsc --noEmit。",
+    "depends_on": [
+      "T208"
+    ],
+    "type": "fix",
     "test": true
   }
 ]

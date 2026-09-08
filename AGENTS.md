@@ -2468,11 +2468,11 @@ const minorStep =
 
 **修正**:
 - `src/types.ts`: `BpmChange` に `easeToNext?: 'linear' | 'ease-out' | 'ease-in'` を追加。
-- `src/audio/bpmTimeline.ts`: `amplitudeAt`／`zoomAt` を区間補間化する。`t = (beat-A.beat)/(B.beat-A.beat)`、直線 `t`／アウト `1-(1-t)^2`／イン `t^2`。`A.beat==B.beat` のゼロ長区間は瞬間切替にフォールバック。端点値は既存の解決規則を流用（未設定なら継承値）。
+- `src/audio/bpmTimeline.ts`: `amplitudeAt`／`zoomAt` を区間補間化する。`t = (beat-A.beat)/(B.beat-A.beat)`、直線 `t`／アウト `1-(1-t)^3`（T209で3次式化）／イン `t^2`。`A.beat==B.beat` のゼロ長区間は瞬間切替にフォールバック。端点値は既存の解決規則を流用（未設定なら継承値）。
 - `src/chart/loader.ts`／`src/chart/serialize.ts`: `[[sections]]` 内の `ease_to_next` の入出力。不正値は無視。
 
 **完了条件**:
-1. `t=0.5` で直線0.5／アウト0.75／イン0.25になること（オフグリッド検証必須）。
+1. `t=0.5` で直線0.5／アウト0.875／イン0.25になること（オフグリッド検証必須。T209でアウトを3次式化）。
 2. イージング無し区間が従来通りのステップになること。
 3. `tsc --noEmit` エラーなし。
 
@@ -2592,3 +2592,27 @@ const minorStep =
 1. publicで判定テキストに数値（ms・ΔY）が出ず、ランク名のみ表示されること。
 2. debugでは従来通り詳細表示されること。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T209] 数値入力の下書き確定化＋イーズアウト3次式化
+
+**要求（ユーザー確定）**:
+1. セグメントリスト（＋BpmEditorのbeat欄）で直接入力しようとすると、中間状態が矯正されてまともに入力できない。
+2. イーズアウトの立ち上がりを急にする（2次式→3次式）。
+
+**根本原因（コード確定）**:
+1. `SegmentEditor.tsx:46-49` の `updateBeats` がキー入力のたびに即確定し、中間状態（空欄→`Number('')=0`、先頭の`0`等）を `1` に矯正するため入力と表示が競合する。`BpmEditor.tsx` のbeat欄（`safeBeat` 即確定）も同型。
+2. `bpmTimeline.ts:239-240` のイーズアウトが2次式（`1-(1-t)^2`、t=0.5で75%到達）で緩やか。
+
+**修正**:
+- `SegmentEditor.tsx`：beats欄に下書きテキストstate（行ごと）を持ち、表示は下書き優先・確定は `onBlur`／Enter のみ。確定時は有限・`>0` 検証＋snap量子化して `onSegmentsChange`。無効値は直前値に戻す（undo履歴も確定時の1回pushのみになり、キー毎の履歴汚染も解消）。
+- `BpmEditor.tsx`：beat欄も同様に下書き＋確定方式へ（T203の確定時ソートと結合：確定→値更新→ソートの順）。
+- `bpmTimeline.ts`：イーズアウトを3次式 `1-(1-t)^3` に変更（t=0.5で87.5%到達）。`linear`・`ease-in` は不変。`amplitudeAt`／`zoomAt` 両方に自動反映。
+- T202のゴールデン値（t=0.5で0.75→0.875）および関連テスト（`dynamic.test.ts`・`.gateb_T202.test.ts` 等）の期待値を3次式に合わせて更新。AGENTS.md T202の「アウト0.75」記述も `0.875` に訂正すること。
+
+**完了条件**:
+1. beats／beat欄で途中入力が矯正されず、確定時のみ反映されること。無効値で直前値に復帰すること。
+2. イーズアウトが `1-(1-t)^3` で、t=0.5到達率87.5%になること。
+3. 関連ゴールデンテストの期待値更新＋通過すること。
+4. `tsc --noEmit` エラーなし。
