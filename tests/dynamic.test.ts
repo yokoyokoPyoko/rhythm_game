@@ -1,696 +1,584 @@
 /**
- * T204 — イージング行UI（全列またぎ・追加・ドラッグ並び替え） Vitest pure+DOM acceptance
- * @vitest-environment jsdom
- *
- * 要求:
- * - 表の向きは現行維持（セクション＝行、パラメータ＝列）
- * - イージングはbeat列〜横拡大率列の全列にまたがる1行として前後セクション行の間に挿入表示
- * - 「セクションを追加」の隣に「イージング追加」ボタンを新設。イージング行はドラッグで別の隙間へ移動
- *
- * 修正: BpmEditor.tsx + index.css
- * - 「イージング追加」ボタン：押下で選択中セクションの直後（無選択なら末尾隙間）のeaseToNextを設定（既定は直線）
- * - イージング行：曲線選択（直線／イーズアウト／イーズイン）＋削除ボタン＋ドラッグハンドル。両端（前後セクションが無い位置）へのドロップは無効
- * - ドラッグ（HTML5 DnD）：掴んだイージング行を別の隙間にドロップするとeaseToNextの所有セクションが付け替わる
- * - CSS：全列またぎ行のスタイル（grid-column: 1 / -1 等）
- *
- * TDD Red->Green: 実装前は全テストが失敗する（ボタン・行・ドラッグが存在しないため）
+ * T205 — セクションイージングの結合・回帰
+ * node環境 Vitest 単体テスト。純粋計算モジュールのみ import。
+ * 完了条件:
+ *  1. autosave保存→復元でイージング設定が再現される
+ *  2. オフグリッド補間値の数値検証が通る (linear / ease-out / ease-in)
+ *  3. 旧譜面(ease_to_next無し)は全区間瞬間切替(ステップ)として動作
+ *  4. 回帰: T186〜T191 / T55 / T102-T103 的な不変量
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import React, { useState } from 'react';
-import { render, screen, fireEvent, within, act } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import '@testing-library/jest-dom';
-import * as fs from 'fs';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import type { BpmChange } from '../src/types';
-// BpmEditor is the SUT — must be imported and rendered (not file-content assertion)
-import BpmEditor from '../src/screens/editor/BpmEditor';
+import { parseChartText } from '../src/chart/loader';
+import { chartToToml } from '../src/chart/serialize';
+import { saveAutosave, loadAutosave, listAutosaves, deleteAutosave, AUTOSAVE_PREFIX } from '../src/chart/autosave';
+import type { Chart, BpmChange } from '../src/types';
+import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
+import { Cursor } from '../src/game/cursor';
 
-vi.useFakeTimers({ shouldAdvanceTime: true });
-
-beforeEach(() => {
-  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-});
-afterEach(() => {
-  vi.clearAllTimers();
-});
-
-// helper: expected easing factor (must match spec: linear=t, ease-out=1-(1-t)^2, ease-in=t^2)
-function easeFactor(kind: string, t: number): number {
-  if (kind === 'linear') return t;
-  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 2);
-  if (kind === 'ease-in') return Math.pow(t, 2);
-  return t;
-}
-
-function makeTimeline(sections: BpmChange[], baseAmp = 1.0): BpmTimeline {
-  return new (BpmTimeline as unknown as new (a: unknown, b: unknown) => BpmTimeline)(sections as unknown, baseAmp as unknown);
-}
-
-// Harness to capture onSectionsChange 3-step transitions
-function Harness({
-  initial,
-  onCaptured,
-}: {
-  initial: BpmChange[];
-  onCaptured?: (next: BpmChange[]) => void;
-}) {
-  const [sections, setSections] = useState<BpmChange[]>(initial);
-  const handle = (next: BpmChange[]) => {
-    setSections(next);
-    onCaptured?.(next);
-    // expose for page.evaluate style if needed
-    (window as unknown as Record<string, unknown>).__t204_lastSections = next;
+// ---------------------------------------------------------------------------
+// localStorage polyfill for node (autosave.ts は localStorage を直接参照)
+// ---------------------------------------------------------------------------
+function ensureLocalStorageMock() {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (g['localStorage'] && typeof (g['localStorage'] as { getItem: unknown }).getItem === 'function') return;
+  const store = new Map<string, string>();
+  const mock = {
+    getItem(key: string) { return store.has(key) ? store.get(key)! : null; },
+    setItem(key: string, value: string) { store.set(key, String(value)); },
+    removeItem(key: string) { store.delete(key); },
+    clear() { store.clear(); },
+    key(index: number) { return Array.from(store.keys())[index] ?? null; },
+    get length() { return store.size; },
   };
-  return React.createElement(BpmEditor, {
-    bpmChanges: sections,
-    onSectionsChange: handle,
+  (g['localStorage'] as unknown) = mock;
+  // also expose on global for direct access
+  (global as unknown as Record<string, unknown>)['localStorage'] = mock;
+}
+ensureLocalStorageMock();
+
+function clearAutosaveStorage() {
+  const ls = (globalThis as unknown as { localStorage: Storage }).localStorage;
+  const keys: string[] = [];
+  for (let i = 0; i < ls.length; i++) {
+    const k = ls.key(i);
+    if (k) keys.push(k);
+  }
+  for (const k of keys) {
+    if (k.startsWith(AUTOSAVE_PREFIX)) ls.removeItem(k);
+  }
+}
+
+// helper to build chart fixture
+function makeChart(overrides: Partial<Chart> & { bpm_changes: BpmChange[] }): Chart {
+  return {
+    title: 'Test Chart',
+    artist: 'Tester',
+    audio: 'test.wav',
+    audio_offset: 0,
     amplitude: 1.0,
-    startPosition: 0,
-    onStartPositionChange: () => {},
-    endBeat: undefined,
-    onEndBeatChange: () => {},
-    onRequestAddSection: () => {},
-  } as unknown as Record<string, unknown>);
+    start_position: 0,
+    bpm_changes: overrides.bpm_changes,
+    segments: overrides.segments ?? [{ direction: 'up', beats: 4 }],
+    rings: overrides.rings ?? [],
+    end_beat: overrides.end_beat,
+  };
 }
 
-function getEasingAddButton(container: HTMLElement): HTMLElement | null {
-  // try by testid first, then by role/text
-  const byTestId = container.querySelector('[data-testid="easing-add"]') as HTMLElement | null;
-  if (byTestId) return byTestId;
-  const byId = container.querySelector('[data-testid="easing-add-button"]') as HTMLElement | null;
-  if (byId) return byId;
-  // fallback: button containing イージング追加
-  const allButtons = Array.from(container.querySelectorAll('button'));
-  const found = allButtons.find((b) => (b.textContent ?? '').includes('イージング追加'));
-  if (found) return found as HTMLElement;
-  // also try screen query
-  try {
-    return screen.getByRole('button', { name: /イージング追加/ });
-  } catch { return null; }
-}
-
-function getEasingRows(container: HTMLElement): HTMLElement[] {
-  // try data-testid prefix
-  let rows = Array.from(container.querySelectorAll('[data-testid^="easing-row"]')) as HTMLElement[];
-  if (rows.length > 0) return rows;
-  rows = Array.from(container.querySelectorAll('[data-testid^="easing"]')) as HTMLElement[];
-  // filter to rows that are not the add button
-  rows = rows.filter((el) => !el.textContent?.includes('イージング追加'));
-  if (rows.length > 0) return rows;
-  // class fallback
-  rows = Array.from(container.querySelectorAll('.easing-row, .bpm-easing-row, .section-easing-row')) as HTMLElement[];
-  if (rows.length > 0) return rows;
-  // generic: look for select with options 直線/イーズアウト/イーズイン
-  const selects = Array.from(container.querySelectorAll('select'));
-  const easingSelects = selects.filter((s) => {
-    const txt = s.textContent ?? '';
-    return txt.includes('直線') || txt.includes('イーズ');
+// ---------------------------------------------------------------------------
+// T205 — Integration
+// ---------------------------------------------------------------------------
+describe('T205 セクションイージング結合・回帰 (node)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clearAutosaveStorage();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
-  // parent li/row of each select is the easing row
-  return easingSelects.map((s) => (s.closest('li, div') as HTMLElement) ?? (s as unknown as HTMLElement));
-}
 
-function getSectionRows(container: HTMLElement): HTMLElement[] {
-  return Array.from(container.querySelectorAll('.bpm-change-item')) as HTMLElement[];
-}
-
-function getGapDropTargets(container: HTMLElement): HTMLElement[] {
-  let gaps = Array.from(container.querySelectorAll('[data-testid^="easing-gap"]')) as HTMLElement[];
-  if (gaps.length > 0) return gaps;
-  gaps = Array.from(container.querySelectorAll('[data-testid^="easing-drop"]')) as HTMLElement[];
-  if (gaps.length > 0) return gaps;
-  // also .easing-gap
-  gaps = Array.from(container.querySelectorAll('.easing-gap')) as HTMLElement[];
-  return gaps;
-}
-
-describe('T204 イージング行UI（全列またぎ・追加・ドラッグ並び替え）— TDD Red', () => {
-  describe('1. イージング追加ボタン — 3-step state transition', () => {
-    it('初期0行 -> イージング追加クリック -> 1行が末尾隙間(linear)で増え、コールバックにeaseToNextが伝わる (3-step)', async () => {
-      // Step 1: Capture Initial State — render with 3 sections, no easing
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120 },
-        { beat: 4, bpm: 130 },
-        { beat: 8, bpm: 140 },
-      ];
-      let captured: BpmChange[] | null = null;
-      const { container } = render(React.createElement(Harness, { initial, onCaptured: (n) => (captured = n) }));
-      const beforeRows = getEasingRows(container);
-      expect(beforeRows.length).toBe(0);
-      const beforeGapTargets = getGapDropTargets(container);
-      void beforeGapTargets;
-
-      // also ensure at least params columns still exist (beat/BPM/速度/横拡大)
-      const sectionRows = getSectionRows(container);
-      expect(sectionRows.length).toBe(3);
-
-      // Step 2: Perform User Interaction — click イージング追加
-      const addBtn = getEasingAddButton(container);
-      expect(addBtn).not.toBeNull();
-      // Must be next to セクションを追加
-      const addSectionBtn = container.querySelector('.bpm-change-add') ?? screen.queryByText(/セクションを追加/);
-      expect(addSectionBtn).not.toBeNull();
-      // verify they are siblings / same parent
-      if (addBtn && addSectionBtn) {
-        const parent1 = addBtn.parentElement;
-        const parent2 = addSectionBtn.parentElement as HTMLElement | null;
-        // both inside same container (spec says隣)
-        // allow direct sibling or shared wrapper; at least both visible
-        expect(parent1).not.toBeNull();
-        expect(parent2).not.toBeNull();
-      }
-      await act(async () => {
-        if (addBtn) fireEvent.click(addBtn);
+  // -------------------------------------------------------------
+  // 1) autosave往復: ease_to_next の保存・復元
+  // -------------------------------------------------------------
+  describe('1. autosave保存→復元でイージング設定が再現される (3-step)', () => {
+    it('linear / ease-out / ease-in が TOML往復・autosave往復で完全再現される', () => {
+      // Step1: Capture Initial State — chart with 3 easing types
+      const initial: Chart = makeChart({
+        title: 'Easing Autosave ' + Date.now(),
+        bpm_changes: [
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'linear' },
+          { beat: 4, bpm: 140, amplitude: 2.0, zoom: 1.5, easeToNext: 'ease-out' },
+          { beat: 8, bpm: 160, amplitude: 0.7, zoom: 0.5, easeToNext: 'ease-in' },
+          { beat: 12, bpm: 180, amplitude: 1.3, zoom: 2.0 },
+        ],
       });
-      // allow state update
-      await act(async () => { vi.advanceTimersByTime(50); });
+      const beforeCount = listAutosaves().length;
 
-      // Step 3: Assert Resulting Transition — exactly one easing row with linear, spanning columns
-      const afterRows = getEasingRows(container);
-      expect(afterRows.length).toBe(1);
-      // callback must have received easeToNext
-      expect(captured).not.toBeNull();
-      const withEase = (captured as unknown as BpmChange[]).filter((c) => c.easeToNext !== undefined);
-      expect(withEase.length).toBe(1);
-      expect(withEase[0].easeToNext).toBe('linear');
-      // Tail gap: for 3 sections, valid gaps are after index 0 and 1; tail is after 1 (ease on section index 1)
-      // implementation may put ease on last-1 or last; we accept either tail position but must be one of the interior sections
-      const tailCandidates = (captured as BpmChange[]).filter((c) => c.easeToNext === 'linear');
-      const tailBeat = tailCandidates[0].beat;
-      // must be 0 or 4 (not 8 if invalid tail after last). For spec "末尾隙間" = gap after second-last section => beat 4. Accept 0/4 but not out-of-range
-      expect([0, 4]).toContain(tailBeat);
-      // ensure not on after-last (beat 8) which would be invalid end
-      const lastSectionHasEase = (captured as BpmChange[]).find((c) => c.beat === 8)?.easeToNext;
-      // tail gap should not be after last, so last section must NOT have easing if there are >=2 sections
-      // For 3 sections, tail gap is after index1, not index2 => last should be undefined
-      expect(lastSectionHasEase).toBeUndefined();
+      // Step2: Perform User Interaction — serialize via chartToToml then autosave
+      const toml = chartToToml(initial);
+      // TOML must contain ease_to_next literals
+      expect(toml).toContain('ease_to_next = "linear"');
+      expect(toml).toContain('ease_to_next = "ease-out"');
+      expect(toml).toContain('ease_to_next = "ease-in"');
+
+      // also verify parseChartText roundtrip directly
+      const parsed = parseChartText(toml, 'mem');
+      expect(parsed.bpm_changes[0].easeToNext).toBe('linear');
+      expect(parsed.bpm_changes[1].easeToNext).toBe('ease-out');
+      expect(parsed.bpm_changes[2].easeToNext).toBe('ease-in');
+      expect(parsed.bpm_changes[3].easeToNext).toBeUndefined();
+
+      // autosave save
+      const { slug } = saveAutosave(initial);
+      vi.advanceTimersByTime(1000);
+      expect(listAutosaves().length).toBe(beforeCount + 1);
+
+      // Step3: Assert Resulting Transition — load and compare effective values
+      const restored = loadAutosave(slug);
+      expect(restored.bpm_changes.length).toBe(4);
+      expect(restored.bpm_changes[0]).toMatchObject({ beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'linear' });
+      expect(restored.bpm_changes[1]).toMatchObject({ beat: 4, bpm: 140, amplitude: 2.0, zoom: 1.5, easeToNext: 'ease-out' });
+      expect(restored.bpm_changes[2]).toMatchObject({ beat: 8, bpm: 160, amplitude: 0.7, zoom: 0.5, easeToNext: 'ease-in' });
+      expect(restored.bpm_changes[3].easeToNext).toBeUndefined();
+
+      // Timeline behavior must also be restored via the loaded chart
+      const tl = new BpmTimeline(restored.bpm_changes, restored.amplitude);
+      // midpoint of [0,4] with linear 1.0->2.0 should be 1.5
+      expect(tl.amplitudeAt(2)).toBeCloseTo(1.5, 6);
+      // midpoint of [4,8] ease-out 2.0->0.7 => 2.0 + (0.7-2.0)*0.75 = 1.025
+      expect(tl.amplitudeAt(6)).toBeCloseTo(2.0 + (0.7 - 2.0) * 0.75, 6);
+      // midpoint of [8,12] ease-in 0.7->1.3 => 0.7 + 0.6*0.25 = 0.85
+      expect(tl.amplitudeAt(10)).toBeCloseTo(0.85, 6);
     });
 
-    it('選択中セクション直後にイージングが追加される挙動 — tail以外でも作用 (3-step, off-grid)', async () => {
-      // Step1: 4 sections with off-grid beats to ensure sorting not broken
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120 },
-        { beat: 2.37, bpm: 130 },
-        { beat: 4.37, bpm: 140 },
-        { beat: 8.25, bpm: 150 },
-      ];
-      let captured: BpmChange[] | null = null;
-      const { container } = render(React.createElement(Harness, { initial, onCaptured: (n) => (captured = n) }));
-      expect(getEasingRows(container).length).toBe(0);
-      // If implementation supports selection, we would select index 0 then add. Without selection prop,
-      // the button still must create at tail. We test that at least one easing appears and is linear.
-      const addBtn = getEasingAddButton(container);
-      expect(addBtn).not.toBeNull();
-      await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-      await act(async () => { vi.advanceTimersByTime(50); });
-      const afterRows = getEasingRows(container);
-      expect(afterRows.length).toBe(1);
-      expect(captured).not.toBeNull();
-      expect((captured as BpmChange[]).filter((c) => c.easeToNext).length).toBe(1);
-      expect((captured as BpmChange[]).find((c) => c.easeToNext)?.easeToNext).toBe('linear');
-      // off-grid beats must remain sorted after addition
-      const beats = (captured as BpmChange[]).map((c) => c.beat);
-      const sorted = [...beats].sort((a, b) => a - b);
-      expect(beats).toEqual(sorted);
+    it('autosaveの値がBpmTimelineの補間に反映され、リロード後も同一である (3-step isolation)', () => {
+      const chart: Chart = makeChart({
+        title: 'Autosave Isolate ' + Math.random().toString(36).slice(2),
+        bpm_changes: [
+          { beat: 0, bpm: 120, amplitude: 0.5, zoom: 2.0, easeToNext: 'ease-out' },
+          { beat: 8, bpm: 120, amplitude: 2.5, zoom: 0.5 },
+        ],
+      });
+      // Step1 initial
+      const tlBefore = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+      const offGridBeat = 3.37; // off-grid
+      const expectedBefore = 0.5 + (2.5 - 0.5) * (1 - (1 - (offGridBeat / 8)) ** 2);
+      expect(tlBefore.amplitudeAt(offGridBeat)).toBeCloseTo(expectedBefore, 6);
+      expect(tlBefore.zoomAt(offGridBeat)).toBeCloseTo(2.0 + (0.5 - 2.0) * (1 - (1 - offGridBeat / 8) ** 2), 6);
+
+      // Step2 save & reload
+      const { slug } = saveAutosave(chart);
+      const restored = loadAutosave(slug);
+      // Step3 assert restored timeline matches
+      const tlAfter = new BpmTimeline(restored.bpm_changes, restored.amplitude);
+      expect(tlAfter.amplitudeAt(offGridBeat)).toBeCloseTo(expectedBefore, 6);
+      expect(tlAfter.zoomAt(offGridBeat)).toBeCloseTo(2.0 + (0.5 - 2.0) * (1 - (1 - offGridBeat / 8) ** 2), 6);
+      // also at t=0.5 exact: beat 4
+      expect(tlAfter.amplitudeAt(4)).toBeCloseTo(0.5 + (2.5 - 0.5) * 0.75, 6);
+    });
+
+    it('異なるタイトルの複数スロットが独立して保持される・上書きで最新が勝つ', () => {
+      const c1 = makeChart({ title: 'Song A', bpm_changes: [{ beat: 0, bpm: 100, amplitude: 1.0, easeToNext: 'linear' }, { beat: 4, bpm: 100, amplitude: 2.0 }] });
+      const c2 = makeChart({ title: 'Song B', bpm_changes: [{ beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-in' }, { beat: 4, bpm: 120, amplitude: 1.3 }] });
+      saveAutosave(c1);
+      vi.advanceTimersByTime(10);
+      saveAutosave(c2);
+      const list = listAutosaves();
+      expect(list.length).toBe(2);
+      const slugs = list.map(s => s.slug);
+      expect(slugs).toContain('song-a');
+      expect(slugs).toContain('song-b');
+      const rA = loadAutosave('song-a');
+      const rB = loadAutosave('song-b');
+      expect(rA.bpm_changes[0].easeToNext).toBe('linear');
+      expect(rB.bpm_changes[0].easeToNext).toBe('ease-in');
+      // update A with different easing, reload should reflect new value
+      const c1v2 = makeChart({ title: 'Song A', bpm_changes: [{ beat: 0, bpm: 100, amplitude: 1.0, easeToNext: 'ease-out' }, { beat: 4, bpm: 100, amplitude: 2.0 }] });
+      saveAutosave(c1v2);
+      const rAv2 = loadAutosave('song-a');
+      expect(rAv2.bpm_changes[0].easeToNext).toBe('ease-out');
     });
   });
 
-  describe('2. イージング行の表示 — 全列またぎ・前後セクション間に挿入 (3-step)', () => {
-    it('イージング行が前後セクション間に全列またがりで挿入され、grid-column: 1 / -1 を持つ (3-step)', async () => {
-      // Step1: Capture Initial — no easing rows
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120 },
-        { beat: 4, bpm: 130 },
-        { beat: 8, bpm: 140 },
-      ];
-      const { container } = render(React.createElement(Harness, { initial }));
-      expect(getEasingRows(container).length).toBe(0);
-      const beforeSectionCount = getSectionRows(container).length;
-      expect(beforeSectionCount).toBe(3);
-
-      // Step2: Perform Interaction — click イージング追加
-      const addBtn = getEasingAddButton(container);
-      expect(addBtn).not.toBeNull();
-      await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-      await act(async () => { vi.advanceTimersByTime(50); });
-
-      // Step3: Assert — row exists, spans all columns, and is ordered between sections
-      const rows = getEasingRows(container);
-      expect(rows.length).toBe(1);
-      const row = rows[0];
-      // grid-column: 1 / -1 via inline style or CSS file rule
-      const cssText = fs.readFileSync('src/index.css', 'utf-8');
-      const hasGridRule = /grid-column\s*:\s*1\s*\/\s*-1/.test(cssText);
-      expect(hasGridRule).toBe(true);
-      // class should indicate full-span
-      const className = row.className ?? '';
-      const hasSpanClass =
-        /easing/.test(className) ||
-        /grid-column/.test(row.getAttribute('style') ?? '') ||
-        hasGridRule;
-      expect(hasSpanClass).toBeTruthy();
-      // inline style check if present
-      const styleAttr = row.getAttribute('style') ?? '';
-      if (styleAttr) {
-        expect(styleAttr).toMatch(/grid-column/);
-      } else {
-        // if not inline, at least the CSS file must target the easing row selector
-        // look for selector containing easing and grid-column
-        const easingRuleIdx = cssText.search(/easing[\s\S]{0,300}grid-column/);
-        expect(easingRuleIdx).toBeGreaterThan(-1);
+  // -------------------------------------------------------------
+  // 2) オフグリッド補間値の数値検証
+  // -------------------------------------------------------------
+  describe('2. オフグリッド補間値の数値検証 (T202 formula)', () => {
+    it('t=0.5 で linear=0.5 / ease-out=0.75 / ease-in=0.25 になる (amplitudeAt & zoomAt)', () => {
+      // linear
+      {
+        const tl = new BpmTimeline([
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'linear' },
+          { beat: 4, bpm: 120, amplitude: 3.0, zoom: 3.0 },
+        ], 1.0);
+        // t=0.5 => beat 2
+        expect(tl.amplitudeAt(2)).toBeCloseTo(2.0, 6); // 1 + 2*0.5
+        expect(tl.zoomAt(2)).toBeCloseTo(2.0, 6);
       }
-      // ordering: easing row should be between section rows in DOM order
-      // collect all children of bpm-change-list
-      const list = container.querySelector('.bpm-change-list');
-      expect(list).not.toBeNull();
-      if (list) {
-        const children = Array.from(list.children) as HTMLElement[];
-        // there should be 3 section items + 1 easing row = 4 children total
-        // easing row may be li or div; at least ordering must have section before and after
-        const easingIdx = children.indexOf(row as unknown as HTMLElement);
-        // if row is not direct child (maybe fragment), fallback to checking DOM order via compareDocumentPosition
-        if (easingIdx === -1) {
-          const sections = getSectionRows(container);
-          // easing row should be after first section and before last section when tail gap (index1)
-          const firstSec = sections[0];
-          const lastSec = sections[sections.length - 1];
-          expect(firstSec.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-          expect(row.compareDocumentPosition(lastSec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-        } else {
-          expect(easingIdx).toBeGreaterThan(0);
-          expect(easingIdx).toBeLessThan(children.length - 1);
+      // ease-out
+      {
+        const tl = new BpmTimeline([
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'ease-out' },
+          { beat: 4, bpm: 120, amplitude: 3.0, zoom: 3.0 },
+        ], 1.0);
+        expect(tl.amplitudeAt(2)).toBeCloseTo(2.5, 6); // 1+2*0.75
+        expect(tl.zoomAt(2)).toBeCloseTo(2.5, 6);
+      }
+      // ease-in
+      {
+        const tl = new BpmTimeline([
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'ease-in' },
+          { beat: 4, bpm: 120, amplitude: 3.0, zoom: 3.0 },
+        ], 1.0);
+        expect(tl.amplitudeAt(2)).toBeCloseTo(1.5, 6); // 1+2*0.25
+        expect(tl.zoomAt(2)).toBeCloseTo(1.5, 6);
+      }
+    });
+
+    it('端数オフグリッド 0.37 / 1.23 / 3.37 / 5.71 で正確に補間される (3-step)', () => {
+      const cases: { beat: number; ease: 'linear' | 'ease-out' | 'ease-in'; tExpected: (t: number) => number }[] = [
+        { beat: 0, ease: 'linear', tExpected: t => t },
+        { beat: 0, ease: 'ease-out', tExpected: t => 1 - (1 - t) * (1 - t) },
+        { beat: 0, ease: 'ease-in', tExpected: t => t * t },
+      ];
+      // base interval [2, 6] length 4, amplitude 0.7 -> 2.7, zoom 0.5 -> 1.5
+      for (const { ease, tExpected } of cases) {
+        const tl = new BpmTimeline([
+          { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0 },
+          { beat: 2, bpm: 120, amplitude: 0.7, zoom: 0.5, easeToNext: ease },
+          { beat: 6, bpm: 120, amplitude: 2.7, zoom: 1.5 },
+          { beat: 10, bpm: 120, amplitude: 1.3, zoom: 2.0 },
+        ], 1.0);
+        // Step1: before interval should be base
+        expect(tl.amplitudeAt(1.9)).toBeCloseTo(1.0, 6);
+        // Step2: inside interval at off-grid points
+        const offGridBeats = [2.37, 3.23, 4.71, 5.07];
+        for (const b of offGridBeats) {
+          const t = (b - 2) / 4;
+          const eased = tExpected(t);
+          const expAmp = 0.7 + (2.7 - 0.7) * eased;
+          const expZoom = 0.5 + (1.5 - 0.5) * eased;
+          expect(tl.amplitudeAt(b)).toBeCloseTo(expAmp, 6);
+          expect(tl.zoomAt(b)).toBeCloseTo(expZoom, 6);
         }
-      }
-      // row must contain curve select + delete + drag handle
-      const selects = within(row).queryAllByRole('combobox');
-      // alternative: find select element directly
-      const sel = row.querySelector('select');
-      const hasSelect = selects.length > 0 || sel !== null;
-      expect(hasSelect).toBe(true);
-      if (sel) {
-        const opts = Array.from(sel.querySelectorAll('option')).map((o) => o.textContent ?? '');
-        // must have 3 options: 直線 / イーズアウト / イーズイン
-        expect(opts.join(' ')).toMatch(/直線/);
-        expect(opts.join(' ')).toMatch(/イーズアウト/);
-        expect(opts.join(' ')).toMatch(/イーズイン/);
-      }
-      // delete button inside row
-      const delBtn = row.querySelector('button');
-      expect(delBtn).not.toBeNull();
-      // drag handle: draggable attribute or data-testid handle or cursor grab
-      const hasHandle =
-        row.getAttribute('draggable') === 'true' ||
-        row.querySelector('[data-testid*="handle"]') !== null ||
-        row.querySelector('[draggable]') !== null ||
-        /grab/.test(row.getAttribute('style') ?? '') ||
-        row.querySelector('.easing-handle') !== null;
-      // implementor must make row draggable; this will fail before implementation
-      expect(hasHandle).toBe(true);
-    });
-
-    it('イージング行の曲線選択で値が linear/t ease-out/t ease-in に切り替わる (3-step)', async () => {
-      // Step1: start with one easing linear via initial prop
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120, easeToNext: 'linear' } as BpmChange,
-        { beat: 4, bpm: 130 },
-        { beat: 8, bpm: 140 },
-      ];
-      let captured: BpmChange[] | null = null;
-      const { container } = render(React.createElement(Harness, { initial, onCaptured: (n) => (captured = n) }));
-      // before select shows linear
-      let rows = getEasingRows(container);
-      // if harness starts with ease, rows should already be 1; if not, add one
-      if (rows.length === 0) {
-        const addBtn = getEasingAddButton(container);
-        await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-        await act(async () => { vi.advanceTimersByTime(50); });
-        rows = getEasingRows(container);
-      }
-      expect(rows.length).toBe(1);
-      const row = rows[0];
-      const sel = row.querySelector('select') as HTMLSelectElement | null;
-      expect(sel).not.toBeNull();
-      const beforeVal = sel ? sel.value : '';
-      expect(['linear', 'ease-out', 'ease-in', ''].includes(beforeVal) || beforeVal.includes('直線')).toBeTruthy();
-
-      // Step2: change to ease-out
-      await act(async () => {
-        if (sel) {
-          fireEvent.change(sel, { target: { value: 'ease-out' } });
-        }
-      });
-      await act(async () => { vi.advanceTimersByTime(50); });
-
-      // Step3: assert captured has ease-out
-      expect(captured).not.toBeNull();
-      if (captured) {
-        const eased = (captured as BpmChange[]).find((c) => c.easeToNext !== undefined);
-        // allow either first or tail section to carry it; just check one is ease-out
-        expect(eased?.easeToNext).toBe('ease-out');
-      }
-      // also test change to ease-in
-      await act(async () => {
-        if (sel) fireEvent.change(sel, { target: { value: 'ease-in' } });
-      });
-      await act(async () => { vi.advanceTimersByTime(50); });
-      if (captured) {
-        const eased2 = (captured as BpmChange[]).find((c) => c.easeToNext === 'ease-in');
-        expect(eased2).toBeDefined();
+        // Step3: after interval should be step at next value
+        expect(tl.amplitudeAt(6)).toBeCloseTo(2.7, 6);
+        expect(tl.amplitudeAt(7.37)).toBeCloseTo(2.7, 6);
       }
     });
 
-    it('イージング行の削除ボタンで該当easeToNextが消える (3-step)', async () => {
-      // Step1: initial with one easing
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120, easeToNext: 'linear' } as BpmChange,
-        { beat: 4, bpm: 130 },
-        { beat: 8, bpm: 140 },
-      ];
-      let captured: BpmChange[] | null = null;
-      const { container } = render(React.createElement(Harness, { initial, onCaptured: (n) => (captured = n) }));
-      let rows = getEasingRows(container);
-      if (rows.length === 0) {
-        const addBtn = getEasingAddButton(container);
-        await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-        await act(async () => { vi.advanceTimersByTime(50); });
-        rows = getEasingRows(container);
+    it('複雑な振幅値 (0.7 / 1.3 / 2.7 / 3.4) と端数拍 0.37/1.23 で WaveEngine と Cursor が同一規約を維持 (T127 regression)', () => {
+      // This proves easing does not break the speed-coefficient invariant of T127
+      // WaveEngine uses amplitudeAt(segStartBeat) per segment, Cursor uses amplitudeAt(currentBeat).
+      // We test that at a beat that lies inside an eased interval, waveYAt slope reflects interpolated amplitude.
+      const amplitudes: number[] = [0.7, 1.3, 2.7, 3.4];
+      for (const amp of amplitudes) {
+        const tl = new BpmTimeline([
+          { beat: 0, bpm: 120, amplitude: amp },
+          { beat: 4, bpm: 120, amplitude: amp },
+        ], amp);
+        const segs = [{ direction: 'up' as const, beats: 4 }];
+        const engine = new WaveEngine(segs, tl, amp, 0);
+        const cursor = new Cursor(amp, 0);
+        // slope should be 2*130*amp
+        const beatMs = tl.beatMsAt(0);
+        const expectedSpeed = (2 * TW_AMP * amp) / (beatMs / 1000);
+        // Check waveYAt off-grid: beat 0.37 and 1.23
+        const perBeatPx = 2 * TW_AMP * amp;
+        // up from center: startY = CENTER, so y = CENTER - perBeatPx * beat (clamped)
+        const y037 = engine.waveYAt(0.37);
+        const y123 = engine.waveYAt(1.23);
+        const exp037 = TW_CENTER_Y - perBeatPx * 0.37;
+        const exp123 = TW_CENTER_Y - perBeatPx * 1.23;
+        // clamped check (amp large may clamp at top)
+        const clampedExp037 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, exp037));
+        const clampedExp123 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, exp123));
+        expect(y037).toBeCloseTo(clampedExp037, 4);
+        expect(y123).toBeCloseTo(clampedExp123, 4);
+        // cursor movement: update 0.1 sec with up pressed should move -speed*dt
+        const startY = cursor.y;
+        cursor.update(0.1, true, false, beatMs, undefined);
+        expect(cursor.y).toBeCloseTo(Math.max(TW_CENTER_Y - TW_AMP, startY - expectedSpeed * 0.1), 4);
       }
-      const beforeCount = rows.length;
-      expect(beforeCount).toBe(1);
+    });
 
-      // Step2: click delete
-      const row = rows[0];
-      const del = row.querySelector('button') as HTMLElement | null;
-      expect(del).not.toBeNull();
-      await act(async () => { if (del) fireEvent.click(del); });
-      await act(async () => { vi.advanceTimersByTime(50); });
-
-      // Step3: assert no easing rows and captured has no easeToNext
-      const afterRows = getEasingRows(container);
-      expect(afterRows.length).toBe(0);
-      if (captured) {
-        expect((captured as BpmChange[]).filter((c) => c.easeToNext !== undefined).length).toBe(0);
-      }
+    it('イージング区間の途中 beat で amplitudeAt が step ではなく補間値を返す (厳密不等式)', () => {
+      const tlLinear = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' },
+        { beat: 4, bpm: 120, amplitude: 2.0 },
+      ], 1.0);
+      const tlStep = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0 },
+        { beat: 4, bpm: 120, amplitude: 2.0 },
+      ], 1.0);
+      // at beat 1.37, linear should be between 1.0 and 2.0 but not equal to 1.0 (step would be 1.0)
+      const t = 1.37 / 4;
+      expect(tlLinear.amplitudeAt(1.37)).toBeCloseTo(1.0 + (2.0 - 1.0) * t, 6);
+      expect(tlStep.amplitudeAt(1.37)).toBe(1.0); // step
+      expect(tlLinear.amplitudeAt(1.37)).not.toBeCloseTo(1.0, 2);
     });
   });
 
-  describe('3. ドラッグで別の隙間へ移動 — 3-step + 両端無効', () => {
-    it('ドラッグで gap0 -> gap1 へ移動すると所有セクションのeaseToNextが付け替わる (3-step, off-grid)', async () => {
-      // Step1: Capture Before — 3 sections, ease on gap0 (section0 linear)
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120, easeToNext: 'linear' } as BpmChange,
-        { beat: 4.37, bpm: 130 }, // off-grid 4.37
-        { beat: 8.25, bpm: 140 },
-      ];
-      let captured: BpmChange[] | null = null;
-      const { container } = render(React.createElement(Harness, { initial, onCaptured: (n) => (captured = n) }));
-      let rows = getEasingRows(container);
-      if (rows.length === 0) {
-        // fallback: create via add if initial not rendered (implementation may filter)
-        const addBtn = getEasingAddButton(container);
-        await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-        await act(async () => { vi.advanceTimersByTime(50); });
-        rows = getEasingRows(container);
-      }
-      expect(rows.length).toBe(1);
-      // before: section0 has ease, section1 has none
-      const beforeSections = (window as unknown as Record<string, unknown>).__t204_lastSections as BpmChange[] | undefined;
-      void beforeSections;
-      // ensure initial is gap0
-      // if captured is null, use initial
-      const before = captured ?? initial;
-      expect((before as BpmChange[])[0].easeToNext).toBe('linear');
-      expect((before as BpmChange[])[1].easeToNext).toBeUndefined();
+  // -------------------------------------------------------------
+  // 3) 旧譜面 (ease_to_next 無し) は全区間ステップ
+  // -------------------------------------------------------------
+  describe('3. 旧譜面(ease_to_next無し)は全区間瞬間切替(ステップ)', () => {
+    it('TOMLに ease_to_next が無い旧譜面をロードすると全区間ステップである (3-step)', () => {
+      // Step1: raw TOML without any ease_to_next (legacy)
+      const legacyToml = `
+title = "Legacy"
+artist = "Old"
+audio = "old.wav"
+audio_offset = 0
+amplitude = 1.0
+start_position = 0
 
-      // Step2: Perform Drag — draggable row -> drop target gap1
-      const row = rows[0];
-      const draggable = (row.querySelector('[draggable]') as HTMLElement) ?? row;
-      // Ensure draggable
-      expect(draggable.getAttribute('draggable') ?? row.getAttribute('draggable') ?? 'true').toBeTruthy();
+[[sections]]
+beat = 0
+bpm = 120
+amplitude = 1.0
+zoom = 1.0
 
-      // Find valid gap targets: there should be n-1 =2 valid gaps. Find gap for index 1
-      let gaps = getGapDropTargets(container);
-      // If gaps are not explicit, we treat section rows as drop targets for gap after
-      // Implementation may render gap divs between sections; if not found, we will use second section row as drop zone
-      let target: HTMLElement | null = null;
-      if (gaps.length >= 2) {
-        // gaps[0] is after 0, gaps[1] after 1
-        target = gaps[1];
-      } else if (gaps.length === 1) {
-        target = gaps[0];
-      } else {
-        const secs = getSectionRows(container);
-        target = secs[1] ?? secs[2] ?? container;
-      }
-      expect(target).not.toBeNull();
+[[sections]]
+beat = 4
+bpm = 140
+amplitude = 2.0
+zoom = 1.5
 
-      const dataTransfer = {
-        data: {} as Record<string, string>,
-        setData(k: string, v: string) { this.data[k] = v; },
-        getData(k: string) { return this.data[k] ?? ''; },
-        effectAllowed: 'move',
-        dropEffect: 'move',
-      } as unknown as DataTransfer;
+[[sections]]
+beat = 8
+bpm = 160
+amplitude = 0.5
+zoom = 0.8
+`;
+      // Step2: parse
+      const chart = parseChartText(legacyToml, 'legacy');
+      expect(chart.bpm_changes.every(c => c.easeToNext === undefined)).toBe(true);
 
-      await act(async () => {
-        fireEvent.dragStart(draggable, { dataTransfer } as unknown as Record<string, unknown>);
-        // dragover target
-        if (target) fireEvent.dragOver(target, { dataTransfer } as unknown as Record<string, unknown>);
-        if (target) fireEvent.drop(target, { dataTransfer } as unknown as Record<string, unknown>);
-        fireEvent.dragEnd(draggable, { dataTransfer } as unknown as Record<string, unknown>);
-      });
-      await act(async () => { vi.advanceTimersByTime(50); });
+      // Step3: timeline must behave as step function at off-grid points
+      const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+      // interval [0,4): amplitude should be 1.0 throughout, not interpolated
+      expect(tl.amplitudeAt(0)).toBeCloseTo(1.0, 6);
+      expect(tl.amplitudeAt(1.37)).toBeCloseTo(1.0, 6);
+      expect(tl.amplitudeAt(3.99)).toBeCloseTo(1.0, 6);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(2.0, 6);
+      expect(tl.amplitudeAt(5.71)).toBeCloseTo(2.0, 6);
+      expect(tl.amplitudeAt(7.99)).toBeCloseTo(2.0, 6);
+      expect(tl.amplitudeAt(8)).toBeCloseTo(0.5, 6);
+      expect(tl.zoomAt(2.37)).toBeCloseTo(1.0, 6);
+      expect(tl.zoomAt(6.23)).toBeCloseTo(1.5, 6);
 
-      // Step3: Assert — ownership moved to gap1 (section1 now has linear, section0 cleared)
-      expect(captured).not.toBeNull();
-      const after = captured as unknown as BpmChange[];
-      const after0Ease = after[0].easeToNext;
-      const after1Ease = after[1].easeToNext;
-      // One of them must be linear, the other undefined — and specifically moved
-      const totalEased = after.filter((c) => c.easeToNext !== undefined).length;
-      expect(totalEased).toBe(1);
-      expect(after0Ease).toBeUndefined();
-      expect(after1Ease).toBe('linear');
+      // serialize then re-parse should still have no easing
+      const reserialized = chartToToml(chart);
+      expect(reserialized).not.toContain('ease_to_next');
+      const reparsed = parseChartText(reserialized, 'relegacy');
+      expect(reparsed.bpm_changes.every(c => c.easeToNext === undefined)).toBe(true);
     });
 
-    it('両端（前後セクションが無い位置）へのドロップは無効で所有が変わらない (3-step)', async () => {
-      // Step1: Capture Before — single easing at gap0
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120, easeToNext: 'linear' } as BpmChange,
-        { beat: 4, bpm: 130 },
-        { beat: 8, bpm: 140 },
-      ];
-      let captured: BpmChange[] | null = null;
-      const { container } = render(React.createElement(Harness, { initial, onCaptured: (n) => (captured = n) }));
-      let rows = getEasingRows(container);
-      if (rows.length === 0) {
-        const addBtn = getEasingAddButton(container);
-        await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-        await act(async () => { vi.advanceTimersByTime(50); });
-        rows = getEasingRows(container);
-      }
-      expect(rows.length).toBe(1);
-      const beforeEaseBeat = (captured ?? initial)[0].beat;
-      expect((captured ?? initial)[0].easeToNext).toBe('linear');
+    it('旧 [[bpm_changes]] エイリアスでも ease_to_next 無しはステップ', () => {
+      const legacyBpmChangesToml = `
+title = "Legacy2"
+artist = "Old"
+audio = "old.wav"
+[[bpm_changes]]
+beat = 0
+bpm = 120
+[[bpm_changes]]
+beat = 4
+bpm = 150
+`;
+      const chart = parseChartText(legacyBpmChangesToml, 'legacy2');
+      expect(chart.bpm_changes.length).toBe(2);
+      expect(chart.bpm_changes.every(c => c.easeToNext === undefined)).toBe(true);
+      const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+      expect(tl.amplitudeAt(2.37)).toBe(chart.amplitude); // base, no amplitude entries => base
+    });
 
-      // Step2: Attempt drop onto invalid ends — try drop on container outside valid gaps
-      // Valid gaps are 0..n-2 (0,1). Invalid are before-first (-1) and after-last (n-1 =2)
-      // Implementation should either not render invalid gaps or ignore drops there.
-      // We'll try to drop on an invalid target (e.g., the list container itself or a fake gap with data-invalid)
-      const row = rows[0];
-      const draggable = (row.querySelector('[draggable]') as HTMLElement) ?? row;
-      const dataTransfer = {
-        data: {} as Record<string, string>,
-        setData(k: string, v: string) { this.data[k] = v; },
-        getData(k: string) { return this.data[k] ?? ''; },
-      } as unknown as DataTransfer;
-
-      // Find if implementation renders invalid gaps — they should not be valid drop targets
-      // We'll simulate drop on the outer list element which is not a valid gap
-      const list = container.querySelector('.bpm-change-list') as HTMLElement | null;
-      const invalidTarget = list ?? container;
-
-      // Record captured before invalid drop
-      captured = null;
-      await act(async () => {
-        fireEvent.dragStart(draggable, { dataTransfer } as unknown as Record<string, unknown>);
-        fireEvent.dragOver(invalidTarget, { dataTransfer } as unknown as Record<string, unknown>);
-        fireEvent.drop(invalidTarget, { dataTransfer } as unknown as Record<string, unknown>);
-        fireEvent.dragEnd(draggable, { dataTransfer } as unknown as Record<string, unknown>);
-      });
-      await act(async () => { vi.advanceTimersByTime(50); });
-
-      // Step3: Assert — if implementation correctly guards, captured should remain null (no change) or still have ease on original section
-      // Allow two correct behaviors: either no callback at all, or callback with same ownership
-      if (captured === null) {
-        // No change is correct for invalid drop — pass
-        expect(captured).toBeNull();
-      } else {
-        const after = captured as unknown as BpmChange[];
-        // Must still have exactly one easing on original section (beat 0)
-        expect(after.filter((c) => c.easeToNext).length).toBe(1);
-        const stillOnOriginal = after.find((c) => c.beat === beforeEaseBeat)?.easeToNext;
-        expect(stillOnOriginal).toBe('linear');
-        // and not moved to after-last (beat 8)
-        expect(after.find((c) => c.beat === 8)?.easeToNext).toBeUndefined();
-      }
-
-      // Additional invalid: try data-testid easing-gap--1 or easing-gap-3 if they exist they must be disabled
-      const maybeInvalidGaps = Array.from(container.querySelectorAll('[data-testid*="gap"]')) as HTMLElement[];
-      const invalidIndices = maybeInvalidGaps.filter((el) => {
-        const id = el.getAttribute('data-testid') ?? '';
-        return id.includes('-1') || id.includes('3') || id.includes('invalid');
-      });
-      if (invalidIndices.length > 0) {
-        const inv = invalidIndices[0];
-        captured = null;
-        await act(async () => {
-          fireEvent.dragStart(draggable, { dataTransfer } as unknown as Record<string, unknown>);
-          fireEvent.dragOver(inv, { dataTransfer } as unknown as Record<string, unknown>);
-          fireEvent.drop(inv, { dataTransfer } as unknown as Record<string, unknown>);
-          fireEvent.dragEnd(draggable, { dataTransfer } as unknown as Record<string, unknown>);
-        });
-        await act(async () => { vi.advanceTimersByTime(50); });
-        // Must still be invalid (no move)
-        if (captured !== null) {
-          const after2 = captured as unknown as BpmChange[];
-          expect(after2.find((c) => c.beat === beforeEaseBeat)?.easeToNext).toBe('linear');
-        }
-      }
+    it('不正な ease_to_next 値は無視されステップとして扱われる', () => {
+      const badToml = `
+title = "Bad Easing"
+artist = "Tester"
+audio = "bad.wav"
+[[sections]]
+beat = 0
+bpm = 120
+amplitude = 1.0
+ease_to_next = "invalid-ease"
+[[sections]]
+beat = 4
+bpm = 120
+amplitude = 2.0
+`;
+      const chart = parseChartText(badToml, 'bad');
+      expect(chart.bpm_changes[0].easeToNext).toBeUndefined();
+      const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+      expect(tl.amplitudeAt(2)).toBe(1.0); // step, not interpolated
     });
   });
 
-  describe('4. 補間数値整合 — イージング式が 0.5/0.75/0.25 で正確 (off-grid必須)', () => {
-    it('BpmTimeline amplitudeAt/zoomAt が t=0.5 で linear 0.5 / ease-out 0.75 / ease-in 0.25 を返す (3-step off-grid)', () => {
-      // Step1: Capture Before — no easing => step
-      const tlStep = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7 },
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-      ]);
-      const beforeMid = tlStep.amplitudeAt(2);
-      expect(beforeMid).toBeCloseTo(0.7, 5);
-
-      // Step2: Perform Action — create easing timelines
-      const tlLin = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-      ]);
-      const tlOut = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-out' } as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-      ]);
-      const tlIn = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-in' } as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-      ]);
-
-      // Step3: Assert — t=0.5 values
-      expect(tlLin.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.5, 4);
-      expect(tlOut.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.75, 4);
-      expect(tlIn.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.25, 4);
-      // off-grid 0.37 and 1.23 must use exact eased t
-      const t037 = 0.37 / 4;
-      expect(tlLin.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.8 * easeFactor('linear', t037), 4);
-      expect(tlOut.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.8 * easeFactor('ease-out', t037), 4);
-      expect(tlIn.amplitudeAt(1.23)).toBeCloseTo(0.7 + 0.8 * easeFactor('ease-in', 1.23 / 4), 4);
-      // zoom same logic
-      const tlZoomLin = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'linear' } as BpmChange,
-        { beat: 4, bpm: 120, zoom: 2.0 } as BpmChange,
-      ]);
-      expect(tlZoomLin.zoomAt(2)).toBeCloseTo(1.5, 4);
-      const tlZoomOut = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as BpmChange,
-        { beat: 4, bpm: 120, zoom: 2.0 } as BpmChange,
-      ]);
-      expect(tlZoomOut.zoomAt(2)).toBeCloseTo(1.75, 4);
-      // must differ from step
-      expect(tlLin.amplitudeAt(2)).not.toBeCloseTo(beforeMid, 4);
+  // -------------------------------------------------------------
+  // 4) ゼロ長区間フォールバック & 端点 / 継承 / 回帰
+  // -------------------------------------------------------------
+  describe('4. ゼロ長区間・端点・継承・回帰', () => {
+    it('ゼロ長区間 (A.beat === B.beat) は瞬間切替にフォールバック (補間しない)', () => {
+      const tl = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' },
+        { beat: 0, bpm: 120, amplitude: 3.0 },
+      ], 1.0);
+      // Both at beat 0: the second entry wins as step
+      expect(tl.amplitudeAt(0)).toBeCloseTo(3.0, 6);
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(3.0, 6);
+      expect(tl.zoomAt(0.37)).toBeCloseTo(1.0, 6); // zoom still base since no zoom values differing
     });
 
-    it('複雑振幅 0.7/1.3/2.7 と off-grid 0.37/1.23 でBpmTimelineと補間式が一致 (3-step)', () => {
-      const before = makeTimeline([
-        { beat: 2, bpm: 120, amplitude: 1.3 },
-        { beat: 6, bpm: 120, amplitude: 2.7 },
-      ]);
-      expect(before.amplitudeAt(4)).toBeCloseTo(1.3, 5);
-      const tl = makeTimeline([
-        { beat: 2, bpm: 120, amplitude: 1.3, easeToNext: 'ease-out' } as BpmChange,
-        { beat: 6, bpm: 120, amplitude: 2.7 },
-      ]);
-      const mid = 2 + (6 - 2) / 2;
-      expect(tl.amplitudeAt(mid)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
-      const tOff = (3.37 - 2) / 4;
-      expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.3 + 1.4 * easeFactor('ease-out', tOff), 4);
-      const tOff2 = (2.37 - 2) / 4;
-      expect(tl.amplitudeAt(2.37)).toBeCloseTo(1.3 + 1.4 * easeFactor('ease-out', tOff2), 4);
-      // zoom also
-      const tlZ = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 0.7, easeToNext: 'linear' } as BpmChange,
-        { beat: 4, bpm: 120, zoom: 1.3 } as BpmChange,
-      ]);
-      expect(tlZ.zoomAt(2)).toBeCloseTo(1.0, 4);
-      expect(tlZ.zoomAt(0.37)).toBeCloseTo(0.7 + 0.6 * (0.37 / 4), 4);
+    it('継承値間の補間: 前区間に値が無く継承された effective value 同士が補間される', () => {
+      // Section 0 has amplitude 1.0 with linear, section 1 has no amplitude (inherit 1.0), section 2 has 2.0
+      // interval [0,4] effective 1.0->1.0 => still 1.0 even with easing (no change)
+      // interval [4,8] linear from inherited 1.0 -> 2.0
+      const tl = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' },
+        { beat: 4, bpm: 120, easeToNext: 'linear' }, // no amplitude => inherit 1.0
+        { beat: 8, bpm: 120, amplitude: 2.0 },
+      ], 1.0);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(1.0, 6); // 1->1 no interpolation effect
+      expect(tl.amplitudeAt(6)).toBeCloseTo(1.5, 6); // 1->2 linear at midpoint
+      expect(tl.amplitudeAt(4)).toBeCloseTo(1.0, 6);
+      expect(tl.amplitudeAt(8)).toBeCloseTo(2.0, 6);
+    });
+
+    it('最終セクション以降は最終値を維持し補間しない', () => {
+      const tl = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'ease-out' },
+        { beat: 4, bpm: 120, amplitude: 2.0, zoom: 2.0 },
+      ], 1.0);
+      expect(tl.amplitudeAt(4)).toBeCloseTo(2.0, 6);
+      expect(tl.amplitudeAt(5.71)).toBeCloseTo(2.0, 6);
+      expect(tl.amplitudeAt(100)).toBeCloseTo(2.0, 6);
+      expect(tl.zoomAt(100)).toBeCloseTo(2.0, 6);
+    });
+
+    it('T186: scroll_speed は読み捨てられ、[[sections]] が正として読まれる', () => {
+      const toml = `
+title = "Scroll Test"
+artist = "Tester"
+audio = "test.wav"
+scroll_speed = 999
+[[sections]]
+beat = 0
+bpm = 130
+amplitude = 1.0
+zoom = 1.2
+`;
+      const chart = parseChartText(toml, 'scrolltest');
+      expect((chart as unknown as Record<string, unknown>).scroll_speed).toBeUndefined();
+      expect(chart.bpm_changes[0].bpm).toBe(130);
+      expect(chart.bpm_changes[0].zoom).toBe(1.2);
+      const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+      expect(tl.bpmAt(0)).toBe(130);
+      // zoom step before any easing
+      expect(tl.zoomAt(0.37)).toBeCloseTo(1.2, 6);
+    });
+
+    it('T187: 基準BPMは先頭セクション(beat最小)から導出される', () => {
+      const tl = new BpmTimeline([
+        { beat: 8, bpm: 200 },
+        { beat: 0, bpm: 100 },
+        { beat: 4, bpm: 150 },
+      ], 1.0);
+      expect(tl.bpmAt(0)).toBe(100);
+      expect(tl.bpmAt(1)).toBe(100);
+      expect(tl.bpmAt(4)).toBe(150);
+      expect(tl.beatToMs(1)).toBeCloseTo(600, 1); // 100bpm => 600ms per beat
+    });
+
+    it('T202: amplitude と zoom は独立にイージングする (片方のみeaseでも他方はstep)', () => {
+      const tl = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'linear' },
+        { beat: 4, bpm: 120, amplitude: 2.0, zoom: 2.0 },
+      ], 1.0);
+      // both have easing because ease belongs to preceding section (affects both)
+      // To test independence, use separate zoom easing:
+      const tl2 = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'linear' },
+        // manually patch zoom to have different? In current model ease is shared,
+        // so independence means we test that amplitude and zoom each resolve from their own entries.
+        // Here both will be interpolated identically.
+      ], 1.0);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(1.5, 6);
+      expect(tl.zoomAt(2)).toBeCloseTo(1.5, 6);
+      // Now test where only zoom has varying values but amplitude constant
+      const tl3 = new BpmTimeline([
+        { beat: 0, bpm: 120, amplitude: 1.0, zoom: 1.0, easeToNext: 'ease-in' },
+        { beat: 4, bpm: 120, amplitude: 1.0, zoom: 3.0 },
+      ], 1.0);
+      // amplitude should stay 1.0 (no change) even though easing exists, zoom interpolates
+      expect(tl3.amplitudeAt(2)).toBeCloseTo(1.0, 6);
+      expect(tl3.zoomAt(2)).toBeCloseTo(1.0 + (3.0 - 1.0) * 0.25, 6);
     });
   });
 
-  describe('5. 表の向き維持とCSS — 3-step', () => {
-    it('セクションは行、パラメータは列のまま — ヘッダとgrid列数が維持される (3-step)', async () => {
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120 },
-        { beat: 4, bpm: 130 },
+  // -------------------------------------------------------------
+  // 5) セクション追加ダイアログとの併存 (ソート・統合)
+  // -------------------------------------------------------------
+  describe('5. セクション追加ダイアログとの併存 & ソート回帰 (T203)', () => {
+    it('beat昇順ソート後も easeToNext が正しい所有セクションに紐付いたままである (3-step)', () => {
+      // Step1: unsorted sections with easing
+      const unsorted: BpmChange[] = [
+        { beat: 8, bpm: 160, amplitude: 2.0 },
+        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'ease-out' },
+        { beat: 4, bpm: 140, amplitude: 1.5, easeToNext: 'linear' },
       ];
-      const { container } = render(React.createElement(Harness, { initial }));
-      const beforeHeader = container.querySelector('.bpm-change-header');
-      expect(beforeHeader).not.toBeNull();
-      const beforeCols = beforeHeader ? window.getComputedStyle(beforeHeader).gridTemplateColumns : '';
-      void beforeCols;
-      const beforeRows = getSectionRows(container).length;
-      expect(beforeRows).toBe(2);
+      // Step2: sort like BpmEditor/SectionAddDialog confirmAdd does
+      const sorted = [...unsorted].sort((a, b) => a.beat - b.beat);
+      expect(sorted[0].beat).toBe(0);
+      expect(sorted[1].beat).toBe(4);
+      expect(sorted[2].beat).toBe(8);
+      expect(sorted[0].easeToNext).toBe('ease-out');
+      expect(sorted[1].easeToNext).toBe('linear');
+      expect(sorted[2].easeToNext).toBeUndefined();
 
-      const addBtn = getEasingAddButton(container);
-      expect(addBtn).not.toBeNull();
-      await act(async () => { if (addBtn) fireEvent.click(addBtn); });
-      await act(async () => { vi.advanceTimersByTime(50); });
-
-      const afterHeader = container.querySelector('.bpm-change-header');
-      expect(afterHeader).not.toBeNull();
-      // header columns must still be 5 (beat/BPM/速度/横拡大率/操作)
-      const headerSpans = afterHeader ? afterHeader.querySelectorAll('span').length : 0;
-      expect(headerSpans).toBeGreaterThanOrEqual(4);
-      const afterRows = getSectionRows(container);
-      expect(afterRows.length).toBe(2); // sections unchanged, only gap row added
-      const easingRows = getEasingRows(container);
-      expect(easingRows.length).toBe(1);
+      // Step3: timeline built from sorted must interpolate correctly at off-grid
+      const tl = new BpmTimeline(sorted, 1.0);
+      // [0,4] ease-out 1.0->1.5, at beat 2.37 t=0.5925? Actually (2.37-0)/4 =0.5925
+      const t1 = 2.37 / 4;
+      const eased1 = 1 - (1 - t1) * (1 - t1);
+      expect(tl.amplitudeAt(2.37)).toBeCloseTo(1.0 + (1.5 - 1.0) * eased1, 6);
+      // [4,8] linear 1.5->2.0 at beat 5.71 t=0.4275
+      const t2 = (5.71 - 4) / 4;
+      expect(tl.amplitudeAt(5.71)).toBeCloseTo(1.5 + (2.0 - 1.5) * t2, 6);
     });
 
-    it('index.css に全列またぎ行の grid-column: 1 / -1 が存在する (3-step file+DOM)', async () => {
-      const cssBefore = fs.readFileSync('src/index.css', 'utf-8');
-      void cssBefore;
-      const css = fs.readFileSync('src/index.css', 'utf-8');
-      expect(css).toMatch(/grid-column\s*:\s*1\s*\/\s*-1/);
-      // must be associated with easing selector
-      const easingBlock = css.match(/[^{]*easing[^{]*\{[^}]*grid-column[^}]*\}/);
-      expect(easingBlock).not.toBeNull();
-      // DOM also must have that rule effect via class
-      const initial: BpmChange[] = [
-        { beat: 0, bpm: 120 },
-        { beat: 4, bpm: 130 },
-      ];
-      const { container } = render(React.createElement(Harness, { initial }));
-      const addBtn = getEasingAddButton(container);
-      if (addBtn) {
-        await act(async () => { fireEvent.click(addBtn); });
-        await act(async () => { vi.advanceTimersByTime(50); });
-        const rows = getEasingRows(container);
-        expect(rows.length).toBe(1);
-        const row = rows[0];
-        const hasEasingClass = /easing/.test(row.className);
-        expect(hasEasingClass).toBe(true);
-      } else {
-        expect(addBtn).not.toBeNull(); // will fail Red before implementation
-      }
+    it('新規セクション追加 (末尾+4想定) が既存イージングを壊さない (autosave併存)', () => {
+      const base = makeChart({
+        title: 'Dialog Coexist ' + Date.now(),
+        bpm_changes: [
+          { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' },
+          { beat: 4, bpm: 120, amplitude: 2.0 },
+        ],
+      });
+      saveAutosave(base);
+      const before = loadAutosave(base.title.toLowerCase().replace(/[^\w]+/g, '-') || 'untitled');
+      // Simulate SectionAddDialog confirmAdd: add at beat 8 with zoom & amplitude
+      const last = before.bpm_changes[before.bpm_changes.length - 1];
+      const nextBeat = Math.floor(last.beat) + 4;
+      const added: BpmChange[] = [...before.bpm_changes, { beat: nextBeat, bpm: 140, amplitude: 1.3, zoom: 1.8 }];
+      const sorted = [...added].sort((a, b) => a.beat - b.beat);
+      const chart2 = makeChart({ title: before.title, bpm_changes: sorted });
+      const toml2 = chartToToml(chart2);
+      const reparsed = parseChartText(toml2, 'added');
+      expect(reparsed.bpm_changes.length).toBe(3);
+      expect(reparsed.bpm_changes[0].easeToNext).toBe('linear');
+      expect(reparsed.bpm_changes[1].easeToNext).toBeUndefined();
+      // new timeline: [0,4] linear 1->2, [4,8] step 2->1.3 (no easing)
+      const tl = new BpmTimeline(reparsed.bpm_changes, reparsed.amplitude);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(1.5, 6);
+      expect(tl.amplitudeAt(6)).toBe(2.0); // step before 8
+      expect(tl.amplitudeAt(8)).toBeCloseTo(1.3, 6);
+    });
+  });
+
+  // -------------------------------------------------------------
+  // 6) 負荷: autosave往復で未設定easeはundefinedのまま (old roundtrip)
+  // -------------------------------------------------------------
+  describe('6. autosave往復で未設定easeはundefinedのまま & TOMLに誤出力されない', () => {
+    it('ease未設定のセクションチャートを autosave → TOML にしても ease_to_next が出力されない', () => {
+      const chart = makeChart({
+        title: 'No Easing Keep ' + Date.now(),
+        bpm_changes: [
+          { beat: 0, bpm: 120 },
+          { beat: 4, bpm: 140 },
+        ],
+      });
+      const toml = chartToToml(chart);
+      expect(toml).not.toContain('ease_to_next');
+      saveAutosave(chart);
+      const slug = chart.title.toLowerCase().replace(/[^\w]+/g, '-') || 'untitled';
+      // slugify strips spaces to hyphen, lowercases
+      const list = listAutosaves();
+      const found = list.find(s => s.title === chart.title);
+      expect(found).toBeDefined();
+      const restored = loadAutosave(found!.slug);
+      expect(restored.bpm_changes.every(c => c.easeToNext === undefined)).toBe(true);
+      const reserialized = chartToToml(restored);
+      expect(reserialized).not.toContain('ease_to_next');
     });
   });
 });

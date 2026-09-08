@@ -9451,3 +9451,4 @@ src/screens/GameScreen.tsx(61,20): error TS6133: 'setOffsetMs' is declared but i
 2026-09-08 12:57:06,383 [INFO] [T202] Proceeding directly to Coder implementation (skipping Red check for Coder retry).
 2026-09-08 12:57:06,393 [INFO] RateLimit sleep: 5s...
 2026-09-08 12:57:11,394 [INFO] Dispatching [1mCoder(T202)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T202] Coder 27cf65bf)
+2026-09-08 14:43:08,568 [INFO] Orchestrator range execution: 4 tasks (from=T205, to=T208, budget=600m)
