@@ -3,6 +3,9 @@ import * as fs from 'fs';
 import { parse } from 'smol-toml';
 
 test('T94 Playwright test: Segment direction "stay" (horizontal hold) & real-time segment recording in editor', async ({ page }) => {
+  // T201: app defaults to public view; /editor is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const errors: string[] = [];
 
   page.on('console', msg => {

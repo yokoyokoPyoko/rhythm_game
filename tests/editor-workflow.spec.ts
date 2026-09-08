@@ -35,6 +35,8 @@ async function gotoEditor(page: Page): Promise<string[]> {
     }
   })
   page.on('pageerror', (err) => errors.push(err.message))
+  // T201: app defaults to public view; /editor is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   await page.goto('/rhythm_game/#/editor')
   await page.waitForSelector('[data-testid="editor-legend"]', { timeout: 10000 })
   return errors

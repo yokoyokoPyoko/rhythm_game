@@ -13,6 +13,8 @@ async function addCustomSong(page: import('@playwright/test').Page) {
 }
 
 test('T31 select screen: song cards, click to play, L to calibration', async ({ page }) => {
+  // T201: app defaults to public view; import UI / calibration are debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   const errors: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -67,7 +69,8 @@ test('T31 select screen: song cards, click to play, L to calibration', async ({ 
   await expect(page.locator('.select-header h1')).toBeVisible();
   await page.waitForTimeout(2000);
 
-  await page.keyboard.press('l');
+  // Calibration is opened via the debug-mode button (T199 removed the 'L' key)
+  await page.locator('[data-testid="select-calibration-button"]').click();
   await expect(page.locator('[data-testid="editor-calibration-modal"]')).toBeVisible({ timeout: 5000 });
   await expect(page.locator('body')).toBeAttached();
   await page.waitForTimeout(2000);

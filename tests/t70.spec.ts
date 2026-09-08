@@ -13,6 +13,9 @@ async function addCustomSong(page: import('@playwright/test').Page) {
 }
 
 test('T70 select screen polish and interaction test', async ({ page }) => {
+  // T201: app defaults to public view; calibration button is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -65,8 +68,8 @@ test('T70 select screen polish and interaction test', async ({ page }) => {
   // Frame 4: Back on select screen
   await page.screenshot({ path: 'screenshots/frame_4.png' });
 
-  // 5. Press 'l' to open calibration overlay
-  await page.keyboard.press('l');
+  // 5. Open calibration overlay via debug-mode button (T199 removed 'L' key)
+  await page.locator('[data-testid="select-calibration-button"]').click();
   await page.waitForTimeout(1000);
 
   // Frame 5: Calibration overlay

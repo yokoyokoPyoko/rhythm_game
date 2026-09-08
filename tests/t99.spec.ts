@@ -67,6 +67,9 @@ test('T99 Audio Offset: Music Control pane placement & playFrom behavioral refle
   test.skip(browserName !== 'chromium', 'chromium only')
   test.setTimeout(300000)
 
+  // T201: app defaults to public view; /editor is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const baseURL = process.env.DEV_URL || 'http://127.0.0.1:5173/rhythm_game/'
   const allErrors = await collectErrors(page)
 

@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 
 test('T51 editor audio player and BPM setting test', async ({ page }) => {
+  // T201: app defaults to public view; /editor is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const errors: string[] = [];
 
   page.on('console', msg => {

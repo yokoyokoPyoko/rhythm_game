@@ -17,7 +17,12 @@ function App() {
     window.addEventListener('trace-wave-view-mode-changed', handleStorage)
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.altKey && e.shiftKey && e.key === '@') {
+      // JIS配列では Shift+@ が '`' になるため e.key だけでは拾えない。
+      // US配列 (Shift+2 → '@') と AltGr 環境での化けに備え、物理キー位置でも判定する。
+      // BracketLeft = JISの@キー位置 / Digit2 = USの@キー位置
+      const isToggleKey =
+        e.key === '@' || e.key === '`' || e.code === 'BracketLeft' || e.code === 'Digit2'
+      if (e.ctrlKey && e.altKey && e.shiftKey && isToggleKey) {
         e.preventDefault()
         const newMode = toggleViewMode()
         setMode(newMode)

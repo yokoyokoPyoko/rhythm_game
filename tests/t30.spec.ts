@@ -13,6 +13,9 @@ async function addCustomSong(page: import('@playwright/test').Page) {
 }
 
 test('T30 React app shell routing test', async ({ page }) => {
+  // T201: app defaults to public view; import UI / editor / calibration are debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -78,7 +81,7 @@ test('T30 React app shell routing test', async ({ page }) => {
   // Route 5: calibration overlay opened via L key (no dedicated /calibration route)
   await page.goto('http://localhost:5173/');
   await expect(page.locator('.select-screen')).toBeVisible();
-  await page.keyboard.press('l');
+  await page.locator('[data-testid="select-calibration-button"]').click();
   await expect(page.locator('[data-testid="editor-calibration-modal"]')).toBeVisible();
   await page.waitForTimeout(2000);
   await page.keyboard.press('Escape');

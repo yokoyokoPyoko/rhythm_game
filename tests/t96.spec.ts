@@ -3,6 +3,8 @@ import { test, expect, type ConsoleMessage } from '@playwright/test'
 test('T96 editor UI/UX: expanded preview, accordions, intuitive editing', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'chromium only')
   test.setTimeout(90000)
+  // T201: app defaults to public view; editor nav button is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   const errors: string[] = []
   page.on('console', (msg: ConsoleMessage) => {
     const t = msg.text()

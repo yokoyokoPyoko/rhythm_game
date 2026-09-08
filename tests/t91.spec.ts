@@ -13,6 +13,9 @@ async function addCustomSong(page: import('@playwright/test').Page) {
 }
 
 test('T91 comprehensive debug & verification test', async ({ page }) => {
+  // T201: app defaults to public view; import UI / calibration / editor are debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -39,8 +42,8 @@ test('T91 comprehensive debug & verification test', async ({ page }) => {
   await page.waitForTimeout(1500);
   await addCustomSong(page);
 
-  // 2. Calibration overlay (L key / offset reset verification)
-  await page.keyboard.press('l');
+  // 2. Calibration overlay (open via debug-mode button; T199 removed 'L' key)
+  await page.locator('[data-testid="select-calibration-button"]').click();
   await expect(page.locator('[data-testid="editor-calibration-modal"]')).toBeVisible({ timeout: 5000 });
   await expect(page.locator('[data-testid="calibration-canvas"]')).toBeVisible();
   await expect(page.locator('[data-testid="calibration-offset"]')).toBeVisible();

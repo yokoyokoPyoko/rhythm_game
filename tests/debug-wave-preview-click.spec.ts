@@ -27,6 +27,8 @@ beat = 8.0
 `
 
 test('debug wave preview click far from rings', async ({ page }) => {
+  // T201: app defaults to public view; /editor is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   await page.goto('/rhythm_game/#/editor')
   await page.waitForSelector('[data-testid="editor-legend"]', { timeout: 10000 })
   await page.waitForTimeout(2000)

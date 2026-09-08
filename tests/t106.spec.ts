@@ -3,6 +3,8 @@ import { test, expect } from '@playwright/test';
 const FIXTURE = '/home/p-yoko/Program/TypeScript/rhythm_game/public/test-audio.wav';
 
 test('T106 local audio file load via file input and drag-and-drop', async ({ page }) => {
+  // T201: app defaults to public view; /editor is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   const errors: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') {

@@ -104,6 +104,8 @@ async function ensureAudioReady(page: import('@playwright/test').Page) {
 test.describe('T107: 波形上下表示領域拡張', () => {
   let errors: string[] = [];
   test.beforeEach(async ({ page }) => {
+    // T201: app defaults to public view; /editor is debug-only
+    await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
     errors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {

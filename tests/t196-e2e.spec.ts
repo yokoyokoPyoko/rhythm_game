@@ -40,6 +40,8 @@ async function idbCountCharts(page: import('@playwright/test').Page): Promise<nu
 }
 
 test('T196 e2e: 追加→リロード→一覧表示→プレイ(音あり)→削除 が破綻なく完了し、IDB件数が 0→1→1→0 と遷移する', async ({ page }) => {
+  // T201: app defaults to public view; import UI / delete buttons are debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   const errors: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -112,10 +114,10 @@ test('T196 e2e: 追加→リロード→一覧表示→プレイ(音あり)→�
   await cardAfterReload.click();
   await expect(page).toHaveURL(/\/play\/custom-/, { timeout: 10000 });
 
-  // Step3: Assert — ゲームキャンバスが表示され、R→Space で再生開始できる（音あり）
+  // Step3: Assert — ゲームキャンバスが表示され、Space で再生開始できる（音あり）
+  // T200: the 'R' reset shortcut was removed and is a no-op; Space starts the game.
   const canvas = page.locator('canvas[data-testid="playtest-canvas"]');
   await expect(canvas).toBeVisible({ timeout: 15000 });
-  await page.keyboard.press('r');
   await page.keyboard.press(' ');
   await page.waitForTimeout(1500);
   expect(await idbCountCharts(page)).toBe(countBeforePlay); // プレイでIDBは減らない
@@ -161,6 +163,8 @@ test('T196 e2e: 追加→リロード→一覧表示→プレイ(音あり)→�
 });
 
 test('T196 e2e 異常系: 破損TOML投入→追加ボタン非活性・エラー表示、画面上にUncaughtなし', async ({ page }) => {
+  // T201: app defaults to public view; import UI is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   const errors: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') {

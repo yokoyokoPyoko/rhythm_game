@@ -13,6 +13,9 @@ async function addCustomSong(page: import('@playwright/test').Page) {
 }
 
 test('T92 Playwright test: Expanded Wave Amplitude (TW_AMP = 130px, Y: 170~430px)', async ({ page }) => {
+  // T201: app defaults to public view; custom import UI is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
+
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -61,11 +64,8 @@ test('T92 Playwright test: Expanded Wave Amplitude (TW_AMP = 130px, Y: 170~430px
   await page.screenshot({ path: 'screenshots/t92_gameplay_interactive.png' });
   await page.waitForTimeout(1500);
 
-  // 4. Test manual offset shortcuts (< / > keys) during gameplay
-  await page.keyboard.press(','); // decrease offset
-  await page.waitForTimeout(300);
-  await page.keyboard.press('.'); // increase offset
-  await page.waitForTimeout(1000);
+  // 4. Offset keys (</>) were removed from the game screen in T200; the
+  //    offset display remains static. Just capture a screenshot of gameplay.
   await page.screenshot({ path: 'screenshots/t92_gameplay_offset.png' });
 
   // 5. Exit game screen using Escape key back to select screen

@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 
 test('T61 calibration overlay test', async ({ page }) => {
+  // T201: app defaults to public view; calibration button is debug-only
+  await page.addInitScript(() => localStorage.setItem('traceWaveViewMode', 'debug'))
   const errors: string[] = [];
 
   page.on('console', msg => {
@@ -24,8 +26,9 @@ test('T61 calibration overlay test', async ({ page }) => {
   // Frame 1: Select screen
   await page.screenshot({ path: 'screenshots/frame_1.png' });
 
-  // Open calibration overlay by pressing 'l'
-  await page.keyboard.press('l');
+  // Open calibration overlay via the debug-mode calibration button
+  // (T199 removed the 'L' key shortcut in both modes)
+  await page.locator('[data-testid="select-calibration-button"]').click();
   await page.waitForSelector('[data-testid="editor-calibration-modal"]', { timeout: 5000 });
 
   // Frame 2: Calibration overlay visible with HUD
