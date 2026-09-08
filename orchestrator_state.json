@@ -1892,7 +1892,7 @@
         "qa": "ses_f7f7976c5ffebUqK62quKDVfEA",
         "coder": "ses_f7f77f236ffeL2uhycRoS5stFE"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
