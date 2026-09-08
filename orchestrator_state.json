@@ -1825,16 +1825,16 @@
       "finished": 1788844226.4242449
     },
     "T205": {
-      "attempts": 8,
+      "attempts": 9,
       "status": "running",
       "started": 1788856966.866991,
       "cycles": 1,
       "sessions": {
-        "qa": "ses_f7fdb81e0ffemHh0fZID6etPzZ",
-        "coder": "ses_f7fd95065ffeoT5Z6sPpPg0tKn",
+        "qa": "ses_f7fd0bff5ffeQXeyi70x03RzPb",
+        "coder": "ses_f7fcf3cc0ffexY1H7Y53zJ7lcL",
         "postmortem": null
       },
-      "gate_b_golden": true,
+      "gate_b_golden": false,
       "last_retry_from": "qa",
       "last_postmortem_at": 1788847286.337276
     }
