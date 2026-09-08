@@ -1343,5 +1343,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T206",
+    "desc": "楽曲終了判定の優先順位修正（end_beat未設定時は最終リング＋2秒・ホールド終端対応）。要求: end_beat未設定・譜面が曲途中の場合に最終リング＋2秒でリザルトへ遷移しない（音源全体が終わるまで待たされる）。根本原因: GameScreen.tsx:404はend_beat未設定時に(buffer?buffer.duration*1000:fallbackEnd)を使い音源がある限り全体長が閾値になる。lastHitTime(:315-318)はホールド頭(r.beat)基準でduration無視。修正: GameScreen.tsxのみ。終了閾値の優先順位をend_beat→最終リング＋2秒→音源長/フォールバックに変更(audio_offset加算維持)。lastHitTimeをホールド終端込みに変更(rings.reduce((m,r)=>max(m,beatToMs(r.beat+(r.duration??0))))、ringSpawner.ts:65と同一式。単発は挙動不変)。完了条件: (1) end_beat未設定・譜面が曲途中の場合に最終リング（ホールド終端含む）＋2秒でリザルトへ遷移 (2) end_beat設定時・リング0個時の挙動不変 (3) tsc --noEmit。",
+    "depends_on": [
+      "T205"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]

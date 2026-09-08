@@ -2524,3 +2524,24 @@ const minorStep =
 1. autosave保存→復元でイージング設定が再現されること。
 2. オフグリッド補間値の数値検証が通ること。
 3. `tsc --noEmit`、T186〜T191・T55・T102/T103・T155の回帰なし。
+
+---
+
+### [T206] 楽曲終了判定の優先順位修正（end_beat未設定時は最終リング＋2秒・ホールド終端対応）
+
+**要求（ユーザー確定）**:
+- 「楽曲終了位置 (ビート)」のプレースホルダは「自動 (最後のリング + 2秒)」と書いてあるが、楽曲の途中までしか譜面を作っていない状態でプレイしても、譜面の最後でリザルトが出ない（音源全体が終わるまで待たされる）。
+
+**根本原因（コード確定）**:
+- `GameScreen.tsx:404` は `end_beat` 未設定時に `(buffer ? buffer.duration * 1000 : fallbackEnd)` を使い、音源がある限り音源全体の長さが終了閾値になる。`fallbackEnd`（最終リング＋2秒）は音源無し時の代替値でしかない。
+- さらに `lastHitTime`（`GameScreen.tsx:315-318`）はホールドの頭（`r.beat`）基準で、`duration`（テール）を無視している。
+
+**修正**（`src/screens/GameScreen.tsx` のみ）:
+- 終了閾値の優先順位を `end_beat` → 最終リング＋2秒 → 音源長／フォールバックに変更:
+  `const baseEnd = chart.end_beat !== undefined ? timeline.beatToMs(chart.end_beat) : lastHitTime !== null ? lastHitTime + END_DELAY_MS : (buffer ? buffer.duration * 1000 : fallbackEnd)`（`audio_offset` 加算は維持）。
+- `lastHitTime` をホールド終端込みに変更: `initChart.rings.reduce((m, r) => Math.max(m, initTimeline.beatToMs(r.beat + (r.duration ?? 0))), -Infinity)`（`ringSpawner.ts:65` と同一式。単発リングは挙動不変）。
+
+**完了条件**:
+1. `end_beat` 未設定・譜面が曲途中の場合に、最終リング（ホールド終端含む）＋2秒でリザルト画面へ遷移すること。
+2. `end_beat` 設定時・リング0個時の挙動は不変であること。
+3. `tsc --noEmit` エラーなし。

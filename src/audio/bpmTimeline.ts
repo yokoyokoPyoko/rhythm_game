@@ -22,10 +22,10 @@ export class BpmTimeline {
   private readonly baseBpm: number;
   private readonly baseAmplitude: number;
   private readonly segments: BpmSegment[];
-  /** Sorted amplitude entries from sections (beat, amplitude, easeToNext). */
-  private readonly amplitudeEntries: { beat: number; amplitude: number; easeToNext?: EasingType }[];
-  /** Sorted zoom entries from sections (beat, zoom, easeToNext). */
-  private readonly zoomEntries: { beat: number; zoom: number; easeToNext?: EasingType }[];
+  /** Sorted amplitude entries from sections (beat, amplitude?, easeToNext). Value optional (undefined => inherit). */
+  private readonly amplitudeEntries: { beat: number; amplitude?: number; easeToNext?: EasingType }[];
+  /** Sorted zoom entries from sections (beat, zoom?, easeToNext). Value optional (undefined => inherit). */
+  private readonly zoomEntries: { beat: number; zoom?: number; easeToNext?: EasingType }[];
 
   constructor(bpmChanges: BpmChange[] = [], baseAmplitude = 1.0, legacyFallback?: unknown) {
     // T187/T186: primary signature is (bpmChanges, baseAmplitude). Legacy callers
@@ -85,15 +85,16 @@ export class BpmTimeline {
 
     this.segments = segs;
 
-    // Build amplitude step entries from sections that carry an amplitude value
+    // Build amplitude step entries from all sections. A section without an explicit
+    // amplitude resolves to the inherited (preceding / base) value during evaluation.
     this.amplitudeEntries = changes
-      .filter((c) => Number.isFinite(c.amplitude) && (c.amplitude as number) > 0)
-      .map((c) => ({ beat: c.beat, amplitude: c.amplitude as number, easeToNext: c.easeToNext }));
+      .filter((c) => c.amplitude === undefined || (Number.isFinite(c.amplitude) && (c.amplitude as number) > 0))
+      .map((c) => ({ beat: c.beat, amplitude: c.amplitude, easeToNext: c.easeToNext }));
 
-    // Build zoom step entries from sections that carry a zoom value
+    // Build zoom step entries from all sections (same unit semantics).
     this.zoomEntries = changes
-      .filter((c) => Number.isFinite(c.zoom) && (c.zoom as number) > 0)
-      .map((c) => ({ beat: c.beat, zoom: c.zoom as number, easeToNext: c.easeToNext }));
+      .filter((c) => c.zoom === undefined || (Number.isFinite(c.zoom) && (c.zoom as number) > 0))
+      .map((c) => ({ beat: c.beat, zoom: c.zoom, easeToNext: c.easeToNext }));
   }
 
   private segmentAt(beat: number): BpmSegment {
@@ -153,8 +154,7 @@ export class BpmTimeline {
   amplitudeAt(beat: number): number {
     const b = Number.isFinite(beat) ? beat : 0;
     if (this.amplitudeEntries.length === 0) return this.baseAmplitude;
-    if (b <= this.amplitudeEntries[0].beat) return this.amplitudeEntries[0].amplitude;
-    return this.interpolateEntries(
+    return this.resolveAt(
       this.amplitudeEntries.map((e) => ({ beat: e.beat, value: e.amplitude, easeToNext: e.easeToNext })),
       b,
       this.baseAmplitude
@@ -169,8 +169,7 @@ export class BpmTimeline {
   zoomAt(beat: number): number {
     const b = Number.isFinite(beat) ? beat : 0;
     if (this.zoomEntries.length === 0) return 1.0;
-    if (b <= this.zoomEntries[0].beat) return this.zoomEntries[0].zoom;
-    return this.interpolateEntries(
+    return this.resolveAt(
       this.zoomEntries.map((e) => ({ beat: e.beat, value: e.zoom, easeToNext: e.easeToNext })),
       b,
       1.0
@@ -178,36 +177,55 @@ export class BpmTimeline {
   }
 
   /**
-   * T202: Generic interval interpolation lookup over sorted entries.
-   * For the interval [entries[i], entries[i+1]] where the preceding entry i has an
-   * `easeToNext`, interpolate from entries[i].value to entries[i+1].value by easing
-   * factor e(t) where t = (beat - a.beat) / (b.beat - a.beat). Zero-length intervals
-   * fall back to a step (use the preceding value). Beyond the last entry, use the last value.
+   * T202: Interval-eased evaluation over all sections (sorted by beat, stable).
+   *
+   * Each section resolves to an *effective value*: its explicit value if set,
+   * otherwise the inherited value (preceding section's effective value, or `base`).
+   * Before the first section the value equals `base` (step).
+   *
+   * For the interval [A.beat, B.beat] where the preceding section A carries an
+   * `easeToNext`, interpolate from A's effective value to B's effective value using
+   * e(t) with t = (beat - A.beat) / (B.beat - A.beat). Zero-length intervals
+   * (A.beat === B.beat) fall back to a step (use the last section's effective value).
+   * Without easing the value is a step function. Beyond the last section use its value.
    */
-  private interpolateEntries(
-    entries: { beat: number; value: number; easeToNext?: EasingType }[],
+  private resolveAt(
+    entries: { beat: number; value?: number; easeToNext?: EasingType }[],
     beat: number,
     base: number
   ): number {
+    // Resolve effective value per section (undefined => inherit / base).
+    let current = base;
+    const resolved = entries.map((e) => {
+      if (e.value !== undefined && Number.isFinite(e.value)) {
+        current = e.value;
+      }
+      return { beat: e.beat, value: current, easeToNext: e.easeToNext };
+    });
+
+    if (resolved.length === 0) return base;
+    if (beat < resolved[0].beat) return base;
+
     let result = base;
-    for (let i = 0; i < entries.length; i++) {
-      const a = entries[i];
+    for (let i = 0; i < resolved.length; i++) {
+      const a = resolved[i];
       if (beat >= a.beat) {
         result = a.value;
       } else {
         break;
       }
-      const b = entries[i + 1];
+      const b = resolved[i + 1];
       if (b && beat >= b.beat) {
         result = b.value;
         continue;
       }
       if (!b) break;
-      const ease = a.easeToNext;
-      if (!ease || b.beat <= a.beat) break;
+      // Interpolate only when the preceding section requests easing and the
+      // interval has positive length.
+      if (!a.easeToNext || b.beat <= a.beat) break;
       const rawT = (beat - a.beat) / (b.beat - a.beat);
       const t = Math.max(0, Math.min(1, rawT));
-      const eased = easeFactor(ease, t);
+      const eased = easeFactor(a.easeToNext, t);
       result = a.value + (b.value - a.value) * eased;
     }
     return result;
