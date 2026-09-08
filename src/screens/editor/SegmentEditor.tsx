@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { Segment } from '../../types'
+import { quantizeBeat } from '../../chart/quantize'
 
 interface SegmentEditorProps {
   segments: Segment[]
@@ -12,9 +13,10 @@ interface SegmentEditorProps {
   editMode?: 'vertex' | 'edge' | 'ring'
   detailsOpen?: boolean
   onDetailsOpenChange?: (open: boolean) => void
+  snap?: number
 }
 
-export default function SegmentEditor({ segments, onSegmentsChange, selectedIndex = null, selectedIndices = [], hoveredIndex = null, onSelect, onHover, editMode, detailsOpen, onDetailsOpenChange }: SegmentEditorProps) {
+export default function SegmentEditor({ segments, onSegmentsChange, selectedIndex = null, selectedIndices = [], hoveredIndex = null, onSelect, onHover, editMode, detailsOpen, onDetailsOpenChange, snap = 0.25 }: SegmentEditorProps) {
   const [internalOpen, setInternalOpen] = useState(false)
 
   useEffect(() => {
@@ -43,9 +45,42 @@ export default function SegmentEditor({ segments, onSegmentsChange, selectedInde
     onSegmentsChange(segments.map((seg, i) => (i === index ? { ...seg, direction } : seg)))
   }
 
-  const updateBeats = (index: number, beats: number) => {
-    const v = Number.isFinite(beats) && beats > 0 ? beats : 1
+  // T209: draft text state for the beats field so intermediate input (empty, leading
+  // zeros) is not coerced on every keystroke. Commit only on blur/Enter with
+  // finite && > 0 validation + snap quantization; invalid values revert.
+  const [beatsDrafts, setBeatsDrafts] = useState<string[]>(segments.map((s) => String(s.beats)))
+
+  useEffect(() => {
+    setBeatsDrafts(segments.map((s) => String(s.beats)))
+  }, [segments])
+
+  const validSafeSnap = snap > 0 ? snap : 0.25
+
+  const commitBeats = (index: number, draft: string) => {
+    const numeric = Number(draft)
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      setBeatsDrafts((prev) => {
+        const next = [...prev]
+        next[index] = String(segments[index] ? segments[index].beats : 1)
+        return next
+      })
+      return
+    }
+    const v = Math.max(Number(quantizeBeat(numeric, validSafeSnap).toFixed(2)), validSafeSnap)
+    setBeatsDrafts((prev) => {
+      const next = [...prev]
+      next[index] = String(v)
+      return next
+    })
     onSegmentsChange(segments.map((seg, i) => (i === index ? { ...seg, beats: v } : seg)))
+  }
+
+  const handleBeatsInput = (index: number, value: string) => {
+    setBeatsDrafts((prev) => {
+      const next = [...prev]
+      next[index] = value
+      return next
+    })
   }
 
   const move = (index: number, dir: -1 | 1) => {
@@ -98,10 +133,17 @@ export default function SegmentEditor({ segments, onSegmentsChange, selectedInde
               <input
                 className="editor-input segment-beats"
                 type="number"
-                min={0.25}
-                step={0.25}
-                value={seg.beats}
-                onChange={(e) => updateBeats(i, Number(e.target.value))}
+                min={validSafeSnap}
+                step={validSafeSnap}
+                value={beatsDrafts[i] ?? String(seg.beats)}
+                onChange={(e) => handleBeatsInput(i, e.target.value)}
+                onBlur={(e) => commitBeats(i, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    ;(e.target as HTMLInputElement).blur()
+                  }
+                }}
                 aria-label={`セグメント${i + 1}の拍数`}
                 data-testid={`segment-beats-${i}`}
               />

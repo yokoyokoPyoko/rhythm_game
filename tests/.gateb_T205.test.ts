@@ -3,7 +3,7 @@
  * Spec: T202〜T204 結合仕上げ
  * 完了条件:
  *  1. autosave保存→復元でイージング設定が再現される
- *  2. オフグリッド補間値の数値検証が通る (t=0.5で linear 0.5 / ease-out 0.75 / ease-in 0.25)
+ *  2. オフグリッド補間値の数値検証が通る (t=0.5で linear 0.5 / ease-out 0.875 / ease-in 0.25)
  *  3. tsc --noEmit、T186〜T191・T55・T102/T103・T155の回帰なし
  *  + 旧譜面(ease_to_next無し)は全区間瞬間切替(step)
  *  + セクション追加ダイアログ併存確認、ドラッグ所有移動の数値反映
@@ -86,7 +86,7 @@ function makeTimeline(sections: BpmChange[], baseAmp = 1.0): BpmTimeline {
 }
 function eased(t: number, kind: 'linear' | 'ease-out' | 'ease-in'): number {
   if (kind === 'linear') return t;
-  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 2);
+  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 3);
   if (kind === 'ease-in') return Math.pow(t, 2);
   return t;
 }
@@ -201,10 +201,10 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       const toml = chartToToml(loaded as unknown as Chart);
       const reparsed = parseChartText(toml);
 
-      // [Step3: Assert] — reparsed has ease and mid is 1.75 (ease-out 0.75)
+      // [Step3: Assert] — reparsed has ease and mid is 1.875 (ease-out 0.875)
       expect((reparsed.bpm_changes[0] as BpmChange).easeToNext).toBe('ease-out');
       const tlAfter = makeTimeline(reparsed.bpm_changes, 1.0);
-      expect(tlAfter.amplitudeAt(4)).toBeCloseTo(1.75, 4);
+      expect(tlAfter.amplitudeAt(4)).toBeCloseTo(1.875, 4);
       expect(tlAfter.amplitudeAt(4)).not.toBeCloseTo(tlBefore.amplitudeAt(4), 1);
       // zoom also round-trips
       const zoomChart: Chart = {
@@ -284,10 +284,10 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
   });
 
   // =======================================================================
-  // 2. オフグリッド補間値の数値検証 (完了条件2) — T202の t=0.5 0.5/0.75/0.25
+  // 2. オフグリッド補間値の数値検証 (完了条件2) — T202の t=0.5 0.5/0.875/0.25
   // =======================================================================
   describe('2. オフグリッド補間値の数値検証 — 3種イージングがt=0.5で正確 (3-step)', () => {
-    it('amplitude linear/ease-out/ease-in が t=0.5で 0.5/0.75/0.25 かつ off-grid 0.37/1.23/3.5で曲線一致 (3-step)', () => {
+    it('amplitude linear/ease-out/ease-in が t=0.5で 0.5/0.875/0.25 かつ off-grid 0.37/1.23/3.5で曲線一致 (3-step)', () => {
       // [Step1: Capture Before] — step (no ease) gives 1.0 at mid
       const tlStep = makeTimeline([
         { beat: 0, bpm: 120, amplitude: 1.0 },
@@ -313,7 +313,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
 
       // [Step3: Assert] — t=0.5 values
       expect(tlLin.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.5, 4); // 1.5
-      expect(tlOut.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.75, 4); // 1.75
+      expect(tlOut.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.875, 4); // 1.875
       expect(tlIn.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.25, 4); // 1.25
       expect(tlLin.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
       expect(tlOut.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
@@ -328,7 +328,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 8, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
       ]);
-      expect(tlZoomOut.zoomAt(4)).toBeCloseTo(1.75, 4);
+      expect(tlZoomOut.zoomAt(4)).toBeCloseTo(1.875, 4);
       expect(tlZoomOut.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.37 / 8, 'ease-out'), 4);
     });
 
@@ -351,9 +351,9 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         { beat: 6, bpm: 120, zoom: 2.7 },
       ]);
 
-      // [Step3: Assert] — mid 4.0 = 0.75, off-grid points use exact eased t
-      expect(tl.amplitudeAt(4)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
-      expect(tlZoom.zoomAt(4)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
+      // [Step3: Assert] — mid 4.0 = 0.875, off-grid points use exact eased t
+      expect(tl.amplitudeAt(4)).toBeCloseTo(1.3 + 1.4 * 0.875, 4);
+      expect(tlZoom.zoomAt(4)).toBeCloseTo(1.3 + 1.4 * 0.875, 4);
       for (const beat of [2.37, 3.37] as const) {
         const t = (beat - 2) / 4;
         const expected = 1.3 + 1.4 * eased(t, 'ease-out');
@@ -372,7 +372,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(tl2.amplitudeAt(2.185)).toBeCloseTo(0.7 + 2.7 * 0.5, 3);
     });
 
-    it('zoomも3種イージングで t=0.5 が 0.5/0.75/0.25 off-grid 0.37/1.23で一致 (3-step)', () => {
+    it('zoomも3種イージングで t=0.5 が 0.5/0.875/0.25 off-grid 0.37/1.23で一致 (3-step)', () => {
       // [Step1: Capture Before] — zoom step baseline
       const tlStep = makeTimeline([
         { beat: 0, bpm: 120, zoom: 1.0 },
@@ -393,7 +393,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
 
       // [Step3: Assert]
       expect(zl.zoomAt(2)).toBeCloseTo(1.5, 4);
-      expect(zo.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(zo.zoomAt(2)).toBeCloseTo(1.875, 4);
       expect(zi.zoomAt(2)).toBeCloseTo(1.25, 4);
       const t037 = 0.37 / 4;
       expect(zl.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(t037, 'linear'), 4);
@@ -432,7 +432,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
         { beat: 8, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
       ]);
-      expect(tlZoomMixed.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlZoomMixed.zoomAt(2)).toBeCloseTo(1.875, 4);
       expect(tlZoomMixed.zoomAt(6)).toBeCloseTo(2.0, 5);
     });
 
@@ -462,7 +462,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
         { beat: 4, bpm: 120, zoom: 2.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 4, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
       ]);
-      expect(tlZoomZero.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlZoomZero.zoomAt(2)).toBeCloseTo(1.875, 4);
       expect(tlZoomZero.zoomAt(4)).toBeCloseTo(3.0, 5);
     });
 
@@ -487,7 +487,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
       expect(tlWith.bpmAt(4.37)).toBeCloseTo(150, 5);
       expect(tlWith.msToBeat(tlWith.beatToMs(2.37))).toBeCloseTo(2.37, 3);
       expect(tlNo.amplitudeAt(2)).toBeCloseTo(0.7, 5);
-      expect(tlWith.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.75, 4);
+      expect(tlWith.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.875, 4);
     });
   });
 
@@ -496,7 +496,7 @@ describe('T205 セクションイージング結合・回帰 — Vitest pure eng
   // =======================================================================
   describe('3. 旧譜面 (ease_to_next無し) は全区間ステップ — TOML読込・autosave (3-step)', () => {
     it('旧TOMLをparseすると easeToNext が undefined のまま、補間はステップ (3-step off-grid)', () => {
-      // [Step1: Capture Before] — new TOML with ease gives eased 1.75 at mid
+      // [Step1: Capture Before] — new TOML with ease gives eased 1.875 at mid
       const tomlWithEase = `
 title = "WithEase205"
 artist = ""
@@ -513,7 +513,7 @@ amplitude = 2.0
 `;
       const parsedWith = parseChartText(tomlWithEase);
       const tlWith = makeTimeline(parsedWith.bpm_changes, parsedWith.amplitude);
-      expect(tlWith.amplitudeAt(4)).toBeCloseTo(1.75, 4);
+      expect(tlWith.amplitudeAt(4)).toBeCloseTo(1.875, 4);
 
       // [Step2: Perform] — legacy TOML without any ease_to_next
       const tomlLegacy = `
@@ -743,7 +743,7 @@ bpm = 120
         { beat: 8.25, bpm: 120, amplitude: 2.7 },
       ];
       const tlBefore = makeTimeline(beforeSections, 1.0);
-      expect(tlBefore.amplitudeAt(2.185)).toBeCloseTo(1.15, 3);
+      expect(tlBefore.amplitudeAt(2.185)).toBeCloseTo(1.225, 3);
       expect(tlBefore.amplitudeAt(6)).toBeCloseTo(1.3, 5);
 
       // [Step2: Perform] — simulate dragging ease from gap0 to gap1 (move ownership)
@@ -758,7 +758,7 @@ bpm = 120
       expect(tlAfter.amplitudeAt(2.185)).toBeCloseTo(0.7, 5);
       expect(tlAfter.amplitudeAt(2.185)).not.toBeCloseTo(tlBefore.amplitudeAt(2.185), 2);
       const midGap1 = 4.37 + (8.25 - 4.37) / 2;
-      expect(tlAfter.amplitudeAt(midGap1)).toBeCloseTo(1.3 + 1.4 * 0.75, 3);
+      expect(tlAfter.amplitudeAt(midGap1)).toBeCloseTo(1.3 + 1.4 * 0.875, 3);
       const tOff = (6 - 4.37) / (8.25 - 4.37);
       expect(tlAfter.amplitudeAt(6)).toBeCloseTo(1.3 + 1.4 * eased(tOff, 'ease-out'), 3);
       expect((afterDrag[0] as BpmChange).easeToNext).toBeUndefined();

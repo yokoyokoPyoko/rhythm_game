@@ -3,7 +3,7 @@
  * node environment — pure engine math, no DOM, TDD Red->Green
  * Spec: easeToNext?: 'linear'|'ease-out'|'ease-in' on BpmChange,
  *       BpmTimeline amplitudeAt/zoomAt interpolation,
- *       loader/serialize ease_to_next, t=0.5 0.5/0.75/0.25 off-grid required,
+ *       loader/serialize ease_to_next, t=0.5 0.5/0.875/0.25 off-grid required,
  *       no-ease => step, zero-length fallback.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -28,7 +28,7 @@ function makeTimeline(sections: BpmChange[], baseAmp = 1.0): BpmTimeline {
 
 function eased(t: number, kind: 'linear' | 'ease-out' | 'ease-in'): number {
   if (kind === 'linear') return t;
-  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 2);
+  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 3);
   if (kind === 'ease-in') return Math.pow(t, 2);
   return t;
 }
@@ -91,8 +91,8 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
     });
   });
 
-  describe('2. amplitudeAt ease-out (t=0.5で0.75) off-grid', () => {
-    it('beat0 amp0.5->beat4 amp1.5 ease-out: mid 0.75, 端数0.37/1.23で曲線一致 (3-step)', () => {
+  describe('2. amplitudeAt ease-out (t=0.5で0.875) off-grid', () => {
+    it('beat0 amp0.5->beat4 amp1.5 ease-out: mid 0.875, 端数0.37/1.23で曲線一致 (3-step)', () => {
       const tlStep = makeTimeline([
         { beat: 0, bpm: 120, amplitude: 0.5 },
         { beat: 4, bpm: 120, amplitude: 1.5 },
@@ -104,7 +104,7 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
         { beat: 4, bpm: 120, amplitude: 1.5 },
       ], 1.0);
       const start = 0.5, end = 1.5;
-      expect(tl.amplitudeAt(2)).toBeCloseTo(start + (end - start) * 0.75, 4);
+      expect(tl.amplitudeAt(2)).toBeCloseTo(start + (end - start) * 0.875, 4);
       expect(tl.amplitudeAt(2)).not.toBeCloseTo(beforeMid, 4);
       const t037 = (0.37 - 0) / 4;
       expect(tl.amplitudeAt(0.37)).toBeCloseTo(start + (end - start) * eased(t037, 'ease-out'), 4);
@@ -122,7 +122,7 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
         { beat: 5, bpm: 120, amplitude: 0.7 },
       ], 1.0);
       const start = 2.7, end = 0.7;
-      expect(tl.amplitudeAt(3.0)).toBeCloseTo(start + (end - start) * 0.75, 4);
+      expect(tl.amplitudeAt(3.0)).toBeCloseTo(start + (end - start) * 0.875, 4);
       const tOff = (2.37 - 1) / 4;
       expect(tl.amplitudeAt(2.37)).toBeCloseTo(start + (end - start) * eased(tOff, 'ease-out'), 4);
     });
@@ -155,7 +155,7 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
   });
 
   describe('4. zoomAt イージング (amplitudeと同ロジック) off-grid', () => {
-    it('zoom linear ease-out ease-in の t=0.5 で 0.5/0.75/0.25 (3-step)', () => {
+    it('zoom linear ease-out ease-in の t=0.5 で 0.5/0.875/0.25 (3-step)', () => {
       const tlStep = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0 } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
       expect(tlStep.zoomAt(2)).toBeCloseTo(1.0, 5);
       const tlLin = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'linear' } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
@@ -163,7 +163,7 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
       expect(tlLin.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.0925, 'linear'), 4);
       expect(tlLin.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(0.3075, 'linear'), 4);
       const tlOut = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
-      expect(tlOut.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlOut.zoomAt(2)).toBeCloseTo(1.875, 4);
       expect(tlOut.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.0925, 'ease-out'), 4);
       expect(tlOut.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(0.3075, 'ease-out'), 4);
       const tlIn = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-in' } as unknown as BpmChange, { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange], 1.0);
@@ -219,7 +219,7 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
         { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
         { beat: 8, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
       ], 1.0);
-      expect(tlZ.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlZ.zoomAt(2)).toBeCloseTo(1.875, 4);
       expect(tlZ.zoomAt(6)).toBeCloseTo(2.0, 5);
     });
   });
@@ -247,7 +247,7 @@ describe('T202 セクション間イージング — Vitest pure engine (TDD Red
         { beat: 4, bpm: 120, zoom: 2.0, easeToNext: 'ease-out' } as unknown as BpmChange,
         { beat: 4, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
       ], 1.0);
-      expect(tl.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tl.zoomAt(2)).toBeCloseTo(1.875, 4);
       expect(tl.zoomAt(4)).toBeCloseTo(3.0, 5);
       expect(Number.isFinite(tl.zoomAt(3.99))).toBe(true);
     });
@@ -441,7 +441,7 @@ ease_to_next = "LINEAR"
       expect(reparsed.bpm_changes[0].amplitude).toBeCloseTo(0.7, 3);
       const tl = makeTimeline(reparsed.bpm_changes, reparsed.amplitude);
       const midBeat = 4.37 + (8.25 - 4.37) / 2;
-      const expectedMid = 1.3 + (2.7 - 1.3) * 0.75;
+      const expectedMid = 1.3 + (2.7 - 1.3) * 0.875;
       expect(tl.amplitudeAt(midBeat)).toBeCloseTo(expectedMid, 3);
     });
 
@@ -484,8 +484,8 @@ amplitude = 1.5
       const t0 = 0.37 / 2.37;
       expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.6 * eased(t0, 'linear'), 4);
       const mid2 = 2.37 + (4 - 2.37) / 2;
-      expect(tl.amplitudeAt(mid2)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
-      expect(tl.zoomAt(mid2)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
+      expect(tl.amplitudeAt(mid2)).toBeCloseTo(1.3 + 1.4 * 0.875, 4);
+      expect(tl.zoomAt(mid2)).toBeCloseTo(1.3 + 1.4 * 0.875, 4);
       const t337 = (3.37 - 2.37) / (4 - 2.37);
       expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.3 + 1.4 * eased(t337, 'ease-out'), 4);
       expect(tl.amplitudeAt(6)).toBeCloseTo(2.7, 5);
@@ -514,7 +514,7 @@ amplitude = 1.5
       const tl = makeTimeline(parsed.bpm_changes, parsed.amplitude);
       expect(tl.amplitudeAt(1)).toBeCloseTo(1.5, 4);
       const midOut = 2 + (4.37 - 2) / 2;
-      expect(tl.amplitudeAt(midOut)).toBeCloseTo(2.0 + (0.5 - 2.0) * 0.75, 4);
+      expect(tl.amplitudeAt(midOut)).toBeCloseTo(2.0 + (0.5 - 2.0) * 0.875, 4);
       expect(tl.bpmAt(1)).toBeCloseTo(120, 5);
       expect(tl.bpmAt(3)).toBeCloseTo(150, 5);
       expect(tl.bpmAt(4.37)).toBeCloseTo(180, 5);

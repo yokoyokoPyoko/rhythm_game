@@ -9621,3 +9621,15 @@ src/screens/GameScreen.tsx(61,20): error TS6133: 'setOffsetMs' is declared but i
 2026-09-08 19:10:12,364 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-08 19:18:08,237 [INFO] Orchestrator range execution: 1 tasks (from=T209, to=T209, budget=600m)
 2026-09-08 19:18:08,237 [INFO] [T209] --only mode: skipping dependency checks.
+2026-09-08 19:18:08,285 [INFO] [T209] Removed shared tests/dynamic.test.ts at task start so a task-specific test is regenerated.
+2026-09-08 19:18:08,287 [INFO] Starting implementation [T209] (attempt 1, cycle 1/10)
+2026-09-08 19:18:08,287 [INFO] Starting Vite dev server (http://127.0.0.1:5173/)...
+2026-09-08 19:18:09,353 [INFO] Vite dev server ready.
+2026-09-08 19:18:09,364 [INFO] QA generating dynamic dynamic.test.ts (test_runner=vitest, TDD direct-write mode)...
+2026-09-08 19:18:09,366 [INFO] RateLimit sleep: 5s...
+2026-09-08 19:18:14,366 [INFO] Dispatching [1mQA-Gen[0m (model=[90mopencode/muse-spark-1.2-contributor-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T209] Qa 5ecb0a67)
+2026-09-08 19:19:46,774 [INFO] Persisted session ses_f7f7976c5ffebUqK62quKDVfEA for task=T209, role=qa
+2026-09-08 19:19:46,775 [INFO] QA model wrote tests/dynamic.test.ts directly.
+2026-09-08 19:19:48,800 [INFO] [T209] Gate B Red check OK: test fails as expected (pre-implementation).
+2026-09-08 19:19:48,808 [INFO] RateLimit sleep: 5s...
+2026-09-08 19:19:53,809 [INFO] Dispatching [1mCoder(T209)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T209] Coder 2f1ad16b)

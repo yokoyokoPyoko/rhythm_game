@@ -1683,7 +1683,7 @@ export default function EditorScreen() {
             onDeleteRing={removeRing}
             onSeek={seekToBeat}
           />
-          <SegmentEditor segments={segments} selectedIndex={selectedSegment} selectedIndices={selectedSegments} hoveredIndex={hoveredSegment} onSegmentsChange={commitSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} />
+          <SegmentEditor segments={segments} selectedIndex={selectedSegment} selectedIndices={selectedSegments} hoveredIndex={hoveredSegment} onSegmentsChange={commitSegments} onSelect={handleSelectSegment} onHover={setHoveredSegment} editMode={editMode} detailsOpen={segmentDetailsOpen} onDetailsOpenChange={setSegmentDetailsOpen} snap={snap} />
 
           <section className="editor-pane editor-accordion">
              <details data-testid="ring-list-details" open={ringDetailsOpen} onToggle={(e) => setRingDetailsOpen((e.target as HTMLDetailsElement).open)}>

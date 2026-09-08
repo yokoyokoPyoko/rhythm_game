@@ -88,7 +88,7 @@ export class BpmTimeline {
     // Build amplitude step entries from all sections. A section without an explicit
     // amplitude resolves to the inherited (preceding / base) value during evaluation.
     this.amplitudeEntries = changes
-      .filter((c) => c.amplitude === undefined || (Number.isFinite(c.amplitude) && (c.amplitude as number) > 0))
+      .filter((c) => c.amplitude === undefined || (Number.isFinite(c.amplitude) && (c.amplitude as number) >= 0))
       .map((c) => ({ beat: c.beat, amplitude: c.amplitude, easeToNext: c.easeToNext }));
 
     // Build zoom step entries from all sections (same unit semantics).
@@ -237,7 +237,7 @@ function easeFactor(ease: EasingType, t: number): number {
     case 'linear':
       return t;
     case 'ease-out':
-      return 1 - (1 - t) * (1 - t);
+      return 1 - Math.pow(1 - t, 3);
     case 'ease-in':
       return t * t;
     default:

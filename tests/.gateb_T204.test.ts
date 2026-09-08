@@ -35,10 +35,10 @@ afterEach(() => {
   vi.clearAllTimers();
 });
 
-// helper: expected easing factor (must match spec: linear=t, ease-out=1-(1-t)^2, ease-in=t^2)
+// helper: expected easing factor (must match spec: linear=t, ease-out=1-(1-t)^3, ease-in=t^2)
 function easeFactor(kind: string, t: number): number {
   if (kind === 'linear') return t;
-  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 2);
+  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 3);
   if (kind === 'ease-in') return Math.pow(t, 2);
   return t;
 }
@@ -561,8 +561,8 @@ describe('T204 イージング行UI（全列またぎ・追加・ドラッグ並
     });
   });
 
-  describe('4. 補間数値整合 — イージング式が 0.5/0.75/0.25 で正確 (off-grid必須)', () => {
-    it('BpmTimeline amplitudeAt/zoomAt が t=0.5 で linear 0.5 / ease-out 0.75 / ease-in 0.25 を返す (3-step off-grid)', () => {
+  describe('4. 補間数値整合 — イージング式が 0.5/0.875/0.25 で正確 (off-grid必須)', () => {
+    it('BpmTimeline amplitudeAt/zoomAt が t=0.5 で linear 0.5 / ease-out 0.875 / ease-in 0.25 を返す (3-step off-grid)', () => {
       // Step1: Capture Before — no easing => step
       const tlStep = makeTimeline([
         { beat: 0, bpm: 120, amplitude: 0.7 },
@@ -587,7 +587,7 @@ describe('T204 イージング行UI（全列またぎ・追加・ドラッグ並
 
       // Step3: Assert — t=0.5 values
       expect(tlLin.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.5, 4);
-      expect(tlOut.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.75, 4);
+      expect(tlOut.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.875, 4);
       expect(tlIn.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.25, 4);
       // off-grid 0.37 and 1.23 must use exact eased t
       const t037 = 0.37 / 4;
@@ -604,7 +604,7 @@ describe('T204 イージング行UI（全列またぎ・追加・ドラッグ並
         { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as BpmChange,
         { beat: 4, bpm: 120, zoom: 2.0 } as BpmChange,
       ]);
-      expect(tlZoomOut.zoomAt(2)).toBeCloseTo(1.75, 4);
+      expect(tlZoomOut.zoomAt(2)).toBeCloseTo(1.875, 4);
       // must differ from step
       expect(tlLin.amplitudeAt(2)).not.toBeCloseTo(beforeMid, 4);
     });
@@ -620,7 +620,7 @@ describe('T204 イージング行UI（全列またぎ・追加・ドラッグ並
         { beat: 6, bpm: 120, amplitude: 2.7 },
       ]);
       const mid = 2 + (6 - 2) / 2;
-      expect(tl.amplitudeAt(mid)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
+      expect(tl.amplitudeAt(mid)).toBeCloseTo(1.3 + 1.4 * 0.875, 4);
       const tOff = (3.37 - 2) / 4;
       expect(tl.amplitudeAt(3.37)).toBeCloseTo(1.3 + 1.4 * easeFactor('ease-out', tOff), 4);
       const tOff2 = (2.37 - 2) / 4;

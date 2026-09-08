@@ -44,11 +44,33 @@ export default function BpmEditor({
   onEndBeatChange,
   onRequestAddSection,
 }: BpmEditorProps) {
-  const [beatValues, setBeatValues] = useState<number[]>(bpmChanges.map((c) => safeBeat(c.beat)))
+  // T209: draft text state for the beat field. Display is draft-first; commit
+  // (with validation + sort-by-beat, T203) only on blur/Enter. Invalid values revert.
+  const [beatValues, setBeatValues] = useState<string[]>(bpmChanges.map((c) => String(safeBeat(c.beat))))
 
   useEffect(() => {
-    setBeatValues(bpmChanges.map((c) => safeBeat(c.beat)))
+    setBeatValues(bpmChanges.map((c) => String(safeBeat(c.beat))))
   }, [bpmChanges])
+
+  const commitBeat = (index: number, draft: string, sorter: (arr: BpmChange[]) => BpmChange[] = sortByBeat) => {
+    const numeric = Number(draft)
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      setBeatValues((prev) => {
+        const next = [...prev]
+        next[index] = String(safeBeat(bpmChanges[index] ? bpmChanges[index].beat : 0))
+        return next
+      })
+      return
+    }
+    const newBeat = safeBeat(numeric)
+    setBeatValues((prev) => {
+      const next = [...prev]
+      next[index] = String(newBeat)
+      return next
+    })
+    const next = bpmChanges.map((c, idx) => (idx === index ? { ...c, beat: newBeat } : c))
+    onSectionsChange(sorter(next))
+  }
 
   const removeChange = (index: number) => {
     onSectionsChange(sortByBeat(bpmChanges.filter((_, i) => i !== index)))
@@ -205,19 +227,13 @@ export default function BpmEditor({
                 type="number"
                 min={0}
                 step={0.25}
-                value={beatValues[i] ?? safeBeat(change.beat)}
-                onChange={(e) => setBeatValues((prev) => { const next = [...prev]; next[i] = safeBeat(Number(e.target.value)); return next })}
-                onBlur={(e) => {
-                  const newBeat = safeBeat(Number(e.target.value))
-                  const next = bpmChanges.map((c, idx) => (idx === i ? { ...c, beat: newBeat } : c))
-                  onSectionsChange(sortByBeat(next))
-                }}
+                value={beatValues[i] ?? String(safeBeat(change.beat))}
+                onChange={(e) => setBeatValues((prev) => { const next = [...prev]; next[i] = e.target.value; return next })}
+                onBlur={(e) => commitBeat(i, e.target.value, sortByBeat)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault()
-                    const newBeat = safeBeat(Number((e.target as HTMLInputElement).value))
-                    const next = bpmChanges.map((c, idx) => (idx === i ? { ...c, beat: newBeat } : c))
-                    onSectionsChange(sortByBeat(next))
+                    ;(e.target as HTMLInputElement).blur()
                   }
                 }}
                 aria-label={`セクション${i + 1}のbeat`}
