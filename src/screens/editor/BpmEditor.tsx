@@ -274,7 +274,8 @@ export default function BpmEditor({
               hasEasing ? (
                 <li
                   key={`ease-${i}`}
-                  className={`bpm-change-ease-row${selectedSection === i ? ' bpm-change-ease-selected' : ''}${dropHot ? ' bpm-change-ease-dragover' : ''}`}
+                  className={`bpm-change-ease-row easing-row easing-gap${selectedSection === i ? ' bpm-change-ease-selected' : ''}${dropHot ? ' bpm-change-ease-dragover' : ''}`}
+                  data-testid={`easing-row-${i}`}
                   onClick={() => { setSelectedSection(i); setDropGap(null) }}
                   onDragOver={handleDragOver(i)}
                   onDragLeave={handleDragLeave}
@@ -286,6 +287,7 @@ export default function BpmEditor({
                     onDragStart={handleDragStart(i)}
                     onDragEnd={handleDragEnd}
                     title="ドラッグで別の隙間へ移動"
+                    data-testid={`easing-handle-${i}`}
                   >
                     ⠿
                   </span>
@@ -312,7 +314,7 @@ export default function BpmEditor({
               ) : (
                 <li
                   key={`ease-slot-${i}`}
-                  className={`bpm-change-ease-slot${dropHot ? ' bpm-change-ease-dragover' : ''}`}
+                  className={`bpm-change-ease-slot easing-gap${dropHot ? ' bpm-change-ease-dragover' : ''}`}
                   onClick={() => { setSelectedSection(i); setDropGap(null) }}
                   onDragOver={handleDragOver(i)}
                   onDragLeave={handleDragLeave}
@@ -339,6 +341,7 @@ export default function BpmEditor({
           onClick={addEasing}
           disabled={bpmChanges.length < 2}
           title="選択中セクションの直後（未選択なら末尾）にイージングを設定"
+          data-testid="easing-add"
         >
           イージング追加
         </button>

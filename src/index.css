@@ -1206,6 +1206,14 @@ button:focus-visible {
   background-color: rgba(34, 211, 238, 0.03);
 }
 
+.easing-row {
+  grid-column: 1 / -1;
+}
+
+.easing-gap {
+  grid-column: 1 / -1;
+}
+
 .bpm-change-ease-selected {
   background-color: rgba(99, 102, 241, 0.08);
 }
