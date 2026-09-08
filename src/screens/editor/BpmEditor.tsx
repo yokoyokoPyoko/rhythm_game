@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import type { BpmChange } from '../../types'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import type { DragEvent } from 'react'
+import type { BpmChange, EasingType } from '../../types'
 
 const BPM_MIN = 1
 const BPM_MAX = 1000
@@ -57,6 +58,82 @@ export default function BpmEditor({
     onSectionsChange(bpmChanges.map((c, i) => (i === index ? { ...c, ...patch } : c)))
   }
 
+  const [selectedSection, setSelectedSection] = useState<number | null>(null)
+  const [dragGap, setDragGap] = useState<number | null>(null)
+  const [dropGap, setDropGap] = useState<number | null>(null)
+  const dragGapRef = useRef<number | null>(null)
+
+  const setEase = (ownerIdx: number, ease: EasingType | undefined) => {
+    updateChange(ownerIdx, { easeToNext: ease })
+  }
+
+  const handleDragStart = (gap: number) => (e: DragEvent) => {
+    dragGapRef.current = gap
+    setDragGap(gap)
+    setDropGap(null)
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      try { e.dataTransfer.setData('text/plain', String(gap)) } catch { /* dataTransfer unavailable in some test envs */ }
+    }
+  }
+
+  const handleDragEnd = () => {
+    dragGapRef.current = null
+    setDragGap(null)
+    setDropGap(null)
+  }
+
+  const handleDragOver = (gap: number) => (e: DragEvent) => {
+    if (dragGapRef.current === null) return
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    e.preventDefault()
+    setDropGap(gap)
+  }
+
+  const handleDragLeave = () => {
+    setDropGap(null)
+  }
+
+  const handleDrop = (gap: number) => (e: DragEvent) => {
+    e.preventDefault()
+    let from = dragGapRef.current
+    if (from === null) {
+      try { from = Number(e.dataTransfer?.getData('text/plain')) } catch { from = Number.NaN }
+    }
+    const n = bpmChanges.length
+    const validFrom = typeof from === 'number' && Number.isFinite(from) && from >= 0 && from < n - 1
+    const validGap = gap >= 0 && gap < n - 1
+    if (!validFrom || !validGap || from === gap) {
+      dragGapRef.current = null
+      setDragGap(null)
+      setDropGap(null)
+      return
+    }
+    const moving = bpmChanges[from].easeToNext
+    if (moving) {
+      const next = bpmChanges.map((c, i) => {
+        if (i === from) return { ...c, easeToNext: undefined }
+        if (i === gap) return { ...c, easeToNext: moving }
+        return c
+      })
+      onSectionsChange(next)
+    }
+    setSelectedSection(gap)
+    dragGapRef.current = null
+    setDragGap(null)
+    setDropGap(null)
+  }
+
+  const addEasing = () => {
+    const n = bpmChanges.length
+    if (n < 2) return
+    const owner = selectedSection !== null && selectedSection >= 0 && selectedSection < n - 1
+      ? selectedSection
+      : n - 2
+    setEase(owner, 'linear')
+    setSelectedSection(owner)
+  }
+
   return (
     <div>
       <div className="editor-field">
@@ -112,8 +189,17 @@ export default function BpmEditor({
             <span />
           </div>
           <ul className="bpm-change-list">
-          {bpmChanges.map((change, i) => (
-            <li key={i} className="bpm-change-item">
+          {bpmChanges.map((change, i) => {
+            const isLast = i === bpmChanges.length - 1
+            const hasEasing = change.easeToNext !== undefined
+            const dragActive = dragGap !== null && dragGap !== i
+            const dropHot = dragActive && dropGap === i
+            return (
+            <Fragment key={i}>
+            <li
+              className={`bpm-change-item${selectedSection === i ? ' bpm-change-item-selected' : ''}`}
+              onClick={() => { setSelectedSection(i); setDropGap(null) }}
+            >
               <input
                 className="editor-input bpm-change-beat"
                 type="number"
@@ -184,13 +270,79 @@ export default function BpmEditor({
                 −
               </button>
             </li>
-          ))}
+            {!isLast && (
+              hasEasing ? (
+                <li
+                  key={`ease-${i}`}
+                  className={`bpm-change-ease-row${selectedSection === i ? ' bpm-change-ease-selected' : ''}${dropHot ? ' bpm-change-ease-dragover' : ''}`}
+                  onClick={() => { setSelectedSection(i); setDropGap(null) }}
+                  onDragOver={handleDragOver(i)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop(i)}
+                >
+                  <span
+                    className="bpm-change-ease-grip"
+                    draggable
+                    onDragStart={handleDragStart(i)}
+                    onDragEnd={handleDragEnd}
+                    title="ドラッグで別の隙間へ移動"
+                  >
+                    ⠿
+                  </span>
+                  <span className="bpm-change-ease-label">イージング</span>
+                  <select
+                    className="editor-input bpm-change-ease-select"
+                    value={change.easeToNext as EasingType}
+                    onChange={(e) => setEase(i, e.target.value as EasingType)}
+                    aria-label={`セクション${i + 1}のイージング曲線`}
+                  >
+                    <option value="linear">直線</option>
+                    <option value="ease-out">イーズアウト</option>
+                    <option value="ease-in">イーズイン</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="bpm-change-delete"
+                    onClick={(e) => { e.stopPropagation(); setEase(i, undefined) }}
+                    aria-label={`セクション${i + 1}のイージングを削除`}
+                  >
+                    −
+                  </button>
+                </li>
+              ) : (
+                <li
+                  key={`ease-slot-${i}`}
+                  className={`bpm-change-ease-slot${dropHot ? ' bpm-change-ease-dragover' : ''}`}
+                  onClick={() => { setSelectedSection(i); setDropGap(null) }}
+                  onDragOver={handleDragOver(i)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop(i)}
+                  title="ここへドロップしてイージングを追加"
+                >
+                  <span className="bpm-change-ease-slot-line" />
+                </li>
+              )
+            )}
+            </Fragment>
+            )
+          })}
           </ul>
         </>
       )}
-      <button type="button" className="bpm-change-add" onClick={onRequestAddSection}>
-        セクションを追加
-      </button>
+      <div className="bpm-change-actions">
+        <button type="button" className="bpm-change-add" onClick={onRequestAddSection}>
+          セクションを追加
+        </button>
+        <button
+          type="button"
+          className="bpm-change-add"
+          onClick={addEasing}
+          disabled={bpmChanges.length < 2}
+          title="選択中セクションの直後（未選択なら末尾）にイージングを設定"
+        >
+          イージング追加
+        </button>
+      </div>
     </div>
   )
 }

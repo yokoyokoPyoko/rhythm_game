@@ -1139,8 +1139,8 @@ button:focus-visible {
 
 .bpm-change-list {
   list-style: none;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   max-height: 220px;
   overflow-y: auto;
@@ -1150,10 +1150,17 @@ button:focus-visible {
 .bpm-change-item {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
   gap: 0.25rem;
   align-items: center;
   padding: 0.15rem 0;
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.bpm-change-item-selected {
+  background-color: rgba(99, 102, 241, 0.08);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .bpm-change-item input {
@@ -1188,9 +1195,96 @@ button:focus-visible {
   background-color: rgba(248, 113, 113, 0.15);
 }
 
+.bpm-change-ease-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 0.4rem;
+  align-items: center;
+  grid-column: 1 / -1;
+  padding: 0.25rem 0.2rem 0.25rem 0.25rem;
+  border-bottom: 1px dashed var(--border);
+  background-color: rgba(34, 211, 238, 0.03);
+}
+
+.bpm-change-ease-selected {
+  background-color: rgba(99, 102, 241, 0.08);
+}
+
+.bpm-change-ease-dragover {
+  border-color: var(--accent);
+  background-color: rgba(99, 102, 241, 0.12);
+}
+
+.bpm-change-ease-grip {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  user-select: none;
+  padding: 0 0.15rem;
+}
+
+.bpm-change-ease-grip:active {
+  cursor: grabbing;
+}
+
+.bpm-change-ease-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.bpm-change-ease-select {
+  min-width: 0;
+  width: 100%;
+  padding: 0.15em 0.4em;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.bpm-change-ease-slot {
+  grid-column: 1 / -1;
+  height: 0.4rem;
+  align-items: stretch;
+  border-bottom: 1px dotted var(--border);
+  transition: border-color 150ms ease, background-color 150ms ease;
+  cursor: pointer;
+}
+
+.bpm-change-ease-slot:hover,
+.bpm-change-ease-slot.bpm-change-ease-dragover {
+  border-color: var(--accent);
+  background-color: rgba(99, 102, 241, 0.08);
+}
+
+.bpm-change-ease-slot-line {
+  width: 100%;
+  height: 1px;
+  display: block;
+}
+
+.bpm-change-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.bpm-change-actions .bpm-change-add {
+  width: auto;
+  flex: 1;
+}
+
 .bpm-change-add {
   width: 100%;
   font-size: 0.75rem;
+}
+
+.bpm-change-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .editor-dialog-backdrop {
