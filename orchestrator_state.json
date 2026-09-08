@@ -1863,7 +1863,7 @@
         "qa": "ses_f7fae1cb5ffehiL7RCc7sYeiSr",
         "coder": "ses_f7fab4000ffe3e0ae2EHhMR4kl"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
