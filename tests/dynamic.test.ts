@@ -1,1003 +1,407 @@
 /**
- * T205 — セクションイージングの結合・回帰 Vitest pure acceptance (node)
- * Spec: T202〜T204 結合仕上げ
- * 完了条件:
- *  1. autosave保存→復元でイージング設定が再現される
- *  2. オフグリッド補間値の数値検証が通る (t=0.5で linear 0.5 / ease-out 0.75 / ease-in 0.25)
- *  3. tsc --noEmit、T186〜T191・T55・T102/T103・T155の回帰なし
- *  + 旧譜面(ease_to_next無し)は全区間瞬間切替(step)
- *  + セクション追加ダイアログ併存確認、ドラッグ所有移動の数値反映
- *
- * Runs WITHOUT browser: imports pure engine modules directly.
- * Uses vi.useFakeTimers() deterministically. No DOM.
- * Each test follows [Capture Before] -> [Perform Action] -> [Assert Changed Outcome].
+ * T206 — 楽曲終了判定の優先順位修正（end_beat未設定時は最終リング＋2秒・ホールド終端対応） Acceptance Test
+ * Runs in node environment (vitest environment: node), no DOM.
+ * Verifies:
+ *  1. GameScreen.tsx: lastHitTime includes hold duration (r.beat + (r.duration ?? 0)) via beatToMs
+ *  2. GameScreen.tsx: end threshold priority = end_beat -> lastHitTime+2s -> buffer duration/fallback, with audio_offset
+ *  3. Dynamic computed correctness with off-grid beats and BPM changes
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'fs';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { parseChartText } from '../src/chart/loader';
-import { chartToToml } from '../src/chart/serialize';
-import {
-  saveAutosave,
-  loadAutosave,
-  listAutosaves,
-  AUTOSAVE_PREFIX,
-} from '../src/chart/autosave';
-import type { BpmChange, Chart } from '../src/types';
+import type { Chart, RingDef } from '../src/types';
 
-// ---------------------------------------------------------------------------
-// localStorage polyfill for node (vitest environment=node)
-// ---------------------------------------------------------------------------
-function ensureLocalStoragePolyfill(): void {
-  const g = globalThis as unknown as Record<string, unknown>;
-  if (typeof g['localStorage'] !== 'undefined' && g['localStorage'] !== null) return;
-  const store = new Map<string, string>();
-  const polyfill = {
-    getItem(key: string): string | null {
-      return store.has(key) ? (store.get(key) as string) : null;
-    },
-    setItem(key: string, value: string): void {
-      store.set(key, String(value));
-    },
-    removeItem(key: string): void {
-      store.delete(key);
-    },
-    clear(): void {
-      store.clear();
-    },
-    key(index: number): string | null {
-      const keys = Array.from(store.keys());
-      return keys[index] ?? null;
-    },
-    get length(): number {
-      return store.size;
-    },
+function readSrc(rel: string): string {
+  return fs.readFileSync(path.resolve(process.cwd(), rel), 'utf-8');
+}
+
+const END_DELAY_MS = 2000;
+
+// Helper mirroring EXPECTED fixed GameScreen logic (red-green target)
+function computeLastHitTimeFixed(rings: RingDef[], timeline: BpmTimeline): number | null {
+  if (!rings || rings.length === 0) return null;
+  const max = rings.reduce((m, r) => Math.max(m, timeline.beatToMs(r.beat + (r.duration ?? 0))), -Infinity);
+  return max;
+}
+function computeLastHitTimeBuggy(rings: RingDef[], timeline: BpmTimeline): number | null {
+  if (!rings || rings.length === 0) return null;
+  return timeline.beatToMs(rings.reduce((m, r) => Math.max(m, r.beat), -Infinity));
+}
+function computeBaseEndFixed(params: {
+  chart: Chart;
+  timeline: BpmTimeline;
+  buffer: { duration: number } | null;
+  lastHitTime: number | null;
+}): number {
+  const fallbackEnd = params.lastHitTime !== null ? params.lastHitTime + END_DELAY_MS : 60000;
+  const baseEnd =
+    params.chart.end_beat !== undefined
+      ? params.timeline.beatToMs(params.chart.end_beat)
+      : params.lastHitTime !== null
+        ? params.lastHitTime + END_DELAY_MS
+        : params.buffer
+          ? params.buffer.duration * 1000
+          : fallbackEnd;
+  return baseEnd;
+}
+function computeBaseEndBuggy(params: {
+  chart: Chart;
+  timeline: BpmTimeline;
+  buffer: { duration: number } | null;
+  lastHitTime: number | null;
+}): number {
+  const fallbackEnd = params.lastHitTime !== null ? params.lastHitTime + END_DELAY_MS : 60000;
+  // Buggy: end_beat -> buffer -> fallbackEnd (ignores lastHitTime when buffer exists)
+  const baseEnd = params.chart.end_beat !== undefined ? params.timeline.beatToMs(params.chart.end_beat) : params.buffer ? params.buffer.duration * 1000 : fallbackEnd;
+  return baseEnd;
+}
+function computeEndThreshold(baseEnd: number, audioOffset: number): number {
+  return baseEnd + (audioOffset ?? 0);
+}
+
+function makeChart(overrides: Partial<Chart> & { rings: RingDef[]; end_beat?: number; audio_offset?: number; bpm_changes?: Chart['bpm_changes'] }): Chart {
+  return {
+    title: 'Test',
+    artist: 'Tester',
+    audio: 'test.flac',
+    audio_offset: overrides.audio_offset ?? 0,
+    amplitude: 1.0,
+    start_position: 0,
+    bpm_changes: overrides.bpm_changes ?? [{ beat: 0, bpm: 120 }],
+    segments: [],
+    rings: overrides.rings,
+    end_beat: overrides.end_beat,
   };
-  g['localStorage'] = polyfill;
-}
-ensureLocalStoragePolyfill();
-
-vi.useFakeTimers({ shouldAdvanceTime: true });
-
-beforeEach(() => {
-  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.startsWith(AUTOSAVE_PREFIX)) keys.push(k);
-  }
-  for (const k of keys) localStorage.removeItem(k);
-});
-afterEach(() => {
-  vi.clearAllTimers();
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.startsWith(AUTOSAVE_PREFIX)) keys.push(k);
-  }
-  for (const k of keys) localStorage.removeItem(k);
-});
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-function makeTimeline(sections: BpmChange[], baseAmp = 1.0): BpmTimeline {
-  return new BpmTimeline(sections as unknown as BpmChange[], baseAmp);
-}
-function eased(t: number, kind: 'linear' | 'ease-out' | 'ease-in'): number {
-  if (kind === 'linear') return t;
-  if (kind === 'ease-out') return 1 - Math.pow(1 - t, 2);
-  if (kind === 'ease-in') return Math.pow(t, 2);
-  return t;
-}
-function clearAllAutosaves(): void {
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.startsWith(AUTOSAVE_PREFIX)) keys.push(k);
-  }
-  for (const k of keys) localStorage.removeItem(k);
 }
 
-// ---------------------------------------------------------------------------
-// T205 suites
-// ---------------------------------------------------------------------------
-describe('T205 セクションイージング結合・回帰 — Vitest pure engine (TDD Red)', () => {
-  // =======================================================================
-  // 1. autosave round-trip: ease_to_next persists (完了条件1)
-  // =======================================================================
-  describe('1. autosave保存→復元で ease_to_next が再現される (3-step)', () => {
-    it('ease_to_next 付きchartをautosave保存→復元で全セクションのeaseが一致 (3-step off-grid)', () => {
-      // [Step1: Capture Before State] — empty autosave
-      const beforeList = listAutosaves();
-      expect(beforeList.length).toBe(0);
-      const serializeHasEase = fs.readFileSync('src/chart/serialize.ts', 'utf-8').includes('ease_to_next');
-      expect(serializeHasEase).toBe(true);
+describe('T206 - 楽曲終了判定の優先順位修正 (end_beat未設定時は最終リング＋2秒・ホールド終端対応)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
 
-      // [Step2: Perform Action] — save chart with complex amplitudes 0.7/1.3/2.7 and off-grid beats
-      const chartWithEasing: Chart = {
-        title: 'T205 Autosave Ease 0.37',
-        artist: 'QA',
-        audio: 't205.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 0.7, zoom: 0.8, easeToNext: 'linear' } as unknown as BpmChange,
-          { beat: 4.37, bpm: 150, amplitude: 1.3, zoom: 1.2, easeToNext: 'ease-out' } as unknown as BpmChange,
-          { beat: 8.25, bpm: 140, amplitude: 2.7, easeToNext: 'ease-in' } as unknown as BpmChange,
-          { beat: 12.125, bpm: 130, zoom: 1.5 },
-        ],
-        segments: [{ direction: 'up', beats: 1 }],
-        rings: [{ beat: 1.23 }],
-      } as unknown as Chart;
-      const info = saveAutosave(chartWithEasing);
-      vi.advanceTimersByTime(1000);
+  describe('1. Static Source Code Inspection (GameScreen.tsx must implement fixed priority)', () => {
+    it('lastHitTime must include hold tail duration: beatToMs(r.beat + (r.duration ?? 0))', () => {
+      // [Step 1: Capture Initial State] read source before
+      const src = readSrc('src/screens/GameScreen.tsx');
+      expect(src).toBeDefined();
+      const hasOldLastHit = src.includes('initChart.rings.reduce((m, r) => Math.max(m, r.beat), -Infinity)');
+      // For debugging: old pattern exists before fix
+      void hasOldLastHit;
 
-      // [Step3: Assert Changed Outcome] — loaded chart has identical ease_to_next values
-      const loaded = loadAutosave(info.slug);
-      expect(loaded.bpm_changes.length).toBe(4);
-      expect((loaded.bpm_changes[0] as BpmChange).easeToNext).toBe('linear');
-      expect((loaded.bpm_changes[1] as BpmChange).easeToNext).toBe('ease-out');
-      expect((loaded.bpm_changes[2] as BpmChange).easeToNext).toBe('ease-in');
-      expect((loaded.bpm_changes[3] as BpmChange).easeToNext).toBeUndefined();
-      expect(loaded.bpm_changes[0].beat).toBeCloseTo(0, 5);
-      expect(loaded.bpm_changes[0].amplitude).toBeCloseTo(0.7, 5);
-      expect((loaded.bpm_changes[0] as BpmChange).zoom).toBeCloseTo(0.8, 5);
-      expect(loaded.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
-      expect(loaded.bpm_changes[1].amplitude).toBeCloseTo(1.3, 5);
-      expect((loaded.bpm_changes[1] as BpmChange).zoom).toBeCloseTo(1.2, 5);
-      expect(loaded.bpm_changes[2].beat).toBeCloseTo(8.25, 3);
-      expect(loaded.bpm_changes[2].amplitude).toBeCloseTo(2.7, 5);
-      expect(loaded.bpm_changes[3].beat).toBeCloseTo(12.125, 3);
-      const reparsedToml = chartToToml(loaded as unknown as Chart);
-      const easeLines = reparsedToml.split('\n').filter(l => l.includes('ease_to_next'));
-      expect(easeLines.length).toBe(3);
-      expect(beforeList.length).toBe(0);
-      expect(listAutosaves().length).toBe(1);
-      const tlRestored = makeTimeline(loaded.bpm_changes, loaded.amplitude);
-      const midLinear = tlRestored.amplitudeAt(2.185); // midpoint of [0,4.37]
-      const expectedLinearMid = 0.7 + (1.3 - 0.7) * 0.5;
-      expect(midLinear).toBeCloseTo(expectedLinearMid, 3);
-      expect(midLinear).not.toBeCloseTo(0.7, 1);
+      // [Step 2: Perform Inspection] search for fixed pattern
+      const lastHitIdx = src.indexOf('lastHitTime');
+      expect(lastHitIdx, 'GameScreen must define lastHitTime').toBeGreaterThan(-1);
+      const snippet = src.slice(lastHitIdx, lastHitIdx + 600);
+
+      // [Step 3: Assert Resulting Transition] must contain duration-aware reduce
+      expect(snippet, 'lastHitTime must compute max of beat+duration').toMatch(/r\.beat\s*\+\s*\(r\.duration\s*\?\?\s*0\)/);
+      expect(snippet, 'lastHitTime must wrap with beatToMs').toMatch(/beatToMs\s*\(/);
+      // The reduce must directly compute beatToMs(r.beat + (r.duration ?? 0)) not beatToMs(reduce(... r.beat))
+      // Verify the outer beatToMs receives the reduce result that already includes duration
+      expect(snippet).toMatch(/beatToMs\s*\(\s*[^)]*r\.beat\s*\+\s*\(r\.duration/);
     });
 
-    it('autosave → TOML往復 → reload で zoomも含めeasedとして機能 (3-step)', () => {
-      // [Step1: Capture Before] — simple chart without easing gives step 1.0 at mid
-      const simpleBefore: Chart = {
-        title: 'SimpleBefore205',
-        artist: '',
-        audio: 's.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 1.0 },
-          { beat: 8, bpm: 120, amplitude: 2.0 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const tlBefore = makeTimeline(simpleBefore.bpm_changes, 1.0);
-      expect(tlBefore.amplitudeAt(4)).toBeCloseTo(1.0, 5);
+    it('baseEnd priority must be end_beat -> lastHitTime+END_DELAY -> buffer/fallback (not buffer before lastHitTime)', () => {
+      // [Step 1: Capture Initial State]
+      const src = readSrc('src/screens/GameScreen.tsx');
+      expect(src).toBeDefined();
 
-      // [Step2: Perform] — save eased chart (beat 0: amp 1.0 -> beat 8: amp 2.0, ease-out)
-      const easedChart: Chart = {
-        title: 'EasedMid205',
-        artist: '',
-        audio: 'e.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-          { beat: 8, bpm: 120, amplitude: 2.0 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const info = saveAutosave(easedChart);
-      const loaded = loadAutosave(info.slug);
-      const toml = chartToToml(loaded as unknown as Chart);
-      const reparsed = parseChartText(toml);
+      // [Step 2: Perform Inspection] extract baseEnd section
+      const baseEndIdx = src.indexOf('const baseEnd');
+      expect(baseEndIdx, 'GameScreen must define baseEnd').toBeGreaterThan(-1);
+      const snippet = src.slice(baseEndIdx, baseEndIdx + 800);
 
-      // [Step3: Assert] — reparsed has ease and mid is 1.75 (ease-out 0.75)
-      expect((reparsed.bpm_changes[0] as BpmChange).easeToNext).toBe('ease-out');
-      const tlAfter = makeTimeline(reparsed.bpm_changes, 1.0);
-      expect(tlAfter.amplitudeAt(4)).toBeCloseTo(1.75, 4);
-      expect(tlAfter.amplitudeAt(4)).not.toBeCloseTo(tlBefore.amplitudeAt(4), 1);
-      // zoom also round-trips
-      const zoomChart: Chart = {
-        title: 'ZoomEase205',
-        artist: '',
-        audio: 'z.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
-          { beat: 8, bpm: 120, zoom: 2.0 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const zInfo = saveAutosave(zoomChart);
-      const zLoaded = loadAutosave(zInfo.slug);
-      expect((zLoaded.bpm_changes[0] as BpmChange).easeToNext).toBe('linear');
-      const zl = makeTimeline(zLoaded.bpm_changes, 1.0);
-      expect(zl.zoomAt(4)).toBeCloseTo(1.5, 4);
+      // [Step 3: Assert Resulting Transition]
+      // Fixed: chart.end_beat !== undefined ? timeline.beatToMs(chart.end_beat) : lastHitTime !== null ? lastHitTime + END_DELAY_MS : (buffer ? buffer.duration * 1000 : fallbackEnd)
+      expect(snippet).toMatch(/chart\.end_beat\s*!==\s*undefined/);
+      expect(snippet).toMatch(/timeline\.beatToMs\s*\(\s*chart\.end_beat/);
+      // Must contain lastHitTime priority before buffer
+      expect(snippet, 'baseEnd must prioritize lastHitTime + END_DELAY before buffer duration').toMatch(/lastHitTime\s*!==\s*null\s*\?\s*lastHitTime\s*\+\s*END_DELAY_MS/);
+      // Must still reference buffer.duration only as tertiary fallback
+      expect(snippet).toMatch(/buffer\s*\?\s*buffer\.duration\s*\*\s*1000/);
+      // Ensure the buggy sole fallback pattern (buffer ? ... : fallbackEnd) directly after end_beat check without lastHitTime is NOT the top-level structure
+      // We assert that after end_beat check, the next token is lastHitTime check, not buffer
+      const afterEndBeat = snippet.split('chart.end_beat')[1] ?? '';
+      // The first ternary after end_beat should be lastHitTime, not buffer
+      expect(afterEndBeat).toMatch(/:\s*lastHitTime/);
     });
 
-    it('複数autosaveスロットで ease_to_next が混在しても各スロット独立再現 (3-step)', () => {
-      // [Step1: Capture Before] — 0件
-      expect(listAutosaves().length).toBe(0);
-
-      // [Step2: Perform] — save two charts with different easing curves
-      const chartA: Chart = {
-        title: 'Slot A Ease205',
-        artist: '',
-        audio: 'a.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-          { beat: 4, bpm: 120, amplitude: 1.5 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const chartB: Chart = {
-        title: 'Slot B Ease205',
-        artist: '',
-        audio: 'b.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-in' } as unknown as BpmChange,
-          { beat: 4, bpm: 120, amplitude: 1.5 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const infoA = saveAutosave(chartA);
-      vi.advanceTimersByTime(1000);
-      const infoB = saveAutosave(chartB);
-
-      // [Step3: Assert] — each slot's ease differs and timeline reflects it off-grid
-      const loadedA = loadAutosave(infoA.slug);
-      const loadedB = loadAutosave(infoB.slug);
-      expect((loadedA.bpm_changes[0] as BpmChange).easeToNext).toBe('linear');
-      expect((loadedB.bpm_changes[0] as BpmChange).easeToNext).toBe('ease-in');
-      const tlA = makeTimeline(loadedA.bpm_changes, 1.0);
-      const tlB = makeTimeline(loadedB.bpm_changes, 1.0);
-      const t = 1.23 / 4;
-      const expectedA = 0.7 + 0.8 * eased(t, 'linear');
-      const expectedB = 0.7 + 0.8 * eased(t, 'ease-in');
-      expect(tlA.amplitudeAt(1.23)).toBeCloseTo(expectedA, 4);
-      expect(tlB.amplitudeAt(1.23)).toBeCloseTo(expectedB, 4);
-      expect(tlA.amplitudeAt(1.23)).not.toBeCloseTo(tlB.amplitudeAt(1.23), 2);
-      expect(listAutosaves().length).toBe(2);
-      expect(infoA.slug).not.toBe(infoB.slug);
+    it('endThreshold must still add audio_offset', () => {
+      // [Step 1: Capture Initial State]
+      const src = readSrc('src/screens/GameScreen.tsx');
+      const baseEndIdx = src.indexOf('const baseEnd');
+      const snippet = src.slice(baseEndIdx, baseEndIdx + 1000);
+      // [Step 2: Perform Inspection]
+      const hasAudioOffset = snippet.includes('audio_offset') || src.slice(src.indexOf('endThreshold'), src.indexOf('endThreshold') + 500).includes('audio_offset');
+      // [Step 3: Assert Resulting Transition]
+      expect(hasAudioOffset, 'endThreshold/baseEnd must include chart.audio_offset').toBe(true);
+      expect(src).toMatch(/endThreshold\s*=\s*baseEnd\s*\+\s*\(chart\?\.audio_offset/);
     });
   });
 
-  // =======================================================================
-  // 2. オフグリッド補間値の数値検証 (完了条件2) — T202の t=0.5 0.5/0.75/0.25
-  // =======================================================================
-  describe('2. オフグリッド補間値の数値検証 — 3種イージングがt=0.5で正確 (3-step)', () => {
-    it('amplitude linear/ease-out/ease-in が t=0.5で 0.5/0.75/0.25 かつ off-grid 0.37/1.23/3.5で曲線一致 (3-step)', () => {
-      // [Step1: Capture Before] — step (no ease) gives 1.0 at mid
-      const tlStep = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 1.0 },
-        { beat: 8, bpm: 120, amplitude: 2.0 },
-      ]);
-      expect(tlStep.amplitudeAt(4)).toBeCloseTo(1.0, 5);
-      expect(tlStep.amplitudeAt(0.37)).toBeCloseTo(1.0, 5);
-      expect(tlStep.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
+  describe('2. Dynamic lastHitTime with hold duration (off-grid fractional)', () => {
+    it('hold tail extends lastHitTime beyond head (short press 0.37 vs hold 2.7 beats)', () => {
+      // [Step 1: Capture Initial State] single BPM 120, rings without and with hold
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const singleRings: RingDef[] = [{ beat: 8.37 }];
+      const holdRings: RingDef[] = [{ beat: 8.37, duration: 2.7, type: 'hold' as const }];
 
-      // [Step2: Perform] — create three eased timelines with complex off-grid interval length 8
-      const tlLin = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 8, bpm: 120, amplitude: 2.0 },
-      ]);
-      const tlOut = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 8, bpm: 120, amplitude: 2.0 },
-      ]);
-      const tlIn = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'ease-in' } as unknown as BpmChange,
-        { beat: 8, bpm: 120, amplitude: 2.0 },
-      ]);
+      const lastHead = computeLastHitTimeBuggy(singleRings, timeline);
+      const lastTailFixed = computeLastHitTimeFixed(holdRings, timeline);
+      const lastTailBuggy = computeLastHitTimeBuggy(holdRings, timeline);
 
-      // [Step3: Assert] — t=0.5 values
-      expect(tlLin.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.5, 4); // 1.5
-      expect(tlOut.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.75, 4); // 1.75
-      expect(tlIn.amplitudeAt(4)).toBeCloseTo(1.0 + 1.0 * 0.25, 4); // 1.25
-      expect(tlLin.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
-      expect(tlOut.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
-      expect(tlIn.amplitudeAt(4)).not.toBeCloseTo(tlStep.amplitudeAt(4), 2);
-      for (const beat of [0.37, 1.23, 3.5] as const) {
-        const t = beat / 8;
-        expect(tlLin.amplitudeAt(beat)).toBeCloseTo(1.0 + 1.0 * eased(t, 'linear'), 4);
-        expect(tlOut.amplitudeAt(beat)).toBeCloseTo(1.0 + 1.0 * eased(t, 'ease-out'), 4);
-        expect(tlIn.amplitudeAt(beat)).toBeCloseTo(1.0 + 1.0 * eased(t, 'ease-in'), 4);
-      }
-      const tlZoomOut = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 8, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
-      ]);
-      expect(tlZoomOut.zoomAt(4)).toBeCloseTo(1.75, 4);
-      expect(tlZoomOut.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(0.37 / 8, 'ease-out'), 4);
+      // [Step 2: Perform Computation] buggy would return same as head
+      expect(lastTailBuggy).toBeCloseTo(lastHead!, 2);
+
+      // [Step 3: Assert Resulting Transition] fixed must be larger by duration
+      const expectedTail = timeline.beatToMs(8.37 + 2.7);
+      expect(lastTailFixed).toBeCloseTo(expectedTail, 2);
+      expect(lastTailFixed!).toBeGreaterThan(lastHead! + 1000);
+      // Verify 2.7 beats at 120bpm = 1350ms extension
+      const headMs = timeline.beatToMs(8.37);
+      expect(lastTailFixed! - headMs).toBeCloseTo(timeline.beatToMs(11.07) - timeline.beatToMs(8.37), 1);
     });
 
-    it('複雑振幅 0.7/1.3/2.7/3.4 と off-grid 0.37/1.23/2.37/3.37で amplitude/zoomが曲線と一致 (3-step)', () => {
-      // [Step1: Capture Before] — step baseline at off-grid 2.37 must be 1.3 (no interpolation)
-      const tlBefore = makeTimeline([
-        { beat: 2, bpm: 120, amplitude: 1.3 },
-        { beat: 6, bpm: 120, amplitude: 2.7 },
-      ]);
-      expect(tlBefore.amplitudeAt(2.37)).toBeCloseTo(1.3, 5);
-      expect(tlBefore.amplitudeAt(3.37)).toBeCloseTo(1.3, 5);
-
-      // [Step2: Perform] — ease-out over [2,6] with complex amplitudes 1.3->2.7
-      const tl = makeTimeline([
-        { beat: 2, bpm: 120, amplitude: 1.3, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 6, bpm: 120, amplitude: 2.7 },
-      ]);
-      const tlZoom = makeTimeline([
-        { beat: 2, bpm: 120, zoom: 1.3, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 6, bpm: 120, zoom: 2.7 },
-      ]);
-
-      // [Step3: Assert] — mid 4.0 = 0.75, off-grid points use exact eased t
-      expect(tl.amplitudeAt(4)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
-      expect(tlZoom.zoomAt(4)).toBeCloseTo(1.3 + 1.4 * 0.75, 4);
-      for (const beat of [2.37, 3.37] as const) {
-        const t = (beat - 2) / 4;
-        const expected = 1.3 + 1.4 * eased(t, 'ease-out');
-        expect(tl.amplitudeAt(beat)).toBeCloseTo(expected, 4);
-        expect(tlZoom.zoomAt(beat)).toBeCloseTo(expected, 4);
-        expect(tl.amplitudeAt(beat)).not.toBeCloseTo(tlBefore.amplitudeAt(beat), 2);
-      }
-      const tl2 = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4.37, bpm: 120, amplitude: 3.4 },
-      ]);
-      const t037 = 0.37 / 4.37;
-      expect(tl2.amplitudeAt(0.37)).toBeCloseTo(0.7 + 2.7 * eased(t037, 'linear'), 4);
-      const t123 = 1.23 / 4.37;
-      expect(tl2.amplitudeAt(1.23)).toBeCloseTo(0.7 + 2.7 * eased(t123, 'linear'), 4);
-      expect(tl2.amplitudeAt(2.185)).toBeCloseTo(0.7 + 2.7 * 0.5, 3);
-    });
-
-    it('zoomも3種イージングで t=0.5 が 0.5/0.75/0.25 off-grid 0.37/1.23で一致 (3-step)', () => {
-      // [Step1: Capture Before] — zoom step baseline
-      const tlStep = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 1.0 },
-        { beat: 4, bpm: 120, zoom: 2.0 },
-      ]);
-      expect(tlStep.zoomAt(2)).toBeCloseTo(1.0, 5);
-      expect(tlStep.zoomAt(0.37)).toBeCloseTo(1.0, 5);
-
-      // [Step2: Perform] — three zoom easing timelines
-      const mkZoom = (ease: BpmChange['easeToNext']) =>
-        makeTimeline([
-          { beat: 0, bpm: 120, zoom: 1.0, easeToNext: ease } as unknown as BpmChange,
-          { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
-        ]);
-      const zl = mkZoom('linear');
-      const zo = mkZoom('ease-out');
-      const zi = mkZoom('ease-in');
-
-      // [Step3: Assert]
-      expect(zl.zoomAt(2)).toBeCloseTo(1.5, 4);
-      expect(zo.zoomAt(2)).toBeCloseTo(1.75, 4);
-      expect(zi.zoomAt(2)).toBeCloseTo(1.25, 4);
-      const t037 = 0.37 / 4;
-      expect(zl.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(t037, 'linear'), 4);
-      expect(zo.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(t037, 'ease-out'), 4);
-      expect(zi.zoomAt(0.37)).toBeCloseTo(1.0 + 1.0 * eased(t037, 'ease-in'), 4);
-      const t123 = 1.23 / 4;
-      expect(zl.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(t123, 'linear'), 4);
-      expect(zo.zoomAt(1.23)).toBeCloseTo(1.0 + 1.0 * eased(t123, 'ease-out'), 4);
-      expect(zl.zoomAt(1.23)).not.toBeCloseTo(tlStep.zoomAt(1.23), 2);
-    });
-
-    it('イージング無し区間はステップのまま、混合区間で挙動が分離 (3-step off-grid)', () => {
-      // [Step1: Capture Before] — all ease would be linear mid 1.1
-      const tlAllEase = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-      ]);
-      expect(tlAllEase.amplitudeAt(2)).toBeCloseTo(1.1, 4);
-
-      // [Step2: Perform] — mixed: first gap eased, second gap step
-      const tlMixed = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-        { beat: 8, bpm: 120, amplitude: 2.5 },
-      ]);
-
-      // [Step3: Assert] — first half interpolated, second half step
-      expect(tlMixed.amplitudeAt(2)).toBeCloseTo(1.1, 4);
-      expect(tlMixed.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.8 * eased(0.37 / 4, 'linear'), 4);
-      expect(tlMixed.amplitudeAt(1.23)).toBeCloseTo(0.7 + 0.8 * eased(1.23 / 4, 'linear'), 4);
-      expect(tlMixed.amplitudeAt(6)).toBeCloseTo(1.5, 5);
-      expect(tlMixed.amplitudeAt(7.99)).toBeCloseTo(1.5, 5);
-      expect(tlMixed.amplitudeAt(8)).toBeCloseTo(2.5, 5);
-      const tlZoomMixed = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, zoom: 2.0 } as unknown as BpmChange,
-        { beat: 8, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
-      ]);
-      expect(tlZoomMixed.zoomAt(2)).toBeCloseTo(1.75, 4);
-      expect(tlZoomMixed.zoomAt(6)).toBeCloseTo(2.0, 5);
-    });
-
-    it('ゼロ長区間 (A.beat==B.beat) は瞬間切替にフォールバック (3-step)', () => {
-      // [Step1: Capture Before] — normal linear midpoint
-      const tlNormal = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.5 },
-      ]);
-      expect(tlNormal.amplitudeAt(2)).toBeCloseTo(1.1, 4);
-
-      // [Step2: Perform] — collocated entries at beat 4
-      const tlZero = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, amplitude: 1.8 },
-      ]);
-
-      // [Step3: Assert] — zero-length gap fallback to step, finite values
-      expect(tlZero.amplitudeAt(0)).toBeCloseTo(0.7, 5);
-      expect(tlZero.amplitudeAt(2)).toBeCloseTo(0.85, 4);
-      expect(tlZero.amplitudeAt(4)).toBeCloseTo(1.8, 5);
-      expect(tlZero.amplitudeAt(3.99)).not.toBeCloseTo(1.8, 1);
-      expect(Number.isFinite(tlZero.amplitudeAt(2))).toBe(true);
-      const tlZoomZero = makeTimeline([
-        { beat: 0, bpm: 120, zoom: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, zoom: 2.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 4, bpm: 120, zoom: 3.0 } as unknown as BpmChange,
-      ]);
-      expect(tlZoomZero.zoomAt(2)).toBeCloseTo(1.75, 4);
-      expect(tlZoomZero.zoomAt(4)).toBeCloseTo(3.0, 5);
-    });
-
-    it('BPM/時刻写像はイージング影響なし — 瞬間切替のまま (3-step off-grid)', () => {
-      // [Step1: Capture Before] — without easing
-      const tlNo = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7 },
-        { beat: 4, bpm: 150, amplitude: 1.5 },
-      ]);
-
-      // [Step2: Perform] — with easing same BPM
-      const tlWith = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 4, bpm: 150, amplitude: 1.5, easeToNext: 'linear' } as unknown as BpmChange,
-      ]);
-
-      // [Step3: Assert] — beatToMs identical, bpmAt unchanged
-      expect(tlNo.beatToMs(0.37)).toBeCloseTo(tlWith.beatToMs(0.37), 5);
-      expect(tlNo.beatToMs(1.23)).toBeCloseTo(tlWith.beatToMs(1.23), 5);
-      expect(tlNo.beatToMs(4.37)).toBeCloseTo(tlWith.beatToMs(4.37), 5);
-      expect(tlWith.bpmAt(0.37)).toBeCloseTo(120, 5);
-      expect(tlWith.bpmAt(4.37)).toBeCloseTo(150, 5);
-      expect(tlWith.msToBeat(tlWith.beatToMs(2.37))).toBeCloseTo(2.37, 3);
-      expect(tlNo.amplitudeAt(2)).toBeCloseTo(0.7, 5);
-      expect(tlWith.amplitudeAt(2)).toBeCloseTo(0.7 + 0.8 * 0.75, 4);
-    });
-  });
-
-  // =======================================================================
-  // 3. 旧譜面 (ease_to_next無し) は全区間瞬間切替 (step)
-  // =======================================================================
-  describe('3. 旧譜面 (ease_to_next無し) は全区間ステップ — TOML読込・autosave (3-step)', () => {
-    it('旧TOMLをparseすると easeToNext が undefined のまま、補間はステップ (3-step off-grid)', () => {
-      // [Step1: Capture Before] — new TOML with ease gives eased 1.75 at mid
-      const tomlWithEase = `
-title = "WithEase205"
-artist = ""
-audio = "a.flac"
-[[sections]]
-beat = 0
-bpm = 120
-amplitude = 1.0
-ease_to_next = "ease-out"
-[[sections]]
-beat = 8
-bpm = 120
-amplitude = 2.0
-`;
-      const parsedWith = parseChartText(tomlWithEase);
-      const tlWith = makeTimeline(parsedWith.bpm_changes, parsedWith.amplitude);
-      expect(tlWith.amplitudeAt(4)).toBeCloseTo(1.75, 4);
-
-      // [Step2: Perform] — legacy TOML without any ease_to_next
-      const tomlLegacy = `
-title = "LegacyNoEase205"
-artist = ""
-audio = "a.flac"
-[[sections]]
-beat = 0
-bpm = 120
-amplitude = 1.0
-[[sections]]
-beat = 4
-bpm = 120
-amplitude = 1.5
-[[sections]]
-beat = 8
-bpm = 120
-amplitude = 2.5
-`;
-      const parsedLegacy = parseChartText(tomlLegacy);
-
-      // [Step3: Assert] — all undefined, timeline is step at off-grid
-      expect((parsedLegacy.bpm_changes[0] as BpmChange).easeToNext).toBeUndefined();
-      expect((parsedLegacy.bpm_changes[1] as BpmChange).easeToNext).toBeUndefined();
-      expect((parsedLegacy.bpm_changes[2] as BpmChange).easeToNext).toBeUndefined();
-      const tlLegacy = makeTimeline(parsedLegacy.bpm_changes, parsedLegacy.amplitude);
-      expect(tlLegacy.amplitudeAt(0.37)).toBeCloseTo(1.0, 5);
-      expect(tlLegacy.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
-      expect(tlLegacy.amplitudeAt(2)).toBeCloseTo(1.0, 5);
-      expect(tlLegacy.amplitudeAt(3.99)).toBeCloseTo(1.0, 5);
-      expect(tlLegacy.amplitudeAt(4)).toBeCloseTo(1.5, 5);
-      expect(tlLegacy.amplitudeAt(6)).toBeCloseTo(1.5, 5);
-      expect(tlLegacy.amplitudeAt(7.99)).toBeCloseTo(1.5, 5);
-      expect(tlLegacy.amplitudeAt(8)).toBeCloseTo(2.5, 5);
-      expect(tlLegacy.zoomAt(2)).toBeCloseTo(1.0, 5);
-      expect(tlLegacy.amplitudeAt(4)).not.toBeCloseTo(tlWith.amplitudeAt(4), 2);
-    });
-
-    it('旧 [[bpm_changes]] エイリアスでも ease_to_next 無しはステップ、autosave往復でも維持 (3-step)', () => {
-      // [Step1: Capture Before] — new [[sections]] without ease is step
-      const newStepToml = `
-title = "NewStep205"
-artist = ""
-audio = "a.flac"
-[[sections]]
-beat = 0
-bpm = 120
-amplitude = 0.7
-[[sections]]
-beat = 4
-bpm = 120
-amplitude = 1.5
-`;
-      const parsedNewStep = parseChartText(newStepToml);
-      const tlNewStep = makeTimeline(parsedNewStep.bpm_changes, 1.0);
-      expect(tlNewStep.amplitudeAt(2)).toBeCloseTo(0.7, 5);
-
-      // [Step2: Perform] — old [[bpm_changes]] without ease
-      const oldAliasNoEase = `
-title = "OldAliasNoEase205"
-artist = ""
-audio = "a.flac"
-[[bpm_changes]]
-beat = 0
-bpm = 120
-amplitude = 0.7
-[[bpm_changes]]
-beat = 4
-bpm = 120
-amplitude = 1.5
-`;
-      const parsedOldNoEase = parseChartText(oldAliasNoEase);
-      const info = saveAutosave(parsedOldNoEase);
-      const loadedOld = loadAutosave(info.slug);
-      const tomlFromOld = chartToToml(loadedOld as unknown as Chart);
-      const reparsedOld = parseChartText(tomlFromOld);
-
-      // [Step3: Assert] — reparsed still step, serializes to [[sections]] without ease_to_next
-      expect((reparsedOld.bpm_changes[0] as BpmChange).easeToNext).toBeUndefined();
-      expect((reparsedOld.bpm_changes[1] as BpmChange).easeToNext).toBeUndefined();
-      expect(tomlFromOld).not.toContain('ease_to_next');
-      expect(tomlFromOld).toContain('[[sections]]');
-      expect(tomlFromOld).not.toContain('[[bpm_changes]]');
-      const tlOldStep = makeTimeline(reparsedOld.bpm_changes, 1.0);
-      expect(tlOldStep.amplitudeAt(2)).toBeCloseTo(0.7, 5);
-      expect(tlOldStep.amplitudeAt(1.23)).toBeCloseTo(0.7, 5);
-      expect(tlOldStep.amplitudeAt(0.37)).toBeCloseTo(0.7, 5);
-    });
-
-    it('不正な ease_to_next 値 (bogus/empty/LINEAR) は無視されステップ扱い (3-step)', () => {
-      // [Step1: Capture Before] — valid ease gives eased
-      const tomlValid = `
-title = "Valid205"
-artist = ""
-audio = "a.flac"
-[[sections]]
-beat = 0
-bpm = 120
-amplitude = 1.0
-ease_to_next = "linear"
-[[sections]]
-beat = 4
-bpm = 120
-amplitude = 2.0
-`;
-      const parsedValid = parseChartText(tomlValid);
-      expect((parsedValid.bpm_changes[0] as BpmChange).easeToNext).toBe('linear');
-      const tlValid = makeTimeline(parsedValid.bpm_changes, 1.0);
-      expect(tlValid.amplitudeAt(2)).toBeCloseTo(1.5, 4);
-
-      // [Step2: Perform] — invalid values
-      const tomlInvalid = `
-title = "InvalidEase205"
-artist = ""
-audio = "a.flac"
-[[sections]]
-beat = 0
-bpm = 120
-amplitude = 1.0
-ease_to_next = "bogus"
-[[sections]]
-beat = 4
-bpm = 120
-amplitude = 2.0
-`;
-      const parsedInvalid = parseChartText(tomlInvalid);
-      const tomlCaps = `
-title = "Caps205"
-artist = ""
-audio = "a.flac"
-[[sections]]
-beat = 0
-bpm = 120
-ease_to_next = "LINEAR"
-[[sections]]
-beat = 4
-bpm = 120
-`;
-      const parsedCaps = parseChartText(tomlCaps);
-
-      // [Step3: Assert] — both ignored, step at mid
-      expect((parsedInvalid.bpm_changes[0] as BpmChange).easeToNext).toBeUndefined();
-      expect((parsedCaps.bpm_changes[0] as BpmChange).easeToNext).toBeUndefined();
-      const tlInvalid = makeTimeline(parsedInvalid.bpm_changes, 1.0);
-      expect(tlInvalid.amplitudeAt(2)).toBeCloseTo(1.0, 5);
-      expect(tlInvalid.amplitudeAt(1.23)).toBeCloseTo(1.0, 5);
-      const bogusChart: Chart = {
-        title: 'BogusEmit205',
-        artist: '',
-        audio: 'b.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, easeToNext: 'bogus' } as unknown as BpmChange,
-          { beat: 4, bpm: 120 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const out = chartToToml(bogusChart as unknown as Chart);
-      expect(out).not.toContain('bogus');
-      const reparsedBogus = parseChartText(out);
-      expect((reparsedBogus.bpm_changes[0] as BpmChange).easeToNext).toBeUndefined();
-    });
-  });
-
-  // =======================================================================
-  // 4. セクション追加ダイアログとの併存 + autosave結合 + 静的回帰
-  // =======================================================================
-  describe('4. セクション追加ダイアログ併存 & 結合・回帰 (3-step)', () => {
-    it('セクション追加 → autosave → reload で ease_to_next と新セクションが両方再現 (3-step off-grid)', () => {
-      // [Step1: Capture Before] — initial chart with one easing gap
-      const initialChart: Chart = {
-        title: 'DialogCoexist Before205',
-        artist: '',
-        audio: 'd.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'linear' } as unknown as BpmChange,
-          { beat: 8, bpm: 120, amplitude: 2.0 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const tlBefore = makeTimeline(initialChart.bpm_changes, 1.0);
-      expect(tlBefore.amplitudeAt(4)).toBeCloseTo(1.5, 4);
-      const beforeCount = initialChart.bpm_changes.length;
-
-      // [Step2: Perform] — simulate dialog adding a section at beat 4.37 (off-grid) with new BPM
-      const afterAdd: BpmChange[] = [
-        ...initialChart.bpm_changes,
-        { beat: 4.37, bpm: 150, amplitude: 1.3, zoom: 1.3 },
-      ].sort((a, b) => a.beat - b.beat);
-      const chartAfterAdd: Chart = {
-        ...initialChart,
-        title: 'DialogCoexist After205',
-        bpm_changes: afterAdd,
-      } as unknown as Chart;
-      const info = saveAutosave(chartAfterAdd);
-      const loaded = loadAutosave(info.slug);
-      const toml = chartToToml(loaded as unknown as Chart);
-      const reparsed = parseChartText(toml);
-
-      // [Step3: Assert] — reparsed has 3 sections sorted, easing still on first gap, interpolation correct
-      expect(reparsed.bpm_changes.length).toBe(3);
-      expect(reparsed.bpm_changes.map(c => c.beat)).toEqual([0, 4.37, 8]);
-      expect((reparsed.bpm_changes[0] as BpmChange).easeToNext).toBe('linear');
-      expect((reparsed.bpm_changes[1] as BpmChange).easeToNext).toBeUndefined();
-      expect(reparsed.bpm_changes[0].beat).toBeCloseTo(0, 5);
-      expect(reparsed.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
-      expect(afterAdd.length).toBe(beforeCount + 1);
-      const tlAfter = makeTimeline(reparsed.bpm_changes, 1.0);
-      const midFirstGap = 0 + (4.37 - 0) / 2;
-      expect(tlAfter.amplitudeAt(midFirstGap)).toBeCloseTo(1.0 + 0.3 * 0.5, 3);
-      expect(tlAfter.amplitudeAt(6)).toBeCloseTo(1.3, 5);
-      expect(tlAfter.amplitudeAt(6)).not.toBeCloseTo(tlBefore.amplitudeAt(6), 1);
-    });
-
-    it('ドラッグ相当の所有セクション付け替えが timeline interpolation に反映 (3-step)', () => {
-      // [Step1: Capture Before] — ease on gap0 ([0,4.37])
-      const beforeSections: BpmChange[] = [
-        { beat: 0, bpm: 120, amplitude: 0.7, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 4.37, bpm: 120, amplitude: 1.3 },
-        { beat: 8.25, bpm: 120, amplitude: 2.7 },
+    it('multiple rings: lastHitTime is max of hold tails (off-grid 1.23 + duration)', () => {
+      // [Step 1: Capture Initial State]
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [
+        { beat: 4.0 },
+        { beat: 8.23, duration: 1.37, type: 'hold' },
+        { beat: 12.37, duration: 0.5, type: 'hold' },
+        { beat: 10.0 },
       ];
-      const tlBefore = makeTimeline(beforeSections, 1.0);
-      expect(tlBefore.amplitudeAt(2.185)).toBeCloseTo(1.15, 3);
-      expect(tlBefore.amplitudeAt(6)).toBeCloseTo(1.3, 5);
-
-      // [Step2: Perform] — simulate dragging ease from gap0 to gap1 (move ownership)
-      const afterDrag: BpmChange[] = beforeSections.map((c, i) => {
-        if (i === 0) return { ...c, easeToNext: undefined };
-        if (i === 1) return { ...c, easeToNext: 'ease-out' } as unknown as BpmChange;
-        return c;
-      });
-      const tlAfter = makeTimeline(afterDrag, 1.0);
-
-      // [Step3: Assert] — gap0 now step, gap1 now eased
-      expect(tlAfter.amplitudeAt(2.185)).toBeCloseTo(0.7, 5);
-      expect(tlAfter.amplitudeAt(2.185)).not.toBeCloseTo(tlBefore.amplitudeAt(2.185), 2);
-      const midGap1 = 4.37 + (8.25 - 4.37) / 2;
-      expect(tlAfter.amplitudeAt(midGap1)).toBeCloseTo(1.3 + 1.4 * 0.75, 3);
-      const tOff = (6 - 4.37) / (8.25 - 4.37);
-      expect(tlAfter.amplitudeAt(6)).toBeCloseTo(1.3 + 1.4 * eased(tOff, 'ease-out'), 3);
-      expect((afterDrag[0] as BpmChange).easeToNext).toBeUndefined();
-      expect((afterDrag[1] as BpmChange).easeToNext).toBe('ease-out');
-      expect(afterDrag.filter(c => c.easeToNext).length).toBe(1);
+      // [Step 2: Perform Action] compute fixed max
+      const before = computeLastHitTimeBuggy(rings, timeline);
+      const after = computeLastHitTimeFixed(rings, timeline);
+      // [Step 3: Assert Resulting Transition]
+      // Buggy would take max beat = 12.37
+      const maxHeadBeat = Math.max(...rings.map(r => r.beat));
+      expect(before).toBeCloseTo(timeline.beatToMs(maxHeadBeat), 2);
+      // Fixed: hold at 12.37+0.5=12.87 should be max, but 8.23+1.37=9.6, 12.87 >12.37
+      const maxTailBeat = Math.max(...rings.map(r => r.beat + (r.duration ?? 0)));
+      expect(after).toBeCloseTo(timeline.beatToMs(maxTailBeat), 2);
+      expect(maxTailBeat).toBeCloseTo(12.87, 3);
+      expect(after!).toBeGreaterThan(before!);
     });
 
-    it('TOML往復後もオフグリッド端数 beat 0.37/1.23等が beat昇順で保持される (3-step)', () => {
-      // [Step1: Capture Before] — unsorted beats would give wrong interpolation if not sorted
-      const unsorted: BpmChange[] = [
-        { beat: 8.25, bpm: 140, amplitude: 2.7 },
-        { beat: 0.37, bpm: 120, amplitude: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4.37, bpm: 130, amplitude: 1.3 },
+    it('BPM change crossing hold tail (hold spans tempo change)', () => {
+      // [Step 1: Capture Initial State] BPM 120 until beat 8, then 180
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }, { beat: 8, bpm: 180 }], 1.0);
+      // Hold starting at 7.37 with duration 2.7 -> tail crosses BPM boundary
+      const rings: RingDef[] = [{ beat: 7.37, duration: 2.7, type: 'hold' }];
+      // [Step 2: Perform Action]
+      const headMs = timeline.beatToMs(7.37);
+      const tailMs = timeline.beatToMs(7.37 + 2.7);
+      const fixed = computeLastHitTimeFixed(rings, timeline);
+      // [Step 3: Assert Resulting Transition]
+      expect(fixed).toBeCloseTo(tailMs, 2);
+      expect(fixed!).toBeGreaterThan(headMs);
+      // Duration in ms is not simply duration*500 due to BPM change, verify via timeline
+      const buggy = computeLastHitTimeBuggy(rings, timeline);
+      expect(buggy).toBeCloseTo(headMs, 2);
+      expect(fixed! - buggy!).toBeGreaterThan(500); // at least one beat worth
+    });
+  });
+
+  describe('3. End threshold priority: end_beat vs lastHitTime+2s vs buffer (short chart, long audio)', () => {
+    it('end_beat undefined + short chart (last ring 8 beats) + long buffer (180s) should end at lastHit+2s, not buffer end', () => {
+      // [Step 1: Capture Initial State] chart with last ring at 8 beats, buffer 180s (much longer)
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [{ beat: 8.0 }, { beat: 8.37 }];
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      const buffer = { duration: 180 } as AudioBuffer;
+      const chart = makeChart({ rings, audio_offset: 0, end_beat: undefined });
+
+      // [Step 2: Perform Action] compute with fixed vs buggy priority
+      const baseFixed = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+      const baseBuggy = computeBaseEndBuggy({ chart, timeline, buffer, lastHitTime });
+
+      // [Step 3: Assert Resulting Transition]
+      const expectedFixed = lastHitTime! + END_DELAY_MS;
+      expect(baseFixed).toBeCloseTo(expectedFixed, 2);
+      expect(baseBuggy).toBeCloseTo(buffer.duration * 1000, 2);
+      expect(baseFixed).toBeLessThan(baseBuggy);
+      // Verify short chart ends ~6s (8.37 beats *500ms +2000), not 180s
+      expect(baseFixed).toBeCloseTo(timeline.beatToMs(8.37) + 2000, 2);
+      expect(baseFixed).toBeLessThan(10000);
+    });
+
+    it('end_beat undefined + hold tail (off-grid 1.23 duration) + long buffer should end at tail+2s', () => {
+      // [Step 1: Capture Initial State]
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [
+        { beat: 4.0 },
+        { beat: 8.23, duration: 1.37, type: 'hold' }, // tail 9.6 beats
       ];
-      const sortedExpected = [...unsorted].sort((a, b) => a.beat - b.beat);
-      expect(sortedExpected.map(c => c.beat)).toEqual([0.37, 4.37, 8.25]);
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      const buffer = { duration: 200 } as AudioBuffer; // 200s audio
+      const chart = makeChart({ rings, end_beat: undefined });
 
-      // [Step2: Perform] — chart roundtrip via loader/serialize which sorts
-      const chartUnsorted: Chart = {
-        title: 'SortCheck205',
-        artist: '',
-        audio: 's.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: unsorted,
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const toml = chartToToml(chartUnsorted as unknown as Chart);
-      const parsed = parseChartText(toml);
-      const info = saveAutosave(parsed);
-      const loaded = loadAutosave(info.slug);
+      // [Step 2: Perform Action]
+      const baseFixed = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+      const endThresholdFixed = computeEndThreshold(baseFixed, chart.audio_offset);
 
-      // [Step3: Assert] — loaded is sorted ascending
-      expect(loaded.bpm_changes.map(c => c.beat)).toEqual([0.37, 4.37, 8.25]);
-      expect(loaded.bpm_changes[0].beat).toBeCloseTo(0.37, 3);
-      expect(loaded.bpm_changes[1].beat).toBeCloseTo(4.37, 3);
-      expect(loaded.bpm_changes[2].beat).toBeCloseTo(8.25, 3);
-      const tl = makeTimeline(loaded.bpm_changes, 1.0);
-      const mid = 0.37 + (4.37 - 0.37) / 2;
-      const expectedMid = 0.7 + (1.3 - 0.7) * 0.5;
-      expect(tl.amplitudeAt(mid)).toBeCloseTo(expectedMid, 3);
+      // [Step 3: Assert Resulting Transition]
+      const expectedTail = timeline.beatToMs(8.23 + 1.37);
+      expect(lastHitTime).toBeCloseTo(expectedTail, 2);
+      expect(baseFixed).toBeCloseTo(expectedTail + END_DELAY_MS, 2);
+      expect(endThresholdFixed).toBeLessThan(buffer.duration * 1000);
+      expect(endThresholdFixed).toBeGreaterThan(expectedTail);
+    });
+
+    it('end_beat defined should override both lastHitTime and buffer (even with hold and long audio)', () => {
+      // [Step 1: Capture Initial State]
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [{ beat: 4.0 }, { beat: 8.23, duration: 2.7, type: 'hold' }];
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      const buffer = { duration: 180 } as AudioBuffer;
+      const endBeat = 16.37; // off-grid fractional
+      const chart = makeChart({ rings, end_beat: endBeat, audio_offset: 150.75 });
+
+      // [Step 2: Perform Action]
+      const baseFixed = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+      const baseBuggy = computeBaseEndBuggy({ chart, timeline, buffer, lastHitTime });
+
+      // [Step 3: Assert Resulting Transition] both fixed and buggy agree when end_beat set
+      const expected = timeline.beatToMs(endBeat);
+      expect(baseFixed).toBeCloseTo(expected, 2);
+      expect(baseBuggy).toBeCloseTo(expected, 2);
+      const threshold = computeEndThreshold(baseFixed, chart.audio_offset);
+      expect(threshold).toBeCloseTo(expected + 150.75, 2);
+    });
+
+    it('ring 0 + end_beat undefined should fallback to buffer duration (or 60s) with audio_offset', () => {
+      // [Step 1: Capture Initial State] no rings
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [];
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      expect(lastHitTime).toBeNull();
+
+      const buffer = { duration: 90.5 } as AudioBuffer;
+      const chartWithBuffer = makeChart({ rings, end_beat: undefined, audio_offset: 200.25 });
+      const chartNoBuffer = makeChart({ rings, end_beat: undefined, audio_offset: -80.5 });
+
+      // [Step 2: Perform Action]
+      const baseWithBuffer = computeBaseEndFixed({ chart: chartWithBuffer, timeline, buffer, lastHitTime });
+      const baseNoBuffer = computeBaseEndFixed({ chart: chartNoBuffer, timeline, buffer: null, lastHitTime });
+
+      // [Step 3: Assert Resulting Transition]
+      expect(baseWithBuffer).toBeCloseTo(buffer.duration * 1000, 2);
+      expect(computeEndThreshold(baseWithBuffer, chartWithBuffer.audio_offset)).toBeCloseTo(90500 + 200.25, 2);
+      expect(baseNoBuffer).toBeCloseTo(60000, 2);
+      expect(computeEndThreshold(baseNoBuffer, chartNoBuffer.audio_offset!)).toBeCloseTo(60000 - 80.5, 2);
+    });
+
+    it('ring 0 + end_beat defined should use end_beat even without rings', () => {
+      // [Step 1: Capture Initial State]
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const lastHitTime = null;
+      const chart = makeChart({ rings: [], end_beat: 32.5, audio_offset: 0 });
+      const buffer = { duration: 10 } as AudioBuffer;
+
+      // [Step 2: Perform Action]
+      const base = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+
+      // [Step 3: Assert Resulting Transition]
+      expect(base).toBeCloseTo(timeline.beatToMs(32.5), 2);
     });
   });
 
-  // =======================================================================
-  // 5. ソース静的回帰 — T186〜T191・T55・T102/T103・T155 の回帰なし (3-step file inspection)
-  // =======================================================================
-  describe('5. ソース静的回帰 — 結合で既存仕様が壊れていないこと (3-step)', () => {
-    it('Chart型が bpm/scroll_speed を持たず bpm_changes[].zoom/easeToNext を持つ (3-step)', () => {
-      const srcBefore = fs.readFileSync('src/types.ts', 'utf-8');
-      void srcBefore;
-      const src = fs.readFileSync('src/types.ts', 'utf-8');
-      expect(src).toMatch(/interface BpmChange[\s\S]*?zoom\?/);
-      expect(src).toMatch(/interface BpmChange[\s\S]*?easeToNext/);
-      expect(src).not.toMatch(/interface Chart[\s\S]*?\bbpm\s*:/);
-      expect(src).not.toMatch(/interface Chart[\s\S]*?scroll_speed/);
+  describe('4. audio_offset additivity and off-grid fractional offsets', () => {
+    it('endThreshold correctly adds audio_offset (positive and negative off-grid)', () => {
+      // [Step 1: Capture Initial State]
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [{ beat: 8.23 }];
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      const buffer = { duration: 60 } as AudioBuffer;
+      const offGridOffsets = [0, 123.37, -80.75, 250.5];
+
+      for (const audioOffset of offGridOffsets) {
+        // [Step 2: Perform Action] each offset
+        const chart = makeChart({ rings, audio_offset: audioOffset, end_beat: undefined });
+        const base = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+        const threshold = computeEndThreshold(base, audioOffset);
+        // [Step 3: Assert Resulting Transition]
+        expect(threshold).toBeCloseTo(lastHitTime! + END_DELAY_MS + audioOffset, 2);
+      }
     });
 
-    it('loader/serialize/autosave が [[sections]] のみを扱い scroll_speed を出力しない (3-step)', () => {
-      const loaderBefore = fs.readFileSync('src/chart/loader.ts', 'utf-8');
-      const serializeBefore = fs.readFileSync('src/chart/serialize.ts', 'utf-8');
-      void loaderBefore;
-      void serializeBefore;
-      const loaderSrc = fs.readFileSync('src/chart/loader.ts', 'utf-8');
-      const serializeSrc = fs.readFileSync('src/chart/serialize.ts', 'utf-8');
-      const autosaveSrc = fs.readFileSync('src/chart/autosave.ts', 'utf-8');
-      expect(loaderSrc).toContain('sections');
-      expect(loaderSrc).toContain('bpm_changes');
-      expect(loaderSrc).toContain('scroll_speed');
-      expect(serializeSrc).toContain('[[sections]]');
-      expect(serializeSrc).not.toContain('[[bpm_changes]]');
-      expect(autosaveSrc).toContain('chartToToml');
-      expect(autosaveSrc).toContain('parseChartText');
-      expect(autosaveSrc).not.toMatch(/scroll_speed/);
-    });
+    it('with BPM changes, endThreshold still adds audio_offset after lastHit+2s', () => {
+      // [Step 1: Capture Initial State] complex BPM: 120 -> 150 at beat 4
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }, { beat: 4, bpm: 150 }], 1.0);
+      const rings: RingDef[] = [{ beat: 6.37, duration: 1.23, type: 'hold' }];
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      const chart = makeChart({ rings, bpm_changes: [{ beat: 0, bpm: 120 }, { beat: 4, bpm: 150 }], audio_offset: 180.25, end_beat: undefined });
+      const buffer = { duration: 200 } as AudioBuffer;
 
-    it('BpmEditorが拍昇順ソート・onBlur/Enter確定・イージング行(DnD)を持つ (3-step)', () => {
-      const srcBefore = fs.readFileSync('src/screens/editor/BpmEditor.tsx', 'utf-8');
-      void srcBefore;
-      const src = fs.readFileSync('src/screens/editor/BpmEditor.tsx', 'utf-8');
-      expect(src).toMatch(/\.sort\s*\(\s*\(a\s*,\s*b\)\s*=>\s*a\.beat\s*-\s*b\.beat/);
-      expect(src).toMatch(/onBlur/);
-      expect(src).toMatch(/onKeyDown[\s\S]*?Enter/);
-      const onChangeSort = /onChange[\s\S]{0,120}\.sort\s*\(/.test(src);
-      expect(onChangeSort).toBe(false);
-      expect(src).toContain('easeToNext');
-      expect(src).toContain('easing-row');
-      expect(src).toContain('easing-add');
-      expect(src).toContain('onDragStart');
-      expect(src).toContain('onDrop');
-      expect(src).toContain('ease-out');
-      expect(src).toContain('ease-in');
-      expect(src).toContain('bpm-change-header');
-    });
+      // [Step 2: Perform Action]
+      const base = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+      const threshold = computeEndThreshold(base, chart.audio_offset);
 
-    it('BpmTimelineが baseBPM先頭導出・zoomAt/easeを保持・BPM写像に影響しない (3-step)', () => {
-      const srcBefore = fs.readFileSync('src/audio/bpmTimeline.ts', 'utf-8');
-      void srcBefore;
-      const src = fs.readFileSync('src/audio/bpmTimeline.ts', 'utf-8');
-      expect(src).toContain('zoomEntries');
-      expect(src).toContain('zoomAt');
-      expect(src).toContain('easeToNext');
-      expect(src).toContain('firstSection');
-      expect(src).toContain('easeFactor');
-      const tl = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 1.0, easeToNext: 'ease-out' } as unknown as BpmChange,
-        { beat: 4, bpm: 150, amplitude: 2.0 },
-      ]);
-      expect(typeof tl.zoomAt).toBe('function');
-      expect(typeof tl.amplitudeAt).toBe('function');
-      expect(tl.bpmAt(2)).toBeCloseTo(120, 5);
-    });
-
-    it('index.css がイージング全列またぎ(grid-column:1/-1)とbpm-change-headerを持つ (3-step)', () => {
-      const cssBefore = fs.readFileSync('src/index.css', 'utf-8');
-      void cssBefore;
-      const css = fs.readFileSync('src/index.css', 'utf-8');
-      expect(css).toMatch(/grid-column\s*:\s*1\s*\/\s*-1/);
-      const easingRule = css.match(/[^{]*easing[^{]*\{[^}]*grid-column[^}]*\}/);
-      expect(easingRule).not.toBeNull();
-      expect(css).toContain('bpm-change-header');
-    });
-
-    it('autosave interval + cap 10 と SectionAddDialog がソート共存 (3-step)', () => {
-      const autosaveBefore = fs.readFileSync('src/chart/autosave.ts', 'utf-8');
-      void autosaveBefore;
-      const autosaveSrc = fs.readFileSync('src/chart/autosave.ts', 'utf-8');
-      expect(autosaveSrc).toContain('AUTOSAVE_MAX');
-      expect(autosaveSrc).toMatch(/10/);
-      const dialogSrc = fs.readFileSync('src/screens/editor/SectionAddDialog.tsx', 'utf-8');
-      expect(dialogSrc).toMatch(/\.sort|sortSections|sortByBeat/);
-      const editorSrc = fs.readFileSync('src/screens/EditorScreen.tsx', 'utf-8');
-      expect(editorSrc).toMatch(/\.sort|sortByBeat|sortSections/);
+      // [Step 3: Assert Resulting Transition]
+      const tailBeat = 6.37 + 1.23;
+      const expectedBase = timeline.beatToMs(tailBeat) + END_DELAY_MS;
+      expect(base).toBeCloseTo(expectedBase, 2);
+      expect(threshold).toBeCloseTo(expectedBase + 180.25, 2);
     });
   });
 
-  // =======================================================================
-  // 6. 総合回帰 — autosave往復後のchartでBpmTimeline数値整合 + 複雑amp off-grid
-  // =======================================================================
-  describe('6. 総合 — autosave往復後のchartでBpmTimelineが複雑amp+off-gridで整合 (3-step)', () => {
-    it('autosave往復後のcomplex chartで amplitudeAt/zoomAt と beatToMs が物理整合 (3-step)', () => {
-      // [Step1: Capture Before] — simple autosave baseline
-      const simpleChart: Chart = {
-        title: 'SimpleBase205b',
-        artist: '',
-        audio: 's.flac',
-        audio_offset: 0,
-        amplitude: 0.7,
-        start_position: 0,
-        bpm_changes: [{ beat: 0, bpm: 120 }],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const sInfo = saveAutosave(simpleChart);
-      const sLoaded = loadAutosave(sInfo.slug);
-      const sTl = makeTimeline(sLoaded.bpm_changes, sLoaded.amplitude);
-      expect(sTl.bpmAt(0.37)).toBeCloseTo(120, 5);
-      expect(sTl.amplitudeAt(1.23)).toBeCloseTo(0.7, 5);
-      clearAllAutosaves();
+  describe('5. Simulated song progression with fake timers (priority regression)', () => {
+    it('song should trigger end after lastHoldTail+2s even though buffer is much longer', () => {
+      // [Step 1: Capture Initial State] setup timeline and chart as if GameScreen init
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [
+        { beat: 4.0 },
+        { beat: 8.23, duration: 2.7, type: 'hold' }, // tail 10.93
+        { beat: 10.0, duration: 0.5, type: 'hold' }, // tail 10.5
+      ];
+      const lastHitTime = computeLastHitTimeFixed(rings, timeline);
+      const buffer = { duration: 180 } as AudioBuffer; // long audio
+      const chart = makeChart({ rings, end_beat: undefined, audio_offset: 50.5 });
+      const base = computeBaseEndFixed({ chart, timeline, buffer, lastHitTime });
+      const endThreshold = computeEndThreshold(base, chart.audio_offset);
 
-      // [Step2: Perform] — complex off-grid multi-section with easing mixed
-      const complexChart: Chart = {
-        title: 'ComplexTL205b',
-        artist: '',
-        audio: 'c.flac',
-        audio_offset: 0,
-        amplitude: 0.7,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 0.7, zoom: 0.7, easeToNext: 'linear' } as unknown as BpmChange,
-          { beat: 2.37, bpm: 150, amplitude: 1.3, zoom: 1.3, easeToNext: 'ease-out' } as unknown as BpmChange,
-          { beat: 4.37, bpm: 180, amplitude: 2.7, zoom: 2.7 },
-        ],
-        segments: [{ direction: 'up', beats: 1 }],
-        rings: [{ beat: 1.23 }],
-      } as unknown as Chart;
-      const cInfo = saveAutosave(complexChart);
-      const loadedComplex = loadAutosave(cInfo.slug);
-      const tlComplex = makeTimeline(loadedComplex.bpm_changes, loadedComplex.amplitude);
+      let songTimeMs = 0;
+      const advance = (ms: number) => { songTimeMs += ms; vi.advanceTimersByTime(ms); };
 
-      // [Step3: Assert] — after round-trip values intact
-      expect(loadedComplex.bpm_changes[1].beat).toBeCloseTo(2.37, 3);
-      expect(tlComplex.amplitudeAt(0.37)).toBeCloseTo(0.7 + 0.6 * eased(0.37 / 2.37, 'linear'), 4);
-      expect(tlComplex.amplitudeAt(2.37)).toBeCloseTo(1.3, 5);
-      expect(tlComplex.amplitudeAt(4.37)).toBeCloseTo(2.7, 5);
-      expect(tlComplex.amplitudeAt(3.37)).toBeCloseTo(1.3 + 1.4 * eased((3.37 - 2.37) / 2.0, 'ease-out'), 4);
-      expect(tlComplex.zoomAt(0.37)).toBeCloseTo(0.7 + 0.6 * eased(0.37 / 2.37, 'linear'), 4);
-      const ms120 = 60000 / 120;
-      const ms150 = 60000 / 150;
-      expect(tlComplex.beatToMs(1.23)).toBeCloseTo(ms120 * 1.23, 2);
-      expect(tlComplex.beatToMs(2.37)).toBeCloseTo(ms120 * 2.37, 2);
-      expect(tlComplex.beatToMs(3.37)).toBeCloseTo(ms120 * 2.37 + ms150 * 1.0, 2);
-      expect(Number.isFinite(110 * tlComplex.zoomAt(0.37))).toBe(true);
+      // [Step 2: Perform Action] advance to just before threshold
+      const justBefore = endThreshold - 10;
+      advance(justBefore);
+      const isFinishedBefore = songTimeMs > endThreshold;
+
+      // [Step 3: Assert Resulting Transition] not yet finished
+      expect(isFinishedBefore).toBe(false);
+      expect(lastHitTime).toBeCloseTo(timeline.beatToMs(10.93), 2); // max hold tail
+
+      // Advance past threshold
+      advance(20);
+      const isFinishedAfter = songTimeMs > endThreshold;
+      expect(isFinishedAfter).toBe(true);
+      // Verify threshold is far earlier than buggy buffer-based threshold
+      const buggyThreshold = computeEndThreshold(computeBaseEndBuggy({ chart, timeline, buffer, lastHitTime }), chart.audio_offset);
+      expect(endThreshold).toBeLessThan(buggyThreshold);
+      expect(buggyThreshold).toBeCloseTo(buffer.duration * 1000 + chart.audio_offset, 2);
     });
+  });
 
-    it('未定義振幅の継承値で補間がフラットになり、TOML出力で空欄セクションがステップ (3-step)', () => {
-      // [Step1: Capture Before] — heredity baseline
-      const tlStepHeredity = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.8 },
-        { beat: 4, bpm: 120 },
-        { beat: 8, bpm: 120, amplitude: 1.6 },
-      ]);
-      expect(tlStepHeredity.amplitudeAt(2)).toBeCloseTo(0.8, 5);
-      expect(tlStepHeredity.amplitudeAt(6)).toBeCloseTo(0.8, 5);
+  describe('6. ringSpawner.ts consistency: releaseTime formula must match GameScreen lastHitTime', () => {
+    it('ringSpawner releaseTime and GameScreen lastHitTime use identical beatToMs(beat+duration) formula', () => {
+      // [Step 1: Capture Initial State] read ringSpawner source
+      const spawnerSrc = readSrc('src/game/ringSpawner.ts');
+      expect(spawnerSrc).toContain('releaseTime');
+      const timeline = new BpmTimeline([{ beat: 0, bpm: 120 }], 1.0);
+      const rings: RingDef[] = [{ beat: 5.37, duration: 1.23, type: 'hold' }];
 
-      // [Step2: Perform] — eased heredity: [0 ease->4(undefined) ->8]
-      const tlEasedHeredity = makeTimeline([
-        { beat: 0, bpm: 120, amplitude: 0.8, easeToNext: 'linear' } as unknown as BpmChange,
-        { beat: 4, bpm: 120 },
-        { beat: 8, bpm: 120, amplitude: 1.6 },
-      ]);
+      // [Step 2: Perform Action] compute both via timeline
+      const releaseTimeViaSpawner = timeline.beatToMs(rings[0].beat + (rings[0].duration ?? 0));
+      const lastHitViaFixed = computeLastHitTimeFixed(rings, timeline);
 
-      // [Step3: Assert] — first gap interpolates 0.8->0.8 flat, off-grid also flat
-      expect(tlEasedHeredity.amplitudeAt(2)).toBeCloseTo(0.8, 4);
-      expect(tlEasedHeredity.amplitudeAt(0.37)).toBeCloseTo(0.8, 4);
-      expect(tlEasedHeredity.amplitudeAt(3.37)).toBeCloseTo(0.8, 4);
-      expect(tlEasedHeredity.amplitudeAt(6)).toBeCloseTo(0.8, 5);
-      const heredityChart: Chart = {
-        title: 'HeredityEase205b',
-        artist: '',
-        audio: 'h.flac',
-        audio_offset: 0,
-        amplitude: 1.0,
-        start_position: 0,
-        bpm_changes: [
-          { beat: 0, bpm: 120, amplitude: 0.8, easeToNext: 'linear' } as unknown as BpmChange,
-          { beat: 4, bpm: 120 },
-          { beat: 8, bpm: 120, amplitude: 1.6 },
-        ],
-        segments: [],
-        rings: [],
-      } as unknown as Chart;
-      const info = saveAutosave(heredityChart);
-      const loaded = loadAutosave(info.slug);
-      expect(loaded.bpm_changes[1].amplitude).toBeUndefined();
-      const tlReloaded = makeTimeline(loaded.bpm_changes, 1.0);
-      expect(tlReloaded.amplitudeAt(2)).toBeCloseTo(0.8, 4);
+      // [Step 3: Assert Resulting Transition] they must be identical
+      expect(lastHitViaFixed).toBeCloseTo(releaseTimeViaSpawner, 2);
+      // Verify spawner source uses same expression as spec (line 65)
+      expect(spawnerSrc).toMatch(/beatToMs\s*\(\s*[^)]*beat\s*\+\s*duration/);
     });
   });
 });

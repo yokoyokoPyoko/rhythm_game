@@ -1839,9 +1839,15 @@
       "last_postmortem_at": 1788857568.990597
     },
     "T206": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788857808.760986
+      "started": 1788857808.760986,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f7fc3eb66ffeLwfVz4kIkvwmnF",
+        "coder": "ses_f7fc25714ffeOwvdiNMglMjjMz"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

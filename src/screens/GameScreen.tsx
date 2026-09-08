@@ -314,7 +314,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     const initTimeline = timelineRef.current
     const lastHitTime =
       initChart && initTimeline && initChart.rings.length > 0
-        ? initTimeline.beatToMs(initChart.rings.reduce((m, r) => Math.max(m, r.beat), -Infinity))
+        ? initTimeline.beatToMs(initChart.rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity))
         : null
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - lastTime) / 1000)
@@ -401,7 +401,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
 
       const buffer = bufferRef.current
       const fallbackEnd = lastHitTime !== null ? lastHitTime + END_DELAY_MS : 60000
-      const baseEnd = chart.end_beat !== undefined ? timeline.beatToMs(chart.end_beat) : (buffer ? buffer.duration * 1000 : fallbackEnd)
+      const baseEnd = chart.end_beat !== undefined
+        ? timeline.beatToMs(chart.end_beat)
+        : lastHitTime !== null
+          ? lastHitTime + END_DELAY_MS
+          : (buffer ? buffer.duration * 1000 : fallbackEnd)
       const endThreshold = baseEnd + (chart?.audio_offset ?? 0)
 
       if (!endedRef.current && songTimeMs > endThreshold) {
