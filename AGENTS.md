@@ -2545,3 +2545,50 @@ const minorStep =
 1. `end_beat` 未設定・譜面が曲途中の場合に、最終リング（ホールド終端含む）＋2秒でリザルト画面へ遷移すること。
 2. `end_beat` 設定時・リング0個時の挙動は不変であること。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T207] ホールドリリース判定の追加（離すタイミング判定・Y不問）
+
+**要求（ユーザー確定）**:
+- 現行ホールド完了は「テール時刻まで押し続けていれば自動PERFECT」で、離すタイミング自体が判定されない。これを離すタイミングの精度判定に変える。
+- ホールド維持中のY条件は不要（Y不問のまま）。
+
+**仕様**:
+1. 頭判定は現状維持（タイミング＋Y、`judgeHit` のまま）。
+2. Space keyup時に holding 中のホールド（複数ある場合は `releaseTime` が最も近いもの）を対象化し、誤差 `e = (songNow() − manualOffset) − releaseTime` で判定（`window = beatMs*0.4`）:
+   - `|e| ≤ window` → `|e|<50` でPERFECT、`<100` でGREAT、残りでGOOD。タイミングのみ・Y不問。表示は `GREAT +40ms` 形式（ΔYなし、`yDist=null`）。
+   - `e < −window`（早離し）→ MISS（現状通り厳格・再押し不可）。
+3. 離さずに `releaseTime + window` を超過したら GOOD で自動完了（救済）。現行の「テール到達で自動PERFECT」は廃止する（残すと離す意味が無くなるため）。
+4. 頭を叩かず途中から押しても開始しない・頭MISS後の再押し無効は現状維持。
+
+**修正**（`src/screens/GameScreen.tsx` のみ。`CalibrationModal` はsingle譜面専用のため対象外）:
+- keyupハンドラにリリース判定を追加。tick内のホールド維持分岐を書き換え（自動PERFECT→超過時GOOD＋期限内は何もしない）。
+- `judgeHit`／`hitJudge.ts` の判定ロジックは不変。タイミング専用の小ヘルパ（境界値）は `hitJudge.ts` への純粋関数追加か GameScreen 内閉じのいずれか。
+- エディタの録音（Space長押し→duration）・スコア配点は不変。
+
+**完了条件**:
+1. テール付近で離したタイミング精度で PERFECT／GREAT／GOOD が付き、早離しでMISSになること。
+2. 離さず超過した場合はGOODで自動完了すること。
+3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T208] パブリックモードの判定表示はランク名のみ（ms・ΔY非表示）
+
+**要求（ユーザー確定）**:
+- デバッグモードでない（public）とき、Yとタイミングの判定数値を非表示にする。ランク名（PERFECT／GREAT／GOOD／MISS）は残す。
+
+**仕様**:
+- public：判定テキストはランク名のみ。`+40ms`・`ΔY 35px` の数値は出さない。
+- debug：現状通り詳細表示（ランク名＋ms＋ΔY）。
+- 対象はゲームプレイ中のキャンバス判定テキスト（`renderer.ts:drawJudgements`）のみ。不変なもの：コンボ・スコアHUD、リザルト画面の集計、`offset:+Xms` 表示、`calibration-last`（publicでは到達不可）。
+
+**修正**（判定ロジック・スコアは不変）:
+- `src/game/renderer.ts`：`RenderParams` に `showJudgementDetail?: boolean` を追加。`false` 時はランク名のみ描画。未指定時は詳細表示のまま（既存呼び出し・テスト互換維持）。
+- `src/screens/GameScreen.tsx`：`renderer.render` 呼び出し時に `showJudgementDetail: getViewMode() === 'debug'` を渡す（tick内で毎フレーム評価し、購読なしで切替直後から反映）。
+
+**完了条件**:
+1. publicで判定テキストに数値（ms・ΔY）が出ず、ランク名のみ表示されること。
+2. debugでは従来通り詳細表示されること。
+3. `tsc --noEmit` エラーなし。

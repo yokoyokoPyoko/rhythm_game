@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { BpmChange } from '../../types'
 
 const BPM_MIN = 1
@@ -42,17 +43,18 @@ export default function BpmEditor({
   onEndBeatChange,
   onRequestAddSection,
 }: BpmEditorProps) {
+  const [beatValues, setBeatValues] = useState<number[]>(bpmChanges.map((c) => safeBeat(c.beat)))
+
+  useEffect(() => {
+    setBeatValues(bpmChanges.map((c) => safeBeat(c.beat)))
+  }, [bpmChanges])
+
   const removeChange = (index: number) => {
     onSectionsChange(sortByBeat(bpmChanges.filter((_, i) => i !== index)))
   }
 
   const updateChange = (index: number, patch: Partial<BpmChange>) => {
     onSectionsChange(bpmChanges.map((c, i) => (i === index ? { ...c, ...patch } : c)))
-  }
-
-  const commitBeatChange = (index: number, newBeat: number) => {
-    const next = bpmChanges.map((c, i) => (i === index ? { ...c, beat: newBeat } : c))
-    onSectionsChange(sortByBeat(next))
   }
 
   return (
@@ -117,12 +119,19 @@ export default function BpmEditor({
                 type="number"
                 min={0}
                 step={0.25}
-                defaultValue={safeBeat(change.beat)}
-                onBlur={(e) => commitBeatChange(i, safeBeat(Number(e.target.value)))}
+                value={beatValues[i] ?? safeBeat(change.beat)}
+                onChange={(e) => setBeatValues((prev) => { const next = [...prev]; next[i] = safeBeat(Number(e.target.value)); return next })}
+                onBlur={(e) => {
+                  const newBeat = safeBeat(Number(e.target.value))
+                  const next = bpmChanges.map((c, idx) => (idx === i ? { ...c, beat: newBeat } : c))
+                  onSectionsChange(sortByBeat(next))
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault()
-                    commitBeatChange(i, safeBeat(Number((e.target as HTMLInputElement).value)))
+                    const newBeat = safeBeat(Number((e.target as HTMLInputElement).value))
+                    const next = bpmChanges.map((c, idx) => (idx === i ? { ...c, beat: newBeat } : c))
+                    onSectionsChange(sortByBeat(next))
                   }
                 }}
                 aria-label={`セクション${i + 1}のbeat`}

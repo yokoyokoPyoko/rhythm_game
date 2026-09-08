@@ -21,6 +21,10 @@ import { Cursor } from '../game/cursor'
 import { TW_AMP, TW_CENTER_Y, WaveEngine } from '../game/waveEngine'
 import { segmentize, quantizeBeat, type TrajPoint } from '../chart/quantize'
 import type { BpmChange, Chart, RingDef, Segment } from '../types'
+
+function sortByBeat(arr: BpmChange[]): BpmChange[] {
+  return [...arr].sort((a, b) => a.beat - b.beat)
+}
 import BpmEditor from './editor/BpmEditor'
 import SectionAddDialog from './editor/SectionAddDialog'
 import SegmentEditor from './editor/SegmentEditor'
@@ -1118,7 +1122,7 @@ export default function EditorScreen() {
     setAmplitude(chart.amplitude)
     setStartPosition(chart.start_position ?? 0.0)
     setEndBeat(chart.end_beat)
-    setBpmChanges(chart.bpm_changes)
+    setBpmChanges(sortByBeat(chart.bpm_changes))
     setSegments(chart.segments)
     setRings(chart.rings)
     setBuffer(null)

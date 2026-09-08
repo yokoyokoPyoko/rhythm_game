@@ -1352,5 +1352,23 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T207",
+    "desc": "ホールドリリース判定の追加（離すタイミング判定・Y不問）。要求: 現行はテール時刻まで押し続けていれば自動PERFECTで離すタイミング自体が判定されない。これを離すタイミングの精度判定に変える。ホールド維持中のY条件は不要。仕様: (1)頭判定は現状維持 (2)Space keyup時にholding中のホールド（複数時はreleaseTimeが最も近いもの）を対象化し誤差e=(songNow()-manualOffset)-releaseTimeで判定（window=beatMs*0.4）: |e|<=window→|e|<50でPERFECT・<100でGREAT・残りでGOOD（タイミングのみ・Y不問、表示はGREAT +40ms形式でΔYなし・yDist=null）。e<-window（早離し）→MISS（厳格・再押し不可） (3)離さずreleaseTime+window超過でGOOD自動完了（現行の自動PERFECTは廃止） (4)途中押し開始・頭MISS後再押し無効は維持。修正: GameScreen.tsxのみ（CalibrationModalはsingle専用のため対象外）。keyupハンドラにリリース判定追加、tick内維持分岐を書き換え。judgeHit/hitJudge.tsの判定ロジック不変。エディタ録音・スコア配点不変。完了条件: (1) テール付近の離し精度でPERFECT/GREAT/GOOD・早離しMISS (2) 超過時はGOOD自動完了 (3) tsc --noEmit。",
+    "depends_on": [
+      "T206"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T208",
+    "desc": "パブリックモードの判定表示はランク名のみ（ms・ΔY非表示）。要求: デバッグモードでない(public)ときYとタイミングの判定数値を非表示にしランク名のみ残す。仕様: publicはランク名のみ（+40ms・ΔY 35pxを出さない）、debugは従来通り詳細表示。対象はゲームプレイ中のキャンバス判定テキスト(renderer.ts:drawJudgements)のみ。不変: コンボ・スコアHUD、リザルト集計、offset:+Xms表示、calibration-last（public到達不可）。修正（ロジック・スコア不変）: renderer.tsのRenderParamsにshowJudgementDetail?:boolean追加。false時はランク名のみ描画。未指定時は詳細表示のまま（既存呼び出し・テスト互換維持）。GameScreen.tsxでrenderer.render呼び出し時にshowJudgementDetail:getViewMode()==='debug'を渡す（tick内毎フレーム評価で購読なし切替反映）。完了条件: (1) publicで数値が出ずランク名のみ (2) debugで従来通り詳細 (3) tsc --noEmit。",
+    "depends_on": [
+      "T207"
+    ],
+    "type": "feat",
+    "test": true
   }
 ]

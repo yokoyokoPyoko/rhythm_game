@@ -45,12 +45,16 @@ export default function SectionAddDialog({
     }
   }
 
+  function sortByBeat(arr: BpmChange[]): BpmChange[] {
+    return [...arr].sort((a, b) => a.beat - b.beat)
+  }
+
   const confirmAdd = () => {
     const beatVal = Number(beat)
     const bpmVal = Number(bpm)
     const ampVal = Number(amplitude)
     const zoomVal = Number(zoom)
-    onSectionsChange([
+    const next = sortByBeat([
       ...sections,
       {
         beat: Number.isFinite(beatVal) && beatVal >= 0 ? beatVal : 0,
@@ -59,6 +63,7 @@ export default function SectionAddDialog({
         zoom: Number.isFinite(zoomVal) && zoomVal > 0 ? zoomVal : undefined,
       },
     ])
+    onSectionsChange(next)
     onClose()
   }
 
