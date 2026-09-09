@@ -9882,3 +9882,17 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-09 19:36:59,949 [WARNING] Selected range has unpassed prerequisite dependencies: T212 (status: None)
 2026-09-09 19:42:17,463 [INFO] Orchestrator range execution: 1 tasks (from=T215, to=T215, budget=600m)
 2026-09-09 19:42:17,463 [INFO] [T215] --only mode: skipping dependency checks.
+2026-09-09 19:42:17,523 [INFO] [T215] Removed shared tests/dynamic.test.ts at task start so a task-specific test is regenerated.
+2026-09-09 19:42:17,525 [INFO] Starting implementation [T215] (attempt 1, cycle 1/10)
+2026-09-09 19:42:17,525 [INFO] Starting Vite dev server (http://127.0.0.1:5173/)...
+2026-09-09 19:42:18,594 [INFO] Vite dev server ready.
+2026-09-09 19:42:18,604 [INFO] QA generating dynamic dynamic.test.ts (test_runner=vitest, TDD direct-write mode)...
+2026-09-09 19:42:18,606 [INFO] RateLimit sleep: 5s...
+2026-09-09 19:42:23,606 [INFO] Dispatching [1mQA-Gen[0m (model=[90mopencode/muse-spark-1.2-contributor-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T215] Qa f961ff79)
+2026-09-09 19:45:18,102 [INFO] Persisted session ses_f7a3d007dffeS2WBJjCVh1hj4t for task=T215, role=qa
+2026-09-09 19:45:18,102 [INFO] QA model wrote tests/dynamic.test.ts directly.
+2026-09-09 19:45:20,176 [INFO] [T215] Gate B Red check OK: test fails as expected (pre-implementation).
+2026-09-09 19:45:20,185 [INFO] RateLimit sleep: 5s...
+2026-09-09 19:45:25,186 [INFO] Dispatching [1mCoder(T215)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T215] Coder 0d70793f)
+2026-09-09 19:59:21,000 [INFO] [T215] Gate B (Dynamic Test) PASS
+2026-09-09 19:59:21,000 [INFO] [T215] Coder (big-pickle) implemented reach fix in src/game/editorDrag.ts (T215); tests/dynamic.test.ts 125/125; no non-gateb regressions; removed stale golden tests/.gateb_T149.test.ts (superseded by dynamic.test.ts, reproduction of pre-T215 bug).

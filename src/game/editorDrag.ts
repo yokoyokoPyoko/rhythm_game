@@ -32,6 +32,15 @@ function clampY(y: number): number {
   return Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, y));
 }
 
+// T215: the smallest snap-aligned beat count that is >= x (guarantees reach of the
+// snapped Y zone). Unlike quantizeBeat (which rounds to nearest and can under-shoot
+// — e.g. need 0.714 beats -> 0.5), this rounds up so the vertex never freezes midway.
+function ceilBeat(x: number, snap: number): number {
+  if (!(snap > 0) || !Number.isFinite(x)) return Math.max(0, x);
+  const n = Math.max(0, x);
+  return Number((Math.ceil(n / snap - 1e-9) * snap).toFixed(4));
+}
+
 interface VertexDragInput {
   segments: Segment[];
   bpmTimeline: BpmTimeline;
@@ -58,12 +67,23 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   if (idx === 0 && segments.length > 0) {
     const nextPt = pts[1];
     const nextBeat = nextPt?.beat ?? pts[0].beat + safeSnap;
-    const clampedBeat = Math.max(safeSnap, Math.min(nextBeat - safeSnap, quantizeBeat(targetBeat, safeSnap)));
+    let clampedBeat = Math.max(safeSnap, Math.min(nextBeat - safeSnap, quantizeBeat(targetBeat, safeSnap)));
     // beats = horizontal distance, direction = from Y
-    const beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
+    let beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
     if (beats < safeSnap) return null;
     const snappedY = snapY(targetY);
     const d = dirBetween(pts[0].y, snappedY);
+    // T215: shift leftward to increase beats when target Y requires more reach
+    if (d === 'up') {
+      const pbAtPrev = bpmTimeline.amplitudeAt(pts[0].beat);
+      const perBeat = 2 * TW_AMP * pbAtPrev;
+      const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedY - pts[0].y) / perBeat, safeSnap));
+      if (need > beats) {
+        const minBeat = Math.max(safeSnap, nextBeat - need);
+        clampedBeat = minBeat;
+        beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
+      }
+    }
     return segments.map((s, i) => (i === 0 ? { ...s, beats, direction: d } : s));
   }
 
@@ -71,12 +91,22 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   if (idx === pts.length - 1 && segments.length > 0) {
     const prevPt = pts[idx - 1];
     const prevBeat = prevPt?.beat ?? 0;
-    const clampedBeat = Math.max(prevBeat + safeSnap, quantizeBeat(targetBeat, safeSnap));
+    let clampedBeat = Math.max(prevBeat + safeSnap, quantizeBeat(targetBeat, safeSnap));
     // beats = horizontal distance, direction = from Y
-    const beats = quantizeBeat(clampedBeat - prevBeat, safeSnap);
+    let beats = quantizeBeat(clampedBeat - prevBeat, safeSnap);
     if (beats < safeSnap) return null;
     const snappedTargetY = snapY(targetY);
     const d = dirBetween(prevPt.y, snappedTargetY);
+    // T215: shift rightward to increase beats when target Y requires more reach
+    if (d === 'down' || d === 'up') {
+      const pbAtPrev = bpmTimeline.amplitudeAt(prevBeat);
+      const perBeat = 2 * TW_AMP * pbAtPrev;
+      const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedTargetY - prevPt.y) / perBeat, safeSnap));
+      if (need > beats) {
+        clampedBeat = prevBeat + need;
+        beats = quantizeBeat(clampedBeat - prevBeat, safeSnap);
+      }
+    }
     return segments.map((s, i) => (i === idx - 1 ? { ...s, beats, direction: d } : s));
   }
 
@@ -99,6 +129,27 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   // real drag and returns a clamped result.)
   if (Math.abs(beatPrime - pts[idx].beat) < 1e-9 && Math.abs(targetY - pts[idx].y) < 1e-9) {
     return null;
+  }
+
+  // T215: when the mouse X width is too small to reach the snapped Y zone,
+  // shift beatPrime rightward (toward the needed direction) within adjacency
+  // limits so beatsPrev ≥ need. "need" = |snappedY − yPrev| / perBeat quantized
+  // to snap. Without this, the vertex clamps mid-move and freezes indefinitely.
+  const snappedTargetY_tmp = snapY(targetY);
+  const dTmp = dirBetween(yPrev, snappedTargetY_tmp);
+  if (dTmp !== 'stay') {
+    const pbAtPrev = bpmTimeline.amplitudeAt(prevBeat);
+    const perBeat = 2 * TW_AMP * pbAtPrev;
+    const needRaw = Math.abs(snappedTargetY_tmp - yPrev) / perBeat;
+    // ceil so a snap-aligned count actually reaches the zone (round would under-shoot).
+    const need = Math.max(safeSnap, ceilBeat(needRaw, safeSnap));
+    const mouseBeatsPrev = quantizeBeat(beatPrime - prevBeat, safeSnap);
+    if (need > mouseBeatsPrev) {
+      const maxAvail = nextBeat - safeSnap - prevBeat;
+      const desired = Math.min(need, maxAvail);
+      const shifted = prevBeat + ceilBeat(desired, safeSnap);
+      beatPrime = Math.max(prevBeat + safeSnap, Math.min(nextBeat - safeSnap, shifted));
+    }
   }
 
   let beatsPrev = quantizeBeat(beatPrime - prevBeat, safeSnap);

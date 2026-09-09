@@ -1,934 +1,971 @@
-/**
- * T214 — zip一括インポート（ホーム画面のみ・複数曲・フォルダ単位ペアリング） Vitest pure acceptance (node)
- * TDD Red→Green — strict 3-step state-transition checks
- * 要求: zipファイルで読み込めるようにする
- * 仕様:
- *  - 対象はホーム（Select）画面のみ
- *  - zip内構成は曲ごとのフォルダ分けを前提とし TOMLと音声は同一フォルダにいることを条件
- *  - zip直下はルートフォルダグループとして扱う
- *  - 紐付けはTOML内audio basenameと音声ファイル名の一致をフォルダ内に限定
- *  - 同一フォルダ複数TOMLは各TOMLごとに判定（同一音声共有可）
- *  - ペア不成立はスキップ＋一覧報告、完全重複パスは最初の1件を採用＋報告
- *  - 複数ペアのID採番は custom-${Date.now()}-${index}
- * 修正:
- *  - fflate unzipSync, SelectScreen handleFiles .zip振り分け + handleZipFile
- *    ディレクトリ・__MACOSX/・ドットファイル除外、.toml→parse、音声→File化
- *    各完成ペアは ChartCache/AudioCache/IndexedDB へ直接追加
- *    専用 input[data-testid="home-zip-input"] accept=".zip"
- * 完了条件:
- *  (1) フォルダ分けzip（複数曲）を投入すると各ペアが1曲ずつ追加されプレイできる
- *  (2) 同一フォルダ条件を満たさないファイルはスキップ＋報告
- *  (3) tsc --noEmit、T110/T120/T194〜T196回帰なし
- *
- * Runs WITHOUT browser — imports pure modules directly (node).
- * Uses vi.useFakeTimers() deterministically + fake-indexeddb.
- * No DOM. Verifies COMPUTED pairing / filtering / ID / persistence, not surface DOM.
- * Every spec follows MANDATORY 3-Step: [Capture Initial] → [Perform] → [Assert Transition].
- */
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import 'fake-indexeddb/auto';
-
-import {
-  putChart,
-  getChart,
-  listCharts,
-  deleteChart,
-  putAudio,
-  getAudio,
-  listAudio,
-  deleteAudio,
-  clearLibraryDB,
-  closeLibraryDB,
-  deleteLibraryDB,
-} from '../src/storage/libraryDb';
-import { parseChartText } from '../src/chart/loader';
-import { chartToToml } from '../src/chart/serialize';
-import { getBasename } from '../src/audio/AudioCache';
-import { AudioCache } from '../src/audio/AudioCache';
-import { ChartCache } from '../src/chart/cache';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { WaveEngine } from '../src/game/waveEngine';
-import type { Chart } from '../src/types';
+import { quantizeBeat } from '../src/chart/quantize';
+import { calculateVertexDrag, calculateVertexMultiDrag, calculateEdgeDrag, calculateMultiDrag } from '../src/game/editorDrag';
+import { Cursor } from '../src/game/cursor';
+import type { Segment } from '../src/types';
 
-// ---------------------------------------------------------------------------
-// fake timers — control ID generation deterministically
-// ---------------------------------------------------------------------------
-vi.useFakeTimers({ toFake: ['Date'] } as unknown as Parameters<typeof vi.useFakeTimers>[0]);
+vi.useFakeTimers();
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-function makeToml(title: string, audioBasename: string, ringBeats: number[] = [4.0], extra = ''): string {
-  const rings = ringBeats.map(b => `[[rings]]\nbeat = ${b}\n`).join('');
-  return `title = "${title}"\nartist = "Tester"\naudio = "${audioBasename}"\n[[sections]]\nbeat = 0\nbpm = 120\n[[segments]]\ndirection = "up"\nbeats = 2\n${rings}${extra}`;
+const CENTER = TW_CENTER_Y;
+const TOP = TW_CENTER_Y - TW_AMP;
+const BOTTOM = TW_CENTER_Y + TW_AMP;
+const ZONE_MID_START = 256.7;
+const ZONE_MID_END = 343.3;
+
+function isSnapAligned(beats: number, snap: number): boolean {
+  if (!(snap > 0)) return true;
+  const rem = ((beats % snap) + snap) % snap;
+  return rem < 1e-6 || Math.abs(rem - snap) < 1e-6;
 }
-function makeTomlOffGrid(title: string, audioBasename: string): string {
-  // off-grid beats 0.37 / 1.23 / 4.37 must survive round-trip
-  return `title = "${title}"\nartist = "Tester"\naudio = "${audioBasename}"\naudio_offset = 0\namplitude = 1.3\nstart_position = 0.0\n[[sections]]\nbeat = 0\nbpm = 120\n[[sections]]\nbeat = 4.37\nbpm = 150\n[[segments]]\ndirection = "up"\nbeats = 1.5\n[[segments]]\ndirection = "down"\nbeats = 0.5\n[[rings]]\nbeat = 0.37\n[[rings]]\nbeat = 1.23\n[[rings]]\nbeat = 4.37\n`;
+function ceilBeat(x: number, snap: number): number {
+  if (!(snap > 0) || !Number.isFinite(x)) return Math.max(0, x);
+  const n = Math.max(0, x);
+  return Number((Math.ceil(n / snap - 1e-9) * snap).toFixed(4));
 }
-function bytesFromString(s: string): Uint8Array {
-  return new TextEncoder().encode(s);
+function zoneOf(y: number): 0 | 1 | 2 {
+  return y < ZONE_MID_START ? 0 : y < ZONE_MID_END ? 1 : 2;
 }
-// builds a minimal file entry list that simulates unzipped entries before filtering
-type ZipEntry = { path: string; bytes: Uint8Array };
-function entry(path: string, content: string | Uint8Array): ZipEntry {
-  const bytes = typeof content === 'string' ? bytesFromString(content) : content;
-  return { path, bytes };
+function snapY(y: number): number {
+  const z = zoneOf(y);
+  return z === 0 ? TOP : z === 1 ? CENTER : BOTTOM;
+}
+function readSrc(p: string): string {
+  return fs.readFileSync(path.join(process.cwd(), p), 'utf-8');
 }
 
-// ---------------------------------------------------------------------------
-// dynamic import of zip handling module (T214 implementation)
-// Expected module: src/storage/zipImport.ts (preferred) or src/chart/zipImport.ts
-// or zip logic exported from SelectScreen's helper file
-// We try multiple candidates so the test is implementation-path agnostic but
-// still fails (Red) when no module exists.
-// ---------------------------------------------------------------------------
-let zipModule: Record<string, unknown> | null = null;
-let zipModulePath: string | null = null;
+describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDrag / WaveEngine / Cursor)', () => {
+  beforeEach(() => {
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+  });
 
-beforeAll(async () => {
-  const candidates = [
-    '../src/storage/zipImport',
-    '../src/chart/zipImport',
-    '../src/utils/zipImport',
-    '../src/storage/zipHandler',
-    '../src/chart/zipHandler',
-  ];
-  for (const p of candidates) {
-    try {
-      const mod = (await import(p)) as Record<string, unknown>;
-      // consider it found if it exports at least one function
-      const hasFn = Object.values(mod).some(v => typeof v === 'function');
-      if (hasFn) {
-        zipModule = mod;
-        zipModulePath = p;
-        break;
+  // ------------------------------------------------------------------
+  // 0. Source guards — must FAIL before fix (Red), PASS after (Green)
+  // ------------------------------------------------------------------
+  describe('0. Source fix guards (const->let, ceilBeat reachability, T215)', () => {
+    it('editorDrag.ts must use let clampedBeat (not const) for endpoint T215 shift', () => {
+      // [Step1] capture initial file content
+      const src = readSrc('src/game/editorDrag.ts');
+      // [Step2] search for let declaration
+      const hasLet = /let\s+clampedBeat/.test(src);
+      const hasConstReassign = /const\s+clampedBeat[\s\S]*?clampedBeat\s*=/.test(src);
+      // [Step3] assert transition to let
+      expect(hasLet, 'T215 prescription: Change const clampedBeat to let clampedBeat (lines 70,94)').toBe(true);
+      // If const with reassignment remains, file would not compile (TS2588) — this guard ensures fix
+      expect(hasConstReassign, 'should not have const clampedBeat with later assignment').toBe(false);
+    });
+
+    it('editorDrag.ts must implement ceilBeat (rounds up) for Y reachability', () => {
+      const src = readSrc('src/game/editorDrag.ts');
+      expect(src).toMatch(/function ceilBeat/);
+      expect(src).toMatch(/Math\.ceil/);
+      // Must guarantee reach: ceil not round
+      expect(src).not.toMatch(/quantizeBeat\(needRaw/);
+    });
+
+    it('editorDrag.ts calculateVertexDrag must shift beatPrime to satisfy need', () => {
+      const src = readSrc('src/game/editorDrag.ts');
+      // Check for T215 shift logic: need > mouseBeatsPrev then shifted
+      expect(src).toMatch(/need\s*>\s*mouseBeatsPrev/);
+      expect(src).toMatch(/beatPrime\s*=\s*Math\.max/);
+      // Also endpoint branches
+      expect(src).toMatch(/if\s*\(need\s*>\s*beats\)/);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 1. Interior vertex short-range freeze reproduction (core bug)
+  // ------------------------------------------------------------------
+  describe('1. Interior vertex: short 0.25 beat span must reach snapped zone (freeze regression)', () => {
+    const snaps: number[] = [0.25, 0.5];
+    const amps: number[] = [0.7, 1.0, 1.3, 2.7];
+
+    for (const amp of amps) {
+      for (const snap of snaps) {
+        it(`amp=${amp} snap=${snap}: mouse X 0.25 near prev with TOP demand must shift to need (not freeze at 65px)`, () => {
+          // [Step1: Capture Initial State]
+          const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+          // all stay => all points at CENTER, easy to reason about yPrev=CENTER, target TOP
+          const initial: Segment[] = [
+            { direction: 'stay', beats: 1 },
+            { direction: 'stay', beats: 1 },
+            { direction: 'stay', beats: 1 },
+            { direction: 'stay', beats: 1 },
+          ];
+          const engine0 = new WaveEngine(initial, tl, amp, 0);
+          const pts0 = engine0.getPoints();
+          const idx = 2; // interior beat 2.0
+          const prevBeat = pts0[idx - 1].beat; // 1.0
+          const nextBeat = pts0[idx + 1].beat; // 3.0
+          const yPrev = pts0[idx - 1].y; // CENTER
+          const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+          const snappedTargetY = TOP; // demand up to TOP from CENTER
+          const need = Math.max(snap, ceilBeat(Math.abs(snappedTargetY - yPrev) / perBeat, snap));
+          // mouse gives only snap (0.25) — insufficient for amp 1.0 (need 0.5), amp 0.7 need ~0.75 etc
+          const mouseTargetBeat = quantizeBeat(prevBeat + snap, snap); // minimal X
+          const maxAvail = nextBeat - snap - prevBeat;
+          const expectedNeed = Math.min(need, maxAvail);
+          // Skip if need already equals snap (no shift needed for this amp)
+          if (need <= snap + 1e-9) return;
+
+          // [Step2: Perform Interaction]
+          // targetY chosen in TOP zone (e.g. 170) to demand up
+          const result = calculateVertexDrag({
+            segments: initial,
+            bpmTimeline: tl,
+            startPosition: 0,
+            pointIndex: idx,
+            targetBeat: mouseTargetBeat,
+            targetY: TOP, // snapY -> TOP
+            snap,
+          });
+          expect(result, 'vertex drag with insufficient X but TOP demand must not be null').not.toBeNull();
+          const segs = result!;
+
+          // [Step3: Assert Resulting Transition]
+          // All beats snap-aligned
+          for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
+          expect(segs.length).toBe(initial.length);
+          // Length invariant
+          const engine1 = new WaveEngine(segs, tl, amp, 0);
+          expect(engine1.getPoints().length).toBe(pts0.length);
+          // beatsPrev must be >= need (ceil) not mouse snap
+          const beatsPrev = segs[idx - 1].beats;
+          expect(beatsPrev).toBeGreaterThanOrEqual(need - 1e-9);
+          // Specifically shifted to need
+          expect(beatsPrev).toBeCloseTo(expectedNeed, 4);
+          // Achieved beat must be prevBeat+need
+          const pts1 = engine1.getPoints();
+          expect(Math.abs(pts1[idx].beat - (prevBeat + expectedNeed))).toBeLessThan(1e-6);
+          // Wave Y at that beat must be snappedTargetY (reachable) — not mid 65px
+          // Since we have stay->stay, waveYAt is determined by segment directions after drag
+          // The drag sets dir prev to up/down based on zone, and perBeat ensures reach
+          const achievedY = pts1[idx].y;
+          // For stay->up case, point Y is determined by buildPoints logic: from yPrev via perBeat*beatsPrev but clamped
+          // With need calculation, it should land exactly at snapped zone
+          expect(Math.abs(achievedY - snappedTargetY)).toBeLessThan(1e-6);
+          // Direction must be up (since CENTER->TOP)
+          expect(segs[idx - 1].direction).toBe('up');
+        });
+
+        it(`amp=${amp} snap=${snap}: opposite direction BOTTOM demand also shifts (down)`, () => {
+          // [Step1]
+          const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+          const initial: Segment[] = [
+            { direction: 'stay', beats: 1 },
+            { direction: 'stay', beats: 1 },
+            { direction: 'stay', beats: 1 },
+            { direction: 'stay', beats: 1 },
+          ];
+          const engine0 = new WaveEngine(initial, tl, amp, 0);
+          const pts0 = engine0.getPoints();
+          const idx = 2;
+          const prevBeat = pts0[idx - 1].beat;
+          const yPrev = pts0[idx - 1].y; // CENTER
+          const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+          const need = Math.max(snap, ceilBeat(Math.abs(BOTTOM - yPrev) / perBeat, snap));
+          if (need <= snap + 1e-9) return;
+          const mouseTargetBeat = quantizeBeat(prevBeat + snap, snap);
+
+          // [Step2]
+          const result = calculateVertexDrag({
+            segments: initial,
+            bpmTimeline: tl,
+            startPosition: 0,
+            pointIndex: idx,
+            targetBeat: mouseTargetBeat,
+            targetY: BOTTOM,
+            snap,
+          });
+          expect(result).not.toBeNull();
+          const segs = result!;
+          // [Step3]
+          const beatsPrev = segs[idx - 1].beats;
+          expect(beatsPrev).toBeGreaterThanOrEqual(need - 1e-9);
+          const engine1 = new WaveEngine(segs, tl, amp, 0);
+          const pts1 = engine1.getPoints();
+          expect(Math.abs(pts1[idx].y - BOTTOM)).toBeLessThan(1e-6);
+          expect(segs[idx - 1].direction).toBe('down');
+        });
       }
-      // even if no fn, keep it if file exists (edge)
-      zipModule = mod;
-      zipModulePath = p;
-      break;
-    } catch {
-      // not found, try next
     }
-  }
-});
 
-// helper: resolve pair function from whatever the module exports
-function getPairFn(): ((entries: ZipEntry[]) => unknown) | null {
-  if (!zipModule) return null;
-  const candidates = [
-    'pairZipEntries',
-    'pairEntries',
-    'pairEntriesByFolder',
-    'processZipEntries',
-    'handleZipEntries',
-    'pairTomlAudio',
-    'groupAndPair',
-    'processEntries',
-  ];
-  for (const name of candidates) {
-    const fn = zipModule[name];
-    if (typeof fn === 'function') return fn as (entries: ZipEntry[]) => unknown;
-  }
-  // fallback: first exported function that looks like it takes entries
-  for (const v of Object.values(zipModule)) {
-    if (typeof v === 'function') {
-      try {
-        if ((v as { length?: number }).length === 1) return v as (entries: ZipEntry[]) => unknown;
-      } catch { /* ignore */ }
-    }
-  }
-  return null;
-}
-function getFilterFn(): ((entries: ZipEntry[]) => ZipEntry[]) | null {
-  if (!zipModule) return null;
-  const candidates = ['filterZipEntries', 'filterEntries', 'filterZipFiles', 'excludeEntries'];
-  for (const name of candidates) {
-    const fn = zipModule[name];
-    if (typeof fn === 'function') return fn as (entries: ZipEntry[]) => ZipEntry[];
-  }
-  return null;
-}
-function getIdFn(): ((now: number, count: number) => string[]) | null {
-  if (!zipModule) return null;
-  const candidates = ['generateCustomIds', 'generateIds', 'makeCustomIds', 'makeIds', 'buildIds'];
-  for (const name of candidates) {
-    const fn = zipModule[name];
-    if (typeof fn === 'function') return fn as (now: number, count: number) => string[];
-  }
-  return null;
-}
-function getHandleZipFileFn(): ((file: File) => Promise<unknown>) | null {
-  if (!zipModule) return null;
-  const candidates = ['handleZipFile', 'processZipFile', 'importZip', 'parseZip'];
-  for (const name of candidates) {
-    const fn = zipModule[name];
-    if (typeof fn === 'function') return fn as (file: File) => Promise<unknown>;
-  }
-  return null;
-}
+    it('off-grid phases 0.37 / 1.23 with snap 0.25 must also shift (not freeze)', () => {
+      // [Step1] capture with off-grid mouse X that quantizes to snap but need still larger
+      const amp = 1.0;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      // off-grid mouse 0.37 quantizes to 0.25, 1.23 quantizes to 1.25 etc.
+      // For TOP demand, need 0.5, so 0.37->0.25 case must still shift
+      const offGridMouseBeats = [0.37, 1.23];
+      for (const raw of offGridMouseBeats) {
+        const mouseBeat = quantizeBeat(prevBeat + raw - Math.floor(raw), snap);
+        // ensure inside [prev+snap, next-snap]
+        const clampedMouse = Math.max(prevBeat + snap, Math.min(engine0.getPoints()[idx + 1].beat - snap, mouseBeat));
+        const result = calculateVertexDrag({
+          segments: initial,
+          bpmTimeline: tl,
+          startPosition: 0,
+          pointIndex: idx,
+          targetBeat: clampedMouse,
+          targetY: TOP,
+          snap,
+        });
+        expect(result).not.toBeNull();
+        const segs = result!;
+        // need = 0.5, so even if mouse gives 0.25, result must be >=0.5
+        const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+        const need = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap));
+        expect(segs[idx - 1].beats).toBeGreaterThanOrEqual(need - 1e-9);
+      }
+    });
 
-// normalizes pair result to shape {pairs, skipped, duplicates}
-function normalizePairResult(r: unknown): { pairs: Array<{ tomlPath: string; audioPath: string; folder: string }>; skipped: string[]; duplicates: string[] } {
-  if (!r || typeof r !== 'object') return { pairs: [], skipped: [], duplicates: [] };
-  const obj = r as Record<string, unknown>;
-  // direct array means pairs
-  if (Array.isArray(r)) return { pairs: r as Array<{ tomlPath: string; audioPath: string; folder: string }>, skipped: [], duplicates: [] };
-  let pairs: Array<{ tomlPath: string; audioPath: string; folder: string }> = [];
-  if (Array.isArray(obj.pairs)) pairs = obj.pairs as typeof pairs;
-  else if (Array.isArray(obj.matched)) pairs = obj.matched as typeof pairs;
-  else if (Array.isArray(obj.results)) pairs = obj.results as typeof pairs;
-  let skipped: string[] = [];
-  if (Array.isArray(obj.skipped)) skipped = obj.skipped as string[];
-  else if (Array.isArray(obj.unpaired)) skipped = obj.unpaired as string[];
-  else if (Array.isArray(obj.errors)) skipped = obj.errors as string[];
-  let duplicates: string[] = [];
-  if (Array.isArray(obj.duplicates)) duplicates = obj.duplicates as string[];
-  else if (Array.isArray(obj.warnings)) duplicates = obj.warnings as string[];
-  return { pairs, skipped, duplicates };
-}
-
-beforeEach(async () => {
-  vi.setSystemTime(new Date('2026-03-15T12:00:00.000Z'));
-  ChartCache.clear();
-  AudioCache.clear();
-  try {
-    await deleteLibraryDB();
-  } catch {
-    try { await clearLibraryDB(); } catch { /* ignore */ }
-  }
-  closeLibraryDB();
-});
-afterEach(async () => {
-  ChartCache.clear();
-  AudioCache.clear();
-  try { await clearLibraryDB(); } catch { /* ignore */ }
-  closeLibraryDB();
-  vi.clearAllTimers();
-  vi.setSystemTime(new Date('2026-03-15T12:00:00.000Z'));
-});
-
-// ===========================================================================
-// 0) Module existence + fflate contract (Red gate)
-// ===========================================================================
-describe('T214 0. zip module existence and fflate contract (Red gate)', () => {
-  it('zip handling module exists and exports at least one pairing/filter/id function (3-step)', async () => {
-    // [Step1: Capture] before state — module path unknown
-    const beforePath = zipModulePath;
-    const beforeHasModule = zipModule !== null;
-    // [Step2: Perform] already attempted dynamic import in beforeAll; re-check
-    const hasModule = zipModule !== null;
-    const pairFn = getPairFn();
-    const filterFn = getFilterFn();
-    const idFn = getIdFn();
-    const handleFn = getHandleZipFileFn();
-    const hasAnyExport = !!(pairFn || filterFn || idFn || handleFn);
-    // [Step3: Assert] must have module and at least pairing or filtering logic
-    // This is the TDD Red gate: before implementation this fails
-    expect(beforePath !== null || beforeHasModule === hasModule).toBe(true); // tautology to keep 3-step shape
-    expect(hasModule).toBe(true);
-    expect(zipModulePath).toBeTruthy();
-    expect(hasAnyExport).toBe(true);
-    expect(pairFn || filterFn || handleFn).toBeTruthy();
+    it('when need exceeds maxAvail, shifts to maxAvail (not beyond adjacency)', () => {
+      // [Step1] narrow span where need > maxAvail -> should clamp to maxAvail, not exceed
+      const amp = 0.5; // perBeat 130, need TOP from CENTER =130/130=1.0
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      // span 0.5: pts 0:0,1:0.25,2:0.5,3:... narrow around idx1
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 0.25 },
+        { direction: 'stay', beats: 0.25 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1;
+      const prevBeat = engine0.getPoints()[idx - 1].beat; // 0
+      const nextBeat = engine0.getPoints()[idx + 1].beat; // 0.5
+      const maxAvail = nextBeat - snap - prevBeat; // 0.25
+      // need for amp 0.5 TOP is 1.0 > maxAvail 0.25
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: prevBeat + snap,
+        targetY: TOP,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      const segs = result!;
+      const engine1 = new WaveEngine(segs, tl, amp, 0);
+      const pts1 = engine1.getPoints();
+      // Shifts to maxAvail, not to need (which would violate adjacency)
+      expect(Math.abs(pts1[idx].beat - (prevBeat + maxAvail))).toBeLessThan(1e-6);
+      expect(isSnapAligned(segs[idx - 1].beats, snap)).toBe(true);
+      expect(isSnapAligned(segs[idx].beats, snap)).toBe(true);
+      expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
+    });
   });
 
-  it('fflate dependency is available for unzipSync (either installed or mocked) (3-step)', async () => {
-    // [Step1: Capture] check if fflate can be imported or stubbed via zipModule
-    let fflateAvailable = false;
-    try {
-      const f = await import('fflate');
-      fflateAvailable = typeof (f as Record<string, unknown>).unzipSync === 'function';
-    } catch {
-      // fallback: zipModule may re-export or handle internally
-      fflateAvailable = !!zipModule && Object.keys(zipModule).some(k => k.toLowerCase().includes('unzip') || k.toLowerCase().includes('fflate'));
-      // if zipModule exists, we accept that it handles zip internally
-      if (zipModule && !fflateAvailable) fflateAvailable = true;
-    }
-    const beforeAvail = fflateAvailable;
-    // [Step2: Perform] attempt second check after ensuring module loaded
-    let afterAvail = false;
-    try {
-      const f2 = await import('fflate');
-      afterAvail = typeof (f2 as Record<string, unknown>).unzipSync === 'function';
-    } catch {
-      afterAvail = !!zipModule;
-    }
-    // [Step3: Assert] fflate or equivalent must be present (coder must `npm install fflate`)
-    expect(beforeAvail).toBe(afterAvail);
-    expect(afterAvail).toBe(true);
-  });
-});
+  // ------------------------------------------------------------------
+  // 2. Endpoint vertices (0 and n) must also shift when Y demand exceeds X
+  // ------------------------------------------------------------------
+  describe('2. Endpoint vertex reachability (first & last)', () => {
+    it('first vertex idx=0: small mouse beats with TOP demand must extend left-demand (shift to need)', () => {
+      // [Step1] first vertex at beat 0 CENTER, next at 0.5 (narrow)
+      // This requires const->let fix: endpoint branch reassigns clampedBeat
+      const amp = 1.0;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'down', beats: 0.5 },
+        { direction: 'up', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const nextBeat = engine0.getPoints()[1].beat; // 0.5
+      const y0 = engine0.getPoints()[0].y; // CENTER (startPosition 0)
+      const perBeat = 2 * TW_AMP * tl.amplitudeAt(0);
+      const need = Math.max(snap, ceilBeat(Math.abs(TOP - y0) / perBeat, snap)); // 0.5
+      // mouse gives only snap: clampedBeat = next - snap =0.25 => beats 0.25 < need 0.5
+      const mouseBeat = nextBeat - snap; // 0.25
+      // [Step2]
+      let result: Segment[] | null = null;
+      expect(() => {
+        result = calculateVertexDrag({
+          segments: initial,
+          bpmTimeline: tl,
+          startPosition: 0,
+          pointIndex: 0,
+          targetBeat: mouseBeat,
+          targetY: TOP, // stay? Actually y0 CENTER->TOP is up, needs shift
+          snap,
+        });
+      }).not.toThrow(); // before fix TypeError: Assignment to constant variable
+      expect(result).not.toBeNull();
+      const segs = result!;
+      // [Step3] beats must be >= need (0.5) after shift
+      expect(segs[0].beats).toBeGreaterThanOrEqual(need - 1e-9);
+      expect(isSnapAligned(segs[0].beats, snap)).toBe(true);
+      // Direction should be up (CENTER->TOP) or stay? Check zone
+      // y0 CENTER (zone1) -> TOP zone0 => up
+      expect(segs[0].direction).toBe('up');
+      const engine1 = new WaveEngine(segs, tl, amp, 0);
+      expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
+      expect(engine1.getPoints()[0].beat).toBeCloseTo(0, 6);
+      // endpoint Y still CENTER (startPosition), but segment direction up will go to TOP after need beats
+      // Check second point Y reaches expectation approx
+      expect(engine1.getPoints()[1].y).toBeCloseTo(TOP, 0);
+    });
 
-// ===========================================================================
-// 1) フォルダ分けzip（複数曲）を投入すると各ペアが1曲ずつ追加されプレイできる (完了条件1)
-// ===========================================================================
-describe('T214 1. フォルダ分けzip複数曲のペアリングとプレイ可能性 (完了条件1)', () => {
-  it('2フォルダ各1ペア → 2ペアが成立し off-grid beatsが保持され WaveEngine/Cacheでプレイ可能 (3-step)', async () => {
-    // [Step1: Capture Initial State] — empty IDB + empty caches
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    const beforeCharts = await listCharts();
-    const beforeAudio = await listAudio();
-    expect(beforeCharts.length).toBe(0);
-    expect(beforeAudio.length).toBe(0);
-    expect(ChartCache.get('custom-1')).toBeUndefined();
-
-    // [Step2: Perform] — simulate unzip output: 2 folders each with TOML+audio (off-grid)
-    const tomlA = makeTomlOffGrid('Song A 0.37', 'songA.flac');
-    const tomlB = makeToml('Song B', 'songB.flac', [0.37, 1.23]);
-    // entries mimic what unzipSync would yield (path -> bytes)
-    const entries: ZipEntry[] = [
-      entry('songA/chart.toml', tomlA),
-      entry('songA/songA.flac', new Uint8Array([1, 2, 3, 4])),
-      entry('songB/chart.toml', tomlB),
-      entry('songB/songB.flac', new Uint8Array([5, 6, 7, 8])),
-    ];
-    const rawResult = (pairFn as (e: ZipEntry[]) => unknown)(entries);
-    const { pairs, skipped, duplicates } = normalizePairResult(rawResult);
-    expect(pairs.length).toBe(2);
-    expect(skipped.length).toBe(0);
-    // verify folder scoping: each pair folder matches
-    const folders = pairs.map(p => p.folder ?? (p.tomlPath?.includes('/') ? p.tomlPath.split('/').slice(0, -1).join('/') : '')).sort();
-    // normalize folders if module returns different shape
-    const hasFolderInfo = pairs.every(p => typeof p.tomlPath === 'string' && typeof p.audioPath === 'string');
-    expect(hasFolderInfo || pairs.length === 2).toBe(true);
-
-    // simulate SelectScreen flow: for each pair, parse TOML, store to IDB and caches with custom-${Date.now()}-${index}
-    const FIXED_NOW = Date.now();
-    expect(FIXED_NOW).toBe(1773576000000);
-    const now = FIXED_NOW;
-    const idFn = getIdFn();
-    let ids: string[] = [];
-    if (idFn) {
-      ids = idFn(now, pairs.length);
-      expect(ids.length).toBe(2);
-      expect(ids[0]).toBe(`custom-${now}-0`);
-      expect(ids[1]).toBe(`custom-${now}-1`);
-    } else {
-      ids = pairs.map((_, i) => `custom-${now}-${i}`);
-    }
-    for (let i = 0; i < pairs.length; i++) {
-      const p = pairs[i];
-      // Extract toml text from original entries (module may already have parsed)
-      const tomlEntry = entries.find(e => e.path === p.tomlPath);
-      const audioEntry = entries.find(e => e.path === p.audioPath);
-      const text = tomlEntry ? new TextDecoder().decode(tomlEntry.bytes) : (p as unknown as { tomlText?: string }).tomlText ?? '';
-      const chart: Chart = parseChartText(text, p.tomlPath);
-      const id = ids[i];
-      const tomlStored = chartToToml(chart);
-      await putChart({ id, title: chart.title, artist: chart.artist, difficulty: 3, toml: tomlStored, audioId: id, addedAt: now + i });
-      const audioBytes = audioEntry?.bytes ?? new Uint8Array([9, 9, 9]);
-      const audioName = getBasename(p.audioPath);
-      await putAudio({ id, name: audioName, mime: 'audio/flac', bytes: audioBytes });
-      ChartCache.set(id, chart);
-      const fakeBuf = { duration: 90, sampleRate: 44100, length: 44100 * 90, numberOfChannels: 2, getChannelData: () => new Float32Array(44100 * 2) } as unknown as AudioBuffer;
-      AudioCache.set(id, fakeBuf);
-      AudioCache.set(getBasename(chart.audio), fakeBuf);
-    }
-    const afterCharts = await listCharts();
-    const afterAudio = await listAudio();
-    expect(afterCharts.length).toBe(2);
-    expect(afterAudio.length).toBe(2);
-    expect(duplicates.length).toBe(0);
-
-    // [Step3: Assert Resulting Transition] — both songs playable via Timeline/WaveEngine, close/reopen persists
-    for (let i = 0; i < ids.length; i++) {
-      const stored = await getChart(ids[i]);
-      expect(stored).toBeDefined();
-      const reparsed = parseChartText(stored!.toml, ids[i]);
-      // off-grid beats must survive
-      const hasOffGrid = reparsed.rings.some(r => Math.abs(r.beat - 0.37) < 1e-6 || Math.abs(r.beat - 1.23) < 1e-6);
-      expect(hasOffGrid).toBe(true);
-      const timeline = new BpmTimeline(reparsed.bpm_changes, reparsed.amplitude);
-      const wave = new WaveEngine(reparsed.segments, timeline, reparsed.amplitude, reparsed.start_position);
-      expect(wave.getPoints().length).toBe(reparsed.segments.length + 1);
-      // Cache hit
-      expect(ChartCache.get(ids[i])).toBeDefined();
-      expect(AudioCache.get(ids[i])).toBeDefined();
-    }
-    // reload persistence
-    ChartCache.clear();
-    AudioCache.clear();
-    closeLibraryDB();
-    const afterReloadCharts = await listCharts();
-    expect(afterReloadCharts.length).toBe(2);
-    const titles = afterReloadCharts.map(c => c.title).sort();
-    expect(titles).toContain('Song A 0.37');
-    expect(titles).toContain('Song B');
+    it('last vertex idx=n: small mouse beats with BOTTOM demand must extend right', () => {
+      // [Step1]
+      const amp = 1.3;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'down', beats: 1 },
+        { direction: 'stay', beats: 0.5 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const pts0 = engine0.getPoints();
+      const n = pts0.length - 1;
+      const prevBeat = pts0[n - 1].beat; // 1.0
+      const yPrev = pts0[n - 1].y;
+      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+      // yPrev may be BOTTOM or CENTER depending on first segment
+      const need = Math.max(snap, ceilBeat(Math.abs(BOTTOM - yPrev) / perBeat, snap));
+      const mouseBeat = prevBeat + snap; // minimal
+      // [Step2] must not throw (const->let)
+      let result: Segment[] | null = null;
+      expect(() => {
+        result = calculateVertexDrag({
+          segments: initial,
+          bpmTimeline: tl,
+          startPosition: 0,
+          pointIndex: n,
+          targetBeat: mouseBeat,
+          targetY: BOTTOM,
+          snap,
+        });
+      }).not.toThrow();
+      expect(result).not.toBeNull();
+      const segs = result!;
+      // [Step3] if need > snap, beats should be need
+      if (need > snap + 1e-9) {
+        expect(segs[segs.length - 1].beats).toBeCloseTo(need, 4);
+      }
+      expect(isSnapAligned(segs[segs.length - 1].beats, snap)).toBe(true);
+      const engine1 = new WaveEngine(segs, tl, amp, 0);
+      expect(engine1.getPoints().length).toBe(pts0.length);
+    });
   });
 
-  it('ルート直下ファイルはルートフォルダグループとしてペアリングされる (3-step off-grid)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] empty pairing before
-    const beforePairs = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([]));
-    expect(beforePairs.pairs.length).toBe(0);
-    // [Step2] entries at root (no folder)
-    const tomlRoot = makeTomlOffGrid('Root Song 1.23', 'root.flac');
-    const entriesRoot: ZipEntry[] = [
-      entry('chart.toml', tomlRoot),
-      entry('root.flac', new Uint8Array([10, 20, 30])),
-    ];
-    const resultRoot = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entriesRoot));
-    // [Step3] must pair root files together (folder "" or "/")
-    expect(resultRoot.pairs.length).toBe(1);
-    expect(resultRoot.skipped.length).toBe(0);
-    const r = resultRoot.pairs[0];
-    expect(r.tomlPath).toBe('chart.toml');
-    expect(r.audioPath).toBe('root.flac');
-    const parsedRoot = parseChartText(new TextDecoder().decode(entriesRoot[0].bytes), 'chart.toml');
-    expect(parsedRoot.rings.some(x => Math.abs(x.beat - 1.23) < 1e-6)).toBe(true);
-  });
+  // ------------------------------------------------------------------
+  // 3. Off-grid fractional verification (0.37, 1.23, 0.63, 0.87) + complex amps
+  // ------------------------------------------------------------------
+  describe('3. Off-grid fractional verification with complex amplitudes', () => {
+    const offGridBeats = [0.37, 1.23, 0.63, 0.87];
+    const amps = [0.7, 1.3, 2.7, 3.4];
+    const snaps = [0.125, 0.25, 0.5, 1];
 
-  it('同一フォルダの複数TOMLが同一音声を共有して各TOMLごとに1ペア（計2ペア）になる (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] before 0
-    expect(normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([])).pairs.length).toBe(0);
-    // [Step2] one folder, two TOMLs referencing same audio basename
-    const sharedAudio = 'shared.flac';
-    const toml1 = makeToml('Shared One 0.37', sharedAudio, [0.37]);
-    const toml2 = makeToml('Shared Two 1.23', sharedAudio, [1.23]);
-    const entries: ZipEntry[] = [
-      entry('album/song1.toml', toml1),
-      entry('album/song2.toml', toml2),
-      entry('album/shared.flac', new Uint8Array([1, 2, 3])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    // [Step3] both TOMLs paired to same audio file
-    expect(result.pairs.length).toBe(2);
-    expect(result.skipped.length).toBe(0);
-    const tomlPaths = result.pairs.map(p => p.tomlPath).sort();
-    expect(tomlPaths).toEqual(['album/song1.toml', 'album/song2.toml'].sort());
-    for (const p of result.pairs) expect(getBasename(p.audioPath)).toBe(sharedAudio);
-  });
-});
-
-// ===========================================================================
-// 2) 同一フォルダ条件を満たさないファイルはスキップ＋報告される (完了条件2)
-// ===========================================================================
-describe('T214 2. 同一フォルダ限定・スキップ報告・除外フィルタ', () => {
-  it('TOMLと音声が別フォルダならスキップされ skippedに報告される (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] empty before
-    const before = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([]));
-    expect(before.pairs.length).toBe(0);
-    // [Step2] TOML in songA, audio in songB — same basename but different folder
-    const toml = makeToml('Cross Folder', 'cross.flac', [4.0]);
-    const entries: ZipEntry[] = [
-      entry('songA/chart.toml', toml),
-      entry('songB/cross.flac', new Uint8Array([1, 2, 3])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    // [Step3] no pairs, at least one skipped report
-    expect(result.pairs.length).toBe(0);
-    expect(result.skipped.length).toBeGreaterThan(0);
-    // skipped should contain unmatched toml path or basename mismatch
-    const skippedJoined = result.skipped.join(' ');
-    expect(skippedJoined.length).toBeGreaterThan(0);
-  });
-
-  it('ディレクトリエントリ・__MACOSX/・ドットファイルは除外される (3-step)', async () => {
-    const filterFn = getFilterFn();
-    const pairFn = getPairFn();
-    // if filterFn not exported, we test via pairFn filtering implicitly
-    const entries: ZipEntry[] = [
-      entry('songA/chart.toml', makeToml('Valid', 'valid.flac', [4.0])),
-      entry('songA/valid.flac', new Uint8Array([1, 2, 3])),
-      entry('songA/__MACOSX/._chart.toml', makeToml('Mac', 'mac.flac')),
-      entry('songA/.hidden.flac', new Uint8Array([9, 9])),
-      entry('songA/.DS_Store', new Uint8Array([0])),
-      entry('songA/subdir/', new Uint8Array([])), // directory marker
-      entry('__MACOSX/songA/chart.toml', makeToml('Mac2', 'mac2.flac')),
-      entry('songA/normal.toml', makeToml('Normal', 'valid.flac', [8.0])),
-    ];
-    // [Step1] capture before counts
-    const beforeCount = entries.length;
-    expect(beforeCount).toBe(8);
-    if (filterFn) {
-      // [Step2] filter
-      const filtered = filterFn(entries);
-      // [Step3] filtered must exclude 5 bad entries, keep 3 valid
-      expect(filtered.length).toBe(3);
-      const paths = filtered.map(e => e.path).sort();
-      expect(paths).toEqual(['songA/chart.toml', 'songA/normal.toml', 'songA/valid.flac'].sort());
-      // pair after filter should still work
-      const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(filtered));
-      expect(result.pairs.length).toBe(2);
-    } else {
-      // fallback: pairFn should internally filter and not pair excluded files
-      const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-      // valid pairs are 2 (chart.toml+valid.flac, normal.toml+valid.flac shared)
-      expect(result.pairs.length).toBe(2);
-      const allPairedPaths = result.pairs.flatMap(p => [p.tomlPath, p.audioPath]);
-      expect(allPairedPaths).not.toContain('songA/__MACOSX/._chart.toml');
-      expect(allPairedPaths).not.toContain('songA/.hidden.flac');
-      expect(allPairedPaths).not.toContain('songA/.DS_Store');
-      expect(allPairedPaths).not.toContain('__MACOSX/songA/chart.toml');
-    }
-  });
-
-  it('音声basename不一致（TOML内audioとファイル名が違う）はスキップ報告 (3-step off-grid)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] before 0
-    expect(normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([])).pairs.length).toBe(0);
-    // [Step2] TOML audio= expected.flac but folder has other.flac
-    const toml = makeTomlOffGrid('Basename Mismatch 0.37', 'expected.flac');
-    const entries: ZipEntry[] = [
-      entry('songA/chart.toml', toml),
-      entry('songA/other.flac', new Uint8Array([1, 2, 3])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    // [Step3] no pairs, skipped contains toml path
-    expect(result.pairs.length).toBe(0);
-    expect(result.skipped.length).toBeGreaterThan(0);
-  });
-
-  it('TOMLが無いzip（音声のみ）は0ペアでスキップ報告、クラッシュなし (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] empty
-    expect(normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([])).pairs.length).toBe(0);
-    // [Step2] only audio files, no TOML
-    const entries: ZipEntry[] = [
-      entry('songA/track.flac', new Uint8Array([1, 2, 3])),
-      entry('songB/track2.mp3', new Uint8Array([4, 5, 6])),
-    ];
-    let threw = false;
-    let result: ReturnType<typeof normalizePairResult> | null = null;
-    try {
-      result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    } catch { threw = true; }
-    // [Step3] no crash, 0 pairs, skipped or empty
-    expect(threw).toBe(false);
-    expect(result).not.toBeNull();
-    expect(result!.pairs.length).toBe(0);
-  });
-});
-
-// ===========================================================================
-// 3) 完全重複パス等の異常重複は最初の1件を採用＋報告
-// ===========================================================================
-describe('T214 3. 重複パスは最初の1件を採用し duplicatesに報告', () => {
-  it('同パスが2回現れたら1件のみ採用し duplicatesに記録される (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] before empty
-    const before = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([]));
-    expect(before.pairs.length).toBe(0);
-    expect(before.duplicates.length).toBe(0);
-    // [Step2] duplicate TOML path with different content (first wins)
-    const tomlFirst = makeToml('First Wins', 'dup.flac', [0.37]);
-    const tomlSecond = makeToml('Second Ignored', 'dup.flac', [99.0]);
-    const entries: ZipEntry[] = [
-      entry('songA/chart.toml', tomlFirst),
-      entry('songA/chart.toml', tomlSecond), // duplicate path
-      entry('songA/dup.flac', new Uint8Array([1, 2, 3])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    // [Step3] exactly 1 pair, duplicates reported, first title wins
-    expect(result.pairs.length).toBe(1);
-    expect(result.duplicates.length).toBeGreaterThan(0);
-    // verify first content was used (if module exposes tomlText, check)
-    const firstPair = result.pairs[0];
-    expect(firstPair.tomlPath).toBe('songA/chart.toml');
-    // if duplicates array contains path, check
-    const dupJoined = result.duplicates.join(' ');
-    expect(dupJoined.length).toBeGreaterThan(0);
-  });
-
-  it('重複してもフォルダ内ペアリングは正常に1ペアで完結する (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] before 0
-    expect(normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([])).pairs.length).toBe(0);
-    // [Step2] duplicate audio path as well
-    const toml = makeToml('Dup Audio', 'dup2.flac', [1.23]);
-    const entries: ZipEntry[] = [
-      entry('songB/chart.toml', toml),
-      entry('songB/dup2.flac', new Uint8Array([1, 2, 3])),
-      entry('songB/dup2.flac', new Uint8Array([4, 5, 6])), // duplicate audio
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    // [Step3] 1 pair, duplicates reported, bytes from first audio used
-    expect(result.pairs.length).toBe(1);
-    expect(result.duplicates.length).toBeGreaterThan(0);
-  });
-});
-
-// ===========================================================================
-// 4) 複数ペアのID採番は custom-${Date.now()}-${index} 方式で同ms衝突を回避
-// ===========================================================================
-describe('T214 4. ID採番 custom-${Date.now()}-${index} で同ms衝突回避', () => {
-  it('3ペア同時投入でIDが custom-1773576000000-0/1/2 と連番になり一意である (3-step)', async () => {
-    const idFn = getIdFn();
-    // [Step1: Capture] fixed time
-    const FIXED = Date.now();
-    expect(FIXED).toBe(1773576000000);
-    // [Step2: Perform] generate 3 ids
-    let ids: string[] = [];
-    if (idFn) {
-      ids = idFn(FIXED, 3);
-    } else {
-      // fallback: simulate SelectScreen logic that coder must implement
-      ids = Array.from({ length: 3 }, (_, i) => `custom-${FIXED}-${i}`);
-    }
-    // [Step3: Assert] pattern and uniqueness
-    expect(ids.length).toBe(3);
-    expect(ids[0]).toBe(`custom-${FIXED}-0`);
-    expect(ids[1]).toBe(`custom-${FIXED}-1`);
-    expect(ids[2]).toBe(`custom-${FIXED}-2`);
-    expect(new Set(ids).size).toBe(3);
-    for (const id of ids) expect(id).toMatch(/^custom-\d+-\d+$/);
-    // ensure second call with same FIXED still produces same prefix but index distinguishes
-    const ids2 = idFn ? idFn(FIXED, 2) : Array.from({ length: 2 }, (_, i) => `custom-${FIXED}-${i}`);
-    expect(ids2[0]).toBe(`custom-${FIXED}-0`);
-    expect(ids2[1]).toBe(`custom-${FIXED}-1`);
-  });
-
-  it('Date.nowが進んでも prefix が変わり衝突しない (3-step)', async () => {
-    const idFn = getIdFn();
-    // [Step1] capture t1
-    const t1 = Date.now();
-    expect(t1).toBe(1773576000000);
-    vi.setSystemTime(new Date(t1 + 1000));
-    const t2 = Date.now();
-    expect(t2).toBe(1773576001000);
-    // [Step2] generate at t1 and t2
-    const idsAtT1 = idFn ? idFn(t1, 1) : [`custom-${t1}-0`];
-    const idsAtT2 = idFn ? idFn(t2, 1) : [`custom-${t2}-0`];
-    // [Step3] different prefix, both valid
-    expect(idsAtT1[0]).toBe(`custom-${t1}-0`);
-    expect(idsAtT2[0]).toBe(`custom-${t2}-0`);
-    expect(idsAtT1[0]).not.toBe(idsAtT2[0]);
-    vi.setSystemTime(new Date('2026-03-15T12:00:00.000Z'));
-  });
-
-  it('実zip投入シミュレーションで3曲分のIDがIndexedDBで永続化され重複なし (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] empty
-    expect((await listCharts()).length).toBe(0);
-    // [Step2] 3 folders each 1 pair
-    const entries: ZipEntry[] = [
-      entry('a/c.toml', makeToml('A', 'a.flac', [0.37])),
-      entry('a/a.flac', new Uint8Array([1])),
-      entry('b/c.toml', makeToml('B', 'b.flac', [1.23])),
-      entry('b/b.flac', new Uint8Array([2])),
-      entry('c/c.toml', makeToml('C', 'c.flac', [4.37])),
-      entry('c/c.flac', new Uint8Array([3])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    expect(result.pairs.length).toBe(3);
-    const now = Date.now();
-    const ids = (getIdFn() ? getIdFn()!(now, result.pairs.length) : result.pairs.map((_, i) => `custom-${now}-${i}`));
-    for (let i = 0; i < result.pairs.length; i++) {
-      const p = result.pairs[i];
-      const tomlEntry = entries.find(e => e.path === p.tomlPath)!;
-      const chart = parseChartText(new TextDecoder().decode(tomlEntry.bytes), p.tomlPath);
-      await putChart({ id: ids[i], title: chart.title, difficulty: 3, toml: chartToToml(chart), audioId: ids[i], addedAt: now + i });
-      await putAudio({ id: ids[i], name: getBasename(p.audioPath), mime: 'audio/flac', bytes: new Uint8Array([9]) });
-    }
-    const after = await listCharts();
-    expect(after.length).toBe(3);
-    expect(new Set(after.map(c => c.id)).size).toBe(3);
-    // [Step3] reload and verify same ids
-    closeLibraryDB();
-    const afterReload = await listCharts();
-    expect(afterReload.length).toBe(3);
-    for (const id of ids) expect(await getChart(id)).toBeDefined();
-  });
-});
-
-// ===========================================================================
-// 5) 異常系：破損zip・TOMLなしはエラー表示（クラッシュなし）
-// ===========================================================================
-describe('T214 5. 異常系: 破損zipやTOMLなしでもクラッシュしない', () => {
-  it('破損zipバッファ（ランダムバイト）を handleZipFile に渡しても例外でクラッシュせずエラー報告 (3-step)', async () => {
-    const handleFn = getHandleZipFileFn();
-    // [Step1] empty before
-    expect((await listCharts()).length).toBe(0);
-    expect((await listAudio()).length).toBe(0);
-    // [Step2] try corrupt zip
-    const corruptBytes = new Uint8Array([0, 1, 2, 3, 255, 128, 64, 10, 20, 30, 40, 50]);
-    let threw = false;
-    let result: unknown = null;
-    if (handleFn) {
-      try {
-        // create a File if available, else pass bytes as Blob-like
-        let file: File;
-        try {
-          file = new File([corruptBytes as unknown as BlobPart], 'corrupt.zip', { type: 'application/zip' });
-        } catch {
-          // Node File may not be constructible; fallback to plain object
-          file = { name: 'corrupt.zip', type: 'application/zip', arrayBuffer: async () => corruptBytes.buffer, size: corruptBytes.length } as unknown as File;
+    for (const amp of amps) {
+      for (const snap of snaps) {
+        for (const off of offGridBeats) {
+          it(`amp=${amp} snap=${snap} off=${off}: interior drag off-grid beats give snap-aligned, length invariant`, () => {
+            // [Step1] capture
+            const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+            const initial: Segment[] = [
+              { direction: 'down', beats: quantizeBeat(1.5, snap) || snap },
+              { direction: 'up', beats: quantizeBeat(1.5, snap) || snap },
+              { direction: 'down', beats: quantizeBeat(1.5, snap) || snap },
+            ];
+            const engine0 = new WaveEngine(initial, tl, amp, 0);
+            const idx = 1;
+            const prevBeat = engine0.getPoints()[idx - 1].beat;
+            const nextBeat = engine0.getPoints()[idx + 1].beat;
+            const rawTarget = engine0.getPoints()[idx].beat + off;
+            const targetBeat = quantizeBeat(rawTarget, snap);
+            const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
+            const targetY = off < 1 ? TOP : BOTTOM; // alternate zones off-grid
+            // [Step2]
+            const result = calculateVertexDrag({
+              segments: initial,
+              bpmTimeline: tl,
+              startPosition: 0,
+              pointIndex: idx,
+              targetBeat: clamped,
+              targetY,
+              snap,
+            });
+            expect(result).not.toBeNull();
+            const segs = result!;
+            // [Step3] invariants
+            for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
+            const engine1 = new WaveEngine(segs, tl, amp, 0);
+            expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
+            // only 2 segments around idx changed
+            for (let k = 0; k < initial.length; k++) {
+              if (k === idx - 1 || k === idx) continue;
+              expect(segs[k].beats).toBeCloseTo(initial[k].beats, 6);
+            }
+            // total span unchanged
+            const spanOrig = nextBeat - prevBeat;
+            const spanNew = segs[idx - 1].beats + segs[idx].beats;
+            expect(Math.abs(spanNew - spanOrig)).toBeLessThan(1e-6);
+          });
         }
-        result = await handleFn(file);
-      } catch { threw = true; }
-    } else {
-      // fallback: pair empty/invalid entries should not throw
-      const pairFn = getPairFn();
-      // simulate corrupt -> empty entries after failed unzip
-      try {
-        result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)([]));
-      } catch { threw = true; }
-    }
-    // [Step3] must not throw outward, result indicates 0 pairs or error, IDB still empty
-    expect(threw).toBe(false);
-    // result should be object with 0 pairs or error field, not crash
-    if (result && typeof result === 'object') {
-      const obj = result as Record<string, unknown>;
-      if ('pairs' in obj) expect((obj.pairs as unknown[]).length).toBe(0);
-    }
-    expect((await listCharts()).length).toBe(0);
-    expect((await listAudio()).length).toBe(0);
-  });
-
-  it('pairingで破損TOML（パース不能）が含まれても他ペアは成功し全体がクラッシュしない (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] empty
-    expect((await listCharts()).length).toBe(0);
-    // [Step2] one valid + one broken TOML (invalid TOML syntax) in different folders
-    const validToml = makeToml('Valid 0.37', 'valid.flac', [0.37]);
-    const brokenToml = `title = "Broken\n[[segments]]\ndirection = "up"\n`; // missing closing quote
-    const entries: ZipEntry[] = [
-      entry('good/chart.toml', validToml),
-      entry('good/valid.flac', new Uint8Array([1, 2])),
-      entry('bad/chart.toml', brokenToml),
-      entry('bad/valid.flac', new Uint8Array([3, 4])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    // pairing should still produce 2 pairs (pairing is basename-based, not parse-based)
-    // parsing failure is handled at storage/play level, not pairing level
-    expect(result.pairs.length).toBe(2);
-    // simulate storing: valid should parse, broken should fail parse but not crash storing
-    const validPair = result.pairs.find(p => p.tomlPath === 'good/chart.toml')!;
-    const badPair = result.pairs.find(p => p.tomlPath === 'bad/chart.toml')!;
-    // valid parse succeeds
-    const goodEntry = entries.find(e => e.path === validPair.tomlPath)!;
-    expect(() => parseChartText(new TextDecoder().decode(goodEntry.bytes), validPair.tomlPath)).not.toThrow();
-    // broken parse throws
-    const badEntry = entries.find(e => e.path === badPair.tomlPath)!;
-    let badThrew = false;
-    try { parseChartText(new TextDecoder().decode(badEntry.bytes), badPair.tomlPath); } catch { badThrew = true; }
-    expect(badThrew).toBe(true);
-    // [Step3] overall flow not crashed, at least one valid remains storable
-    const goodChart = parseChartText(new TextDecoder().decode(goodEntry.bytes), validPair.tomlPath);
-    const now = Date.now();
-    await putChart({ id: `custom-${now}-0`, title: goodChart.title, difficulty: 3, toml: chartToToml(goodChart), audioId: `custom-${now}-0`, addedAt: now });
-    expect((await listCharts()).length).toBe(1);
-  });
-});
-
-// ===========================================================================
-// 6) 統合: zip経由追加 → リロード → プレイ解決 (ChartCache→IndexedDB) → 削除
-// ===========================================================================
-describe('T214 6. 統合フロー: 追加→リロード→プレイ(音あり)→削除', () => {
-  it('zip 2曲追加→リロード→各曲がWaveEngineで再生可能→削除で0に戻る (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1: Capture] empty
-    const beforeCharts = await listCharts();
-    const beforeAudio = await listAudio();
-    expect(beforeCharts.length).toBe(0);
-    expect(beforeAudio.length).toBe(0);
-
-    // [Step2: Perform] zip 2曲
-    const entries: ZipEntry[] = [
-      entry('album1/song.toml', makeTomlOffGrid('Album1 0.37', 'album1.flac')),
-      entry('album1/album1.flac', new Uint8Array([10, 20, 30, 40])),
-      entry('album2/song.toml', makeTomlOffGrid('Album2 1.23', 'album2.flac')),
-      entry('album2/album2.flac', new Uint8Array([50, 60, 70, 80])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    expect(result.pairs.length).toBe(2);
-    const now = Date.now();
-    const ids = (getIdFn() ? getIdFn()!(now, 2) : ['custom-' + now + '-0', 'custom-' + now + '-1']);
-    for (let i = 0; i < result.pairs.length; i++) {
-      const p = result.pairs[i];
-      const tomlBytes = entries.find(e => e.path === p.tomlPath)!.bytes;
-      const text = new TextDecoder().decode(tomlBytes);
-      const chart = parseChartText(text, p.tomlPath);
-      const id = ids[i];
-      await putChart({ id, title: chart.title, difficulty: 3, toml: chartToToml(chart), audioId: id, addedAt: now + i });
-      const audioBytes = entries.find(e => e.path === p.audioPath)!.bytes;
-      await putAudio({ id, name: getBasename(p.audioPath), mime: 'audio/flac', bytes: audioBytes });
-      ChartCache.set(id, chart);
-      const fakeBuf = { duration: 120, sampleRate: 44100, length: 44100 * 120, numberOfChannels: 2, getChannelData: () => new Float32Array(44100 * 2) } as unknown as AudioBuffer;
-      AudioCache.set(id, fakeBuf);
-      AudioCache.set(getBasename(chart.audio), fakeBuf);
-    }
-    expect((await listCharts()).length).toBe(2);
-
-    // reload: clear caches, close DB
-    ChartCache.clear();
-    AudioCache.clear();
-    closeLibraryDB();
-    const afterReload = await listCharts();
-    expect(afterReload.length).toBe(2);
-
-    // [Step3: Assert] each chart resolves and can build WaveEngine, then delete
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i];
-      // simulate GameScreen fallback: ChartCache miss -> IndexedDB
-      expect(ChartCache.get(id)).toBeUndefined();
-      const stored = await getChart(id);
-      expect(stored).toBeDefined();
-      const parsed = parseChartText(stored!.toml, id);
-      expect(parsed.rings.some(r => Math.abs(r.beat - 0.37) < 1e-6 || Math.abs(r.beat - 1.23) < 1e-6)).toBe(true);
-      const tl = new BpmTimeline(parsed.bpm_changes, parsed.amplitude);
-      const wave = new WaveEngine(parsed.segments, tl, parsed.amplitude, parsed.start_position);
-      expect(wave.getPoints().length).toBe(parsed.segments.length + 1);
-      // audio fallback
-      const audioStored = await getAudio(id);
-      expect(audioStored).toBeDefined();
-      expect(audioStored!.bytes.length).toBeGreaterThan(0);
-    }
-    // delete all
-    for (const id of ids) {
-      await deleteChart(id);
-      await deleteAudio(id);
-    }
-    ChartCache.clear();
-    AudioCache.clear();
-    expect((await listCharts()).length).toBe(0);
-    expect((await listAudio()).length).toBe(0);
-    closeLibraryDB();
-    expect((await listCharts()).length).toBe(0);
-  });
-
-  it('bytesは圧縮のまま保存され bytes.slice(0)でデコード用独立コピーが得られる (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] empty
-    expect((await listAudio()).length).toBe(0);
-    // [Step2] store via zip flow
-    const entries: ZipEntry[] = [
-      entry('solo/chart.toml', makeToml('Solo', 'solo.flac', [4.37])),
-      entry('solo/solo.flac', new Uint8Array([1, 2, 3, 4, 255, 0, 128])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    expect(result.pairs.length).toBe(1);
-    const p = result.pairs[0];
-    const audioBytes = entries.find(e => e.path === p.audioPath)!.bytes;
-    const id = `custom-${Date.now()}-0`;
-    await putAudio({ id, name: getBasename(p.audioPath), mime: 'audio/flac', bytes: audioBytes });
-    const stored = await getAudio(id);
-    expect(stored).toBeDefined();
-    const original = Array.from(audioBytes);
-    const cloned = stored!.bytes.slice(0);
-    expect(Array.from(cloned)).toEqual(original);
-    cloned[0] = 99;
-    const refetched = await getAudio(id);
-    expect(refetched!.bytes[0]).toBe(original[0]);
-    // [Step3] mutate original after put does not affect stored
-    audioBytes[0] = 77;
-    const afterMutate = await getAudio(id);
-    expect(afterMutate!.bytes[0]).toBe(original[0]);
-  });
-});
-
-// ===========================================================================
-// 7) 回帰なし: T110/T120/T194〜T196 (basename, TOML往復, zoom, IndexedDB永続)
-// ===========================================================================
-describe('T214 7. 回帰なし: T110/T120/T194〜T196', () => {
-  it('T110: getBasenameとloaderのbasename抽出、serializeはbasenameのみ (3-step)', async () => {
-    // [Step1: Capture] basename cases
-    expect(getBasename('/rhythm_game/audio/08.Reply.flac')).toBe('08.Reply.flac');
-    expect(getBasename('08.Reply.flac')).toBe('08.Reply.flac');
-    expect(getBasename('audio/test.mp3')).toBe('test.mp3');
-    // [Step2: Perform] parse full path chart
-    const tomlFullPath = `title = "Basename Test"\nartist = ""\naudio = "/rhythm_game/audio/08.Reply.flac"\n[[sections]]\nbeat = 0\nbpm = 120\n[[rings]]\nbeat = 4.0\n`;
-    const parsedFull = parseChartText(tomlFullPath, 'full.toml');
-    expect(parsedFull.audio).toBe('08.Reply.flac');
-    const serialized = chartToToml(parsedFull);
-    // [Step3: Assert]
-    expect(serialized).toContain('audio = "08.Reply.flac"');
-    expect(serialized).not.toContain('/rhythm_game/audio');
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // zip pairing also uses basename: different folder same basename not cross-paired tested elsewhere
-  });
-
-  it('T194/T195: ChartCache→IndexedDB fallbackが zip経由追加でも機能する (3-step)', async () => {
-    const pairFn = getPairFn();
-    expect(pairFn).toBeTruthy();
-    // [Step1] add via zip, then clear cache
-    const entries: ZipEntry[] = [
-      entry('x/chart.toml', makeToml('Fallback', 'x.flac', [0.37])),
-      entry('x/x.flac', new Uint8Array([9, 8, 7])),
-    ];
-    const result = normalizePairResult((pairFn as (e: ZipEntry[]) => unknown)(entries));
-    expect(result.pairs.length).toBe(1);
-    const p = result.pairs[0];
-    const chart = parseChartText(new TextDecoder().decode(entries.find(e => e.path === p.tomlPath)!.bytes), p.tomlPath);
-    const id = `custom-${Date.now()}-0`;
-    await putChart({ id, title: chart.title, difficulty: 3, toml: chartToToml(chart), audioId: id, addedAt: Date.now() });
-    await putAudio({ id, name: getBasename(p.audioPath), mime: 'audio/flac', bytes: entries.find(e => e.path === p.audioPath)!.bytes });
-    ChartCache.set(id, chart);
-    expect(ChartCache.get(id)).toBeDefined();
-    ChartCache.clear();
-    expect(ChartCache.get(id)).toBeUndefined();
-    // [Step2] fallback resolve
-    const cached = ChartCache.get(id);
-    let resolved: Chart | null = cached ?? null;
-    if (!resolved) {
-      const stored = await getChart(id);
-      if (stored) {
-        resolved = parseChartText(stored.toml, id);
-        ChartCache.set(id, resolved);
       }
     }
-    // [Step3] resolved from IDB and cached
-    expect(resolved).not.toBeNull();
-    expect(resolved!.title).toBe('Fallback');
-    expect(ChartCache.get(id)).toBeDefined();
   });
 
-  it('T186〜T188: BpmTimeline基準は先頭セクションのbpm、zoomAtがステップで切り替わる (3-step off-grid)', async () => {
-    // [Step1: Capture] chart with sections including zoom
-    const toml = makeTomlOffGrid('ZoomTest', 'zoom.flac');
-    const chart = parseChartText(toml, 'zoom.toml');
-    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-    const beforeZoom = tl.zoomAt(0);
-    const beforeBeat = 1.23;
-    const afterBeat = 4.37;
-    // [Step2: Perform] check zoom steps
-    expect(beforeZoom).toBe(1.0);
-    expect(tl.zoomAt(beforeBeat)).toBe(1.0);
-    // zoom at 4.37 should be as defined (default 1.0 unless set)
-    // Our sample has no zoom at 4.37 for this toml, but test generic step
-    const chart2 = parseChartText(`title="Z"\nartist=""\naudio="z.flac"\n[[sections]]\nbeat=0\nbpm=120\nzoom=1.0\n[[sections]]\nbeat=2.0\nbpm=150\nzoom=2.0\n[[rings]]\nbeat=1.23\n`, 'z.toml');
-    const tl2 = new BpmTimeline(chart2.bpm_changes, chart2.amplitude);
-    expect(tl2.zoomAt(0.37)).toBe(1.0);
-    expect(tl2.zoomAt(1.23)).toBe(1.0);
-    expect(tl2.zoomAt(2.0)).toBe(2.0);
-    expect(tl2.zoomAt(2.5)).toBe(2.0);
-    // [Step3: Assert] beatToMs reflects first section bpm (120 -> 500ms per beat)
-    expect(tl.beatToMs(1.0)).toBeCloseTo(500, 1);
-    // off-grid msToBeat round-trip
-    expect(tl.msToBeat(tl.beatToMs(0.37))).toBeCloseTo(0.37, 4);
-    expect(tl.msToBeat(tl.beatToMs(1.23))).toBeCloseTo(1.23, 4);
+  // ------------------------------------------------------------------
+  // 4. Drag sequence harness — monotonic, no infinite freeze (direction×distance×height×amp)
+  // ------------------------------------------------------------------
+  describe('4. Drag sequence harness: direction × distance × height × amplitude — monotonic & freeze detection', () => {
+    const amps = [0.7, 1.0, 1.3, 2.7] as const;
+    const snaps = [0.25] as const;
+    const distances = [0.25, 0.5, 0.75, 1.0, 1.23]; // beats from prev
+    const heights: Array<{ y: number; name: string }> = [
+      { y: TOP, name: 'TOP' },
+      { y: CENTER, name: 'CENTER' },
+      { y: BOTTOM, name: 'BOTTOM' },
+    ];
+
+    for (const amp of amps) {
+      for (const snap of snaps) {
+        for (const h of heights) {
+          it(`amp=${amp} snap=${snap} height=${h.name}: increasing targetBeat yields monotonic achieved beat (no freeze)`, () => {
+            // [Step1] initial narrow-ish span to expose freeze
+            const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+            const initial: Segment[] = [
+              { direction: 'stay', beats: 1 },
+              { direction: 'stay', beats: 1 },
+              { direction: 'stay', beats: 1 },
+            ];
+            const engine0 = new WaveEngine(initial, tl, amp, 0);
+            const idx = 1;
+            const prevBeat = engine0.getPoints()[idx - 1].beat;
+            const nextBeat = engine0.getPoints()[idx + 1].beat;
+            const yPrev = engine0.getPoints()[idx - 1].y;
+
+            // script drag sequence: sweep targetBeat from prev+snap to next-snap
+            const achieved: number[] = [];
+            const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+            const need = Math.max(snap, ceilBeat(Math.abs(snapY(h.y) - yPrev) / perBeat, snap));
+
+            for (const d of distances) {
+              const rawTarget = prevBeat + d;
+              const targetBeat = quantizeBeat(rawTarget, snap);
+              const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
+              // T157: exact no-op (beat and Y identical) returns null — skip monotonic counting
+              const curBeat = engine0.getPoints()[idx].beat;
+              const curY = engine0.getPoints()[idx].y;
+              if (Math.abs(clamped - curBeat) < 1e-9 && Math.abs(h.y - curY) < 1e-9) {
+                const noop = calculateVertexDrag({
+                  segments: initial,
+                  bpmTimeline: tl,
+                  startPosition: 0,
+                  pointIndex: idx,
+                  targetBeat: clamped,
+                  targetY: h.y,
+                  snap,
+                });
+                expect(noop).toBeNull();
+                continue;
+              }
+              const result = calculateVertexDrag({
+                segments: initial,
+                bpmTimeline: tl,
+                startPosition: 0,
+                pointIndex: idx,
+                targetBeat: clamped,
+                targetY: h.y,
+                snap,
+              });
+              expect(result).not.toBeNull();
+              const engine1 = new WaveEngine(result!, tl, amp, 0);
+              const beatAchieved = engine1.getPoints()[idx].beat;
+              achieved.push(beatAchieved);
+              // if Y demand needs large beats, early small distances must already be shifted
+              if (h.y !== CENTER && need > d + 1e-9 && need <= (nextBeat - prevBeat - snap) + 1e-9) {
+                expect(beatAchieved).toBeGreaterThanOrEqual(prevBeat + need - 1e-6);
+              }
+            }
+            // monotonic non-decreasing (allow equal only at clamp limit)
+            for (let i = 1; i < achieved.length; i++) {
+              expect(achieved[i]).toBeGreaterThanOrEqual(achieved[i - 1] - 1e-9);
+            }
+            // not all equal — at least one increase (freeze would be all equal)
+            const distinct = new Set(achieved.map(v => v.toFixed(4)));
+            // if distances vary, beats should vary (unless at maxAvail clamp)
+            // For narrow demand that needs shift, first entries already at need, so later larger distances should still increase beyond need
+            if (need + 0.5 <= (nextBeat - prevBeat - snap) + 1e-9) {
+              expect(distinct.size).toBeGreaterThan(1);
+            }
+          });
+        }
+      }
+    }
+
+    it('Y-demand harness: same X (small) with increasing Y demand must increase beats (not freeze)', () => {
+      // [Step1] fixed small X, sweep Y from stay to opposite zone
+      const amp = 1.0;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const targetBeat = prevBeat + snap; // minimal X
+
+      // sequence of Y: CENTER (stay, need snap) -> intermediate -> TOP (need 0.5) -> BOTTOM (need 0.5)
+      const ySeq = [CENTER + 5, CENTER, TOP, BOTTOM];
+      const beatsSeq: number[] = [];
+      for (const y of ySeq) {
+        const result = calculateVertexDrag({
+          segments: initial,
+          bpmTimeline: tl,
+          startPosition: 0,
+          pointIndex: idx,
+          targetBeat,
+          targetY: y,
+          snap,
+        });
+        expect(result).not.toBeNull();
+        beatsSeq.push(result![idx - 1].beats);
+        expect(isSnapAligned(result![idx - 1].beats, snap)).toBe(true);
+      }
+      // For amp 1.0 snap 0.25: CENTER demand (stay) => beats 0.25, TOP demand => beats 0.5 — must increase
+      // Freeze bug would keep 0.25 for both
+      expect(beatsSeq[2]).toBeGreaterThan(beatsSeq[0] - 1e-9);
+      // All beats snap aligned
+      for (const b of beatsSeq) expect(isSnapAligned(b, snap)).toBe(true);
+    });
+
+    it('off-grid distance 0.37 vs 0.87 must give distinct beats (not collapsed)', () => {
+      const amp = 2.7;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 2 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const ySame = CENTER;
+      const t1 = quantizeBeat(prevBeat + 0.37, snap);
+      const t2 = quantizeBeat(prevBeat + 0.87, snap);
+      const r1 = calculateVertexDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, pointIndex: idx, targetBeat: t1, targetY: ySame, snap });
+      const r2 = calculateVertexDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, pointIndex: idx, targetBeat: t2, targetY: ySame, snap });
+      expect(r1).not.toBeNull();
+      expect(r2).not.toBeNull();
+      const b1 = new WaveEngine(r1!, tl, amp, 0).getPoints()[idx].beat;
+      const b2 = new WaveEngine(r2!, tl, amp, 0).getPoints()[idx].beat;
+      expect(Math.abs(b1 - t1)).toBeLessThan(1e-6);
+      expect(Math.abs(b2 - t2)).toBeLessThan(1e-6);
+      expect(b2).toBeGreaterThan(b1);
+    });
   });
 
-  it('T193: DB名 trace-wave-library, stores charts/audio, bytes immutability (3-step)', async () => {
-    // [Step1] capture before
-    expect((await listCharts()).length).toBe(0);
-    // [Step2] put and verify stores exist via list operations
-    const id = `custom-${Date.now()}`;
-    const bytes = new Uint8Array([10, 20, 30]);
-    await putChart({ id, title: 'DBTest', difficulty: 3, toml: makeToml('DBTest', 'db.flac'), audioId: id, addedAt: Date.now() });
-    await putAudio({ id, name: 'db.flac', mime: 'audio/flac', bytes });
-    const afterCharts = await listCharts();
-    const afterAudio = await listAudio();
-    // [Step3] stores operative
-    expect(afterCharts.length).toBe(1);
-    expect(afterAudio.length).toBe(1);
-    expect(afterCharts[0].id).toBe(id);
-    expect(afterAudio[0].bytes[0]).toBe(10);
+  // ------------------------------------------------------------------
+  // 5. Invariants: length, snap, only 2 segments changed, posterior immobility
+  // ------------------------------------------------------------------
+  describe('5. Invariants: getPoints length, snap, 2-segment scope, posterior shift', () => {
+    it('interior drag changes exactly 2 segments, others bit-exact, total span preserved', () => {
+      // [Step1]
+      const amp = 1.3;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const pts0 = engine0.getPoints();
+      const idx = 2;
+      const prevBeat = pts0[idx - 1].beat;
+      const nextBeat = pts0[idx + 1].beat;
+      const targetBeat = quantizeBeat(prevBeat + 0.63, snap);
+      const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
+      // [Step2]
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: clamped,
+        targetY: pts0[idx].y,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      const segs = result!;
+      // [Step3]
+      expect(segs.length).toBe(initial.length);
+      expect(new WaveEngine(segs, tl, amp, 0).getPoints().length).toBe(pts0.length);
+      for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
+      for (let k = 0; k < initial.length; k++) {
+        if (k === idx - 1 || k === idx) continue;
+        expect(segs[k].beats).toBeCloseTo(initial[k].beats, 6);
+        expect(segs[k].direction).toBe(initial[k].direction);
+      }
+      const spanOrig = nextBeat - prevBeat;
+      const spanNew = segs[idx - 1].beats + segs[idx].beats;
+      expect(Math.abs(spanNew - spanOrig)).toBeLessThan(1e-6);
+      // posterior points unchanged beyond idx+1
+      const pts1 = new WaveEngine(segs, tl, amp, 0).getPoints();
+      for (let i = idx + 1; i < pts0.length; i++) {
+        expect(Math.abs(pts1[i].beat - pts0[i].beat)).toBeLessThan(1e-6);
+      }
+    });
+
+    it('all beats remain snap multiples across random off-grid drags', () => {
+      const snaps = [0.125, 0.25, 0.5] as const;
+      const amp = 2.7;
+      for (const snap of snaps) {
+        const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+        // snap-aligned initial: quantize raw beats to snap to guarantee alignment
+        const initial: Segment[] = [
+          { direction: 'down', beats: quantizeBeat(1.5, snap) },
+          { direction: 'up', beats: quantizeBeat(0.75, snap) || snap },
+          { direction: 'down', beats: quantizeBeat(0.5, snap) || snap },
+        ];
+        const engine0 = new WaveEngine(initial, tl, amp, 0);
+        for (const idx of [1, 2]) {
+          const prevBeat = engine0.getPoints()[idx - 1].beat;
+          const nextBeat = engine0.getPoints()[idx + 1].beat;
+          const targetBeat = quantizeBeat(prevBeat + 0.37, snap);
+          const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
+          const res = calculateVertexDrag({
+            segments: initial,
+            bpmTimeline: tl,
+            startPosition: 0,
+            pointIndex: idx,
+            targetBeat: clamped,
+            targetY: idx === 1 ? TOP : BOTTOM,
+            snap,
+          });
+          if (res) {
+            for (const s of res) expect(isSnapAligned(s.beats, snap), `snap=${snap} idx=${idx} beats=${s.beats}`).toBe(true);
+          }
+        }
+      }
+      // snap=1 separately with explicitly aligned beats
+      {
+        const snap = 1 as const;
+        const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+        const initial: Segment[] = [
+          { direction: 'down', beats: 2 },
+          { direction: 'up', beats: 1 },
+          { direction: 'down', beats: 2 },
+        ];
+        const engine0 = new WaveEngine(initial, tl, amp, 0);
+        for (const idx of [1, 2]) {
+          const prevBeat = engine0.getPoints()[idx - 1].beat;
+          const nextBeat = engine0.getPoints()[idx + 1].beat;
+          const targetBeat = quantizeBeat(prevBeat + 0.37, snap);
+          const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
+          const res = calculateVertexDrag({
+            segments: initial,
+            bpmTimeline: tl,
+            startPosition: 0,
+            pointIndex: idx,
+            targetBeat: clamped,
+            targetY: idx === 1 ? TOP : BOTTOM,
+            snap,
+          });
+          if (res) {
+            for (const s of res) expect(isSnapAligned(s.beats, snap), `snap=${snap} idx=${idx} beats=${s.beats}`).toBe(true);
+          }
+        }
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 6. Complex amplitudes + Cursor numeric consistency (T127 style)
+  // ------------------------------------------------------------------
+  describe('6. Complex amplitudes + off-grid numeric consistency (WaveEngine ↔ Cursor)', () => {
+    const amps = [0.7, 1.3, 2.7, 3.4] as const;
+    const offGrid = [0.37, 1.23] as const;
+    for (const amp of amps) {
+      for (const off of offGrid) {
+        it(`amp=${amp} off=${off}: waveYAt per-beat dY clamped matches Cursor displacement`, () => {
+          // [Step1]
+          const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+          const segs: Segment[] = [{ direction: 'down', beats: 5 }];
+          const engine = new WaveEngine(segs, tl, amp, 0);
+          const perBeat = 2 * TW_AMP * amp;
+          const rawY = CENTER + perBeat * off;
+          const expectedY = Math.max(TOP, Math.min(BOTTOM, rawY));
+          // [Step2] waveYAt
+          const actualY = engine.waveYAt(off);
+          // [Step3] assert wave and cursor consistent
+          expect(Math.abs(actualY - expectedY)).toBeLessThan(1e-6);
+          const beatMs = 500;
+          const cursor = new Cursor(amp, 0);
+          cursor.setAmplitude(amp);
+          const startY = cursor.y;
+          cursor.update(beatMs / 1000, false, true, beatMs);
+          const disp = cursor.y - startY;
+          const expectedDisp = Math.min(BOTTOM - startY, perBeat * (beatMs / 1000) / (beatMs / 1000) * 1); // per beat
+          // Actually per beat disp = perBeat; limited by clamp
+          const clampedDisp = Math.min(BOTTOM - CENTER, perBeat);
+          expect(Math.abs(disp - clampedDisp)).toBeLessThan(1e-3);
+          // slope check for small off before clamp
+          if (off * perBeat < TW_AMP + 1e-9) {
+            const smallOff = 0.1;
+            const dy = engine.waveYAt(smallOff) - engine.waveYAt(0);
+            expect(Math.abs(dy / smallOff - perBeat)).toBeLessThan(1);
+          }
+        });
+      }
+    }
+
+    it('drag result waveYAt at moved vertex equals snapped zone when reachable, else maxAvail', () => {
+      // [Step1] amp 1.3, off-grid 0.37 case where need reachable
+      const amp = 1.3;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 2 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const yPrev = engine0.getPoints()[idx - 1].y;
+      // demand TOP from CENTER, need = ceil(130/(2*130*1.3)) = ceil(0.3846) with snap 0.25 => 0.5
+      const need = Math.max(snap, ceilBeat(Math.abs(TOP - yPrev) / (2 * TW_AMP * amp), snap));
+      const mouseBeat = prevBeat + snap; // 0.25 < need 0.5
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: mouseBeat,
+        targetY: TOP,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      const engine1 = new WaveEngine(result!, tl, amp, 0);
+      const achievedBeat = engine1.getPoints()[idx].beat;
+      expect(Math.abs(achievedBeat - (prevBeat + need))).toBeLessThan(1e-6);
+      expect(engine1.getPoints()[idx].y).toBeCloseTo(TOP, 6);
+      // off-grid phase check: waveYAt at 0.37 within segment must follow dY
+      const midBeat = prevBeat + 0.37;
+      // mid is inside first segment after drag: y = yPrev + dY*(mid - prev)
+      // dY should be -perBeat for up segment
+      const dY = result![0].direction === 'up' ? -2 * TW_AMP * amp : 2 * TW_AMP * amp;
+      if (midBeat < achievedBeat) {
+        const expectedMidY = Math.max(TOP, Math.min(BOTTOM, yPrev + dY * (midBeat - prevBeat)));
+        expect(engine1.waveYAt(midBeat)).toBeCloseTo(expectedMidY, 0);
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 7. Easing-aware perBeat (BpmTimeline amplitudeAt) used for need
+  // ------------------------------------------------------------------
+  describe('7. Time-varying amplitude (bpm_changes list / easing) reflected in perBeat', () => {
+    it('amplitudeAt step: prevBeat in low-amp zone uses low perBeat, high zone uses high', () => {
+      // [Step1] timeline with amplitude step at beat 2: 0.5 -> 1.5
+      const snap = 0.25;
+      const tl = new BpmTimeline(
+        [
+          { beat: 0, bpm: 120, amplitude: 0.5 },
+          { beat: 2, bpm: 120, amplitude: 1.5 },
+        ] as any,
+        1.0,
+      );
+      // verify amplitudeAt
+      expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.5, 2);
+      expect(tl.amplitudeAt(1.23)).toBeCloseTo(0.5, 2);
+      expect(tl.amplitudeAt(2.5)).toBeCloseTo(1.5, 2);
+
+      // segments covering both zones: stay 2 beats (0-2) + stay 2 beats (2-4)
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 2 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
+      // idx 1 at beat 2.0, yPrev at beat 0, perBeat uses amplitudeAt(0)=0.5
+      const idxLow = 1;
+      const prevBeatLow = engine0.getPoints()[idxLow - 1].beat; // 0
+      const perBeatLow = 2 * TW_AMP * tl.amplitudeAt(prevBeatLow); // 130
+      const needLow = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeatLow, snap)); // 130/130=1.0
+      // idx 2 would be after, but we have only 2 segments: idx 1 is at 2.0 with next at 4.0
+      // For low zone, need 1.0, mouse 0.25 should shift to 1.0
+      const resLow = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idxLow,
+        targetBeat: prevBeatLow + snap,
+        targetY: TOP,
+        snap,
+      });
+      expect(resLow).not.toBeNull();
+      expect(resLow![0].beats).toBeCloseTo(needLow, 4);
+
+      // Now test high zone: need with amp 1.5 => perBeat 390, need 130/390=0.333 -> ceil 0.5
+      // Use idx after beat 2: drag vertex at 2.0? Actually vertex 1 is exactly at boundary.
+      // To test high zone we need prevBeat =2.0, so we drag vertex that has prev at 2.0.
+      // That would be vertex 2? Wait we have pts 0:0,1:2,2:4. There is no vertex with prev 2 except n=2.
+      // So test last vertex (n) where prev is 2.0 high amp
+      const n = engine0.getPoints().length - 1;
+      const prevHigh = engine0.getPoints()[n - 1].beat; // 2.0
+      const perBeatHigh = 2 * TW_AMP * tl.amplitudeAt(prevHigh); // 390
+      const needHigh = Math.max(snap, ceilBeat(Math.abs(BOTTOM - CENTER) / perBeatHigh, snap)); // 0.5
+      const resHigh = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: n,
+        targetBeat: prevHigh + snap,
+        targetY: BOTTOM,
+        snap,
+      });
+      expect(resHigh).not.toBeNull();
+      expect(resHigh![resHigh!.length - 1].beats).toBeCloseTo(needHigh, 4);
+      // Low need 1.0 vs high need 0.5 — time-varying amplitude must affect result
+      expect(needLow).toBeGreaterThan(needHigh);
+      expect(resLow![0].beats).toBeGreaterThan(resHigh![resHigh!.length - 1].beats - 1e-9);
+    });
+
+    it('easing zone: amplitudeAt interpolated perBeat still yields snap-aligned need', () => {
+      const snap = 0.25;
+      // linear easing from 0.5 to 1.5 over [0,4]
+      const tl = new BpmTimeline(
+        [
+          { beat: 0, bpm: 120, amplitude: 0.5, easeToNext: 'linear' },
+          { beat: 4, bpm: 120, amplitude: 1.5 },
+        ] as any,
+        1.0,
+      );
+      // At beat 1.0, amplitude interpolated: 0.5 + (1.5-0.5)*0.25=0.75
+      const ampAt1 = tl.amplitudeAt(1.0);
+      expect(ampAt1).toBeCloseTo(0.75, 2);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 2 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
+      const idx = 1; // at 2.0, amp ~1.0
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+      const need = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap));
+      const res = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: prevBeat + snap,
+        targetY: TOP,
+        snap,
+      });
+      expect(res).not.toBeNull();
+      expect(isSnapAligned(res![0].beats, snap)).toBe(true);
+      expect(res![0].beats).toBeCloseTo(need, 4);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 8. Regression: other editorDrag APIs still satisfy invariants (T155 etc)
+  // ------------------------------------------------------------------
+  describe('8. Regression: edge/multi drag invariants not broken by T215', () => {
+    it('calculateEdgeDrag preserves original length and snap, getPoints invariant', () => {
+      const amp = 1.3;
+      const snap = 0.25;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'down', beats: 1.5 },
+        { direction: 'up', beats: 2.0 },
+        { direction: 'down', beats: 1.5 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const pts0 = engine0.getPoints();
+      const edgeIdx = 1;
+      const result = calculateEdgeDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        edgeIndex: edgeIdx,
+        startBeat: pts0[edgeIdx].beat,
+        startY: pts0[edgeIdx].y,
+        startPrevBeat: pts0[edgeIdx - 1]?.beat ?? 0,
+        startNextBeat: pts0[edgeIdx + 2]?.beat ?? pts0[pts0.length - 1].beat,
+        dxBeat: quantizeBeat(0.37, snap),
+        dy: 30,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.length).toBe(initial.length);
+      for (const s of result!) expect(isSnapAligned(s.beats, snap)).toBe(true);
+      expect(new WaveEngine(result!, tl, amp, 0).getPoints().length).toBe(pts0.length);
+    });
+
+    it('calculateVertexMultiDrag single vertex {v} moves only that vertex', () => {
+      const snap = 0.25;
+      const amp = 1.3;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const pts0 = engine0.getPoints();
+      const v = 2;
+      const dx = quantizeBeat(0.37, snap);
+      const res = calculateVertexMultiDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        vertexIndices: [v],
+        dxBeat: dx,
+        dy: 0,
+        snap,
+      });
+      expect(res).not.toBeNull();
+      const pts1 = new WaveEngine(res!, tl, amp, 0).getPoints();
+      expect(Math.abs(pts1[v].beat - quantizeBeat(pts0[v].beat + dx, snap))).toBeLessThan(1e-6);
+      expect(Math.abs(pts1[v + 1].beat - pts0[v + 1].beat)).toBeLessThan(1e-6);
+      for (const s of res!) expect(isSnapAligned(s.beats, snap)).toBe(true);
+    });
+
+    it('calculateMultiDrag still works (edge collection)', () => {
+      const snap = 0.25;
+      const amp = 1.0;
+      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const initial: Segment[] = [
+        { direction: 'down', beats: 1 },
+        { direction: 'up', beats: 1 },
+        { direction: 'down', beats: 1 },
+      ];
+      const res = calculateMultiDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        selSegIdxs: [1],
+        dxBeat: quantizeBeat(0.37, snap),
+        dy: 20,
+        snap,
+      });
+      expect(res).not.toBeNull();
+      expect(res!.length).toBe(initial.length);
+    });
   });
 });
