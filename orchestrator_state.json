@@ -1930,7 +1930,7 @@
     },
     "T213": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1788928146.451068,
       "cycles": 1,
       "sessions": {
@@ -1938,7 +1938,13 @@
         "coder": "ses_f7b8fc613ffe6mwJsoZxUhURee",
         "reviewer": "ses_f7b8919cfffeWUKtPoNZa6cEFJ"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788928882.108319
+    },
+    "T214": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788937228.6780436
     }
   },
   "consecutive_no_action": 0
