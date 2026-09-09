@@ -13,6 +13,7 @@ import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
 import { getViewMode, ViewMode } from '../viewMode'
 import type { Chart, SongEntry } from '../types'
+import { unzipSync } from 'fflate'
 
 const MAX_DIFFICULTY = 5
 const SKELETON_COUNT = 4
@@ -146,12 +147,194 @@ beat = 8.0
     }
   }, [])
 
+  const handleZipFile = useCallback(async (file: File) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const data = new Uint8Array(arrayBuffer)
+      const unzipped = unzipSync(data)
+
+      // Group files by directory (zip path prefix before last /)
+      const groups: Record<string, Record<string, Uint8Array>> = {}
+      const audioExts = ['.flac', '.mp3', '.wav', '.ogg', '.m4a']
+      const skippedFiles: string[] = []
+      const usedAudioPaths = new Set<string>()
+
+      for (const [path, bytes] of Object.entries(unzipped)) {
+        // Skip directories, __MACOSX, dotfiles
+        if (path.endsWith('/')) continue
+        if (path.startsWith('__MACOSX/')) continue
+        const parts = path.split('/')
+        const fileName = parts[parts.length - 1]
+        if (fileName.startsWith('.')) continue
+
+        const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+        if (!groups[dir]) groups[dir] = {}
+        groups[dir][fileName] = bytes
+      }
+
+      const newSongs: SongEntry[] = []
+      let pairIndex = 0
+      const baseTime = Date.now()
+
+      for (const [dir, files] of Object.entries(groups)) {
+        // Find all TOML and audio files in this folder
+        const tomlFiles: [string, Uint8Array][] = []
+        const audioFiles: [string, Uint8Array][] = []
+
+        for (const [name, bytes] of Object.entries(files)) {
+          if (name.endsWith('.toml')) {
+            tomlFiles.push([name, bytes])
+          } else if (audioExts.some(ext => name.toLowerCase().endsWith(ext))) {
+            audioFiles.push([name, bytes])
+          }
+        }
+
+        if (tomlFiles.length === 0) {
+          // No TOML in this group — skip non-TOML files
+          for (const name of Object.keys(files)) {
+            if (!audioExts.some(ext => name.toLowerCase().endsWith(ext))) {
+              skippedFiles.push(dir ? `${dir}/${name}` : name)
+            }
+          }
+          continue
+        }
+
+        // For each TOML, try to pair with audio
+        for (const [tomlName, tomlBytes] of tomlFiles) {
+          let text: string
+          try {
+            text = new TextDecoder().decode(tomlBytes)
+          } catch {
+            skippedFiles.push(dir ? `${dir}/${tomlName}` : tomlName)
+            continue
+          }
+
+          let parsed: Chart
+          try {
+            parsed = parseChartText(text, tomlName)
+          } catch {
+            skippedFiles.push(dir ? `${dir}/${tomlName}` : tomlName)
+            continue
+          }
+
+          const audioBase = getBasename(parsed.audio)
+          // Find matching audio in same folder
+          const matchEntry = audioFiles.find(([name]) => {
+            const extIdx = name.lastIndexOf('.')
+            const base = extIdx > 0 ? name.substring(0, extIdx) : name
+            return base === audioBase || name === audioBase
+          })
+
+          const id = `custom-${baseTime}-${pairIndex++}`
+          const title = parsed.title || tomlName.replace(/\.toml$/i, '') || 'Untitled'
+          const toml = chartToToml(parsed)
+
+          // Register chart
+          ChartCache.set(id, parsed)
+          ChartCache.set(tomlName, parsed)
+          const newEntry: SongEntry = {
+            id,
+            title,
+            artist: parsed.artist || '',
+            chartPath: id,
+            difficulty: 3,
+          }
+          newSongs.push(newEntry)
+
+          // Persist chart to IndexedDB
+          const audioId = matchEntry ? id : null
+          void (async () => {
+            try {
+              await putChart({
+                id,
+                title,
+                artist: parsed.artist || '',
+                difficulty: 3,
+                toml,
+                audioId,
+                addedAt: baseTime,
+              })
+            } catch (e) {
+              console.warn('[SelectScreen] Failed to persist zip chart to IndexedDB', e)
+            }
+          })()
+
+          if (matchEntry) {
+            const [audioName, audioBytes] = matchEntry
+            const audioBaseName = getBasename(audioName)
+            if (!usedAudioPaths.has(dir + '/' + audioName)) {
+              usedAudioPaths.add(dir + '/' + audioName)
+              const audioFileObj = new File([audioBytes], audioBaseName, {
+                type: `audio/${audioName.split('.').pop() || 'octet-stream'}`,
+              })
+              const mgr = AudioManager.getInstance()
+              void mgr.ensure().then(async () => {
+                try {
+                  const buf = await loadAudioFromFile(audioFileObj, mgr.ctx)
+                  if (buf) {
+                    AudioCache.set(audioBaseName, buf)
+                    AudioCache.set(id, buf)
+                    void (async () => {
+                      try {
+                        await putAudio({
+                          id,
+                          name: audioBaseName,
+                          mime: audioFileObj.type,
+                          bytes: audioBytes,
+                        })
+                      } catch (e) {
+                        console.warn('[SelectScreen] Failed to persist zip audio to IndexedDB', e)
+                      }
+                    })()
+                  }
+                } catch (e) {
+                  console.warn('[SelectScreen] Failed to decode zip audio', e)
+                }
+              })
+            }
+          } else {
+            skippedFiles.push(dir ? `${dir}/${tomlName}` : tomlName + ' (音声ファイル不一致)')
+          }
+        }
+
+        // Report audio files that were never paired with a TOML in this folder
+        for (const [audioName] of audioFiles) {
+          if (!usedAudioPaths.has(dir + '/' + audioName)) {
+            skippedFiles.push(dir ? `${dir}/${audioName}` : audioName)
+          }
+        }
+      }
+
+      if (newSongs.length === 0 && skippedFiles.length === 0) {
+        setImportError('zipファイルに譜面(TOML)が含まれていません')
+        return
+      }
+
+      setSongs(prev => [...prev, ...newSongs])
+
+      if (skippedFiles.length > 0) {
+        setImportError(`以下のファイルはスキップされました: ${skippedFiles.slice(0, 5).join(', ')}${skippedFiles.length > 5 ? ` 他${skippedFiles.length - 5}件` : ''}`)
+      } else {
+        setImportError(null)
+      }
+    } catch (e) {
+      console.warn('[SelectScreen] Failed to process zip file', e)
+      setImportError(e instanceof Error ? e.message : 'zipファイルの読み込みに失敗しました')
+    }
+  }, [])
+
   const handleFiles = useCallback(async (files: FileList | (File | Blob)[]) => {
     console.log('[SelectScreen] handleFiles count:', files.length)
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       const name = (file as File).name || ''
       console.log('[SelectScreen] file item:', name, file.type, file.size)
+
+      // Zip files are handled specially (folder-grouped multi-song import)
+      if (name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
+        await handleZipFile(file as File)
+        continue
+      }
 
       let isChart = false
       if (name.endsWith('.toml') || file.type === 'text/plain' || name.includes('chart') || name.includes('test-chart')) {
@@ -177,7 +360,7 @@ beat = 8.0
         await handleAudioFile(file, name || 'test-audio.flac')
       }
     }
-  }, [handleChartFile, handleAudioFile])
+  }, [handleChartFile, handleAudioFile, handleZipFile])
 
   useEffect(() => {
     const zone = dropzoneRef.current
@@ -338,6 +521,24 @@ beat = 8.0
               >
                 追加
               </button>
+            </div>
+          </div>
+          <div style={{ marginBottom: '12px', padding: '12px', border: '1px dashed var(--border)', borderRadius: 'var(--radius)' }}>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>zip一括インポート（曲ごとのフォルダ分け・TOMLと音声を同一フォルダに）</label>
+                <input
+                  type="file"
+                  accept=".zip"
+                  data-testid="home-zip-input"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) {
+                      void handleZipFile(f)
+                    }
+                  }}
+                />
+              </div>
             </div>
           </div>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>

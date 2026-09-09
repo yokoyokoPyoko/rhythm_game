@@ -9804,3 +9804,29 @@ src/screens/GameScreen.tsx(61,20): error TS6133: 'setOffsetMs' is declared but i
 2026-09-09 18:28:04,240 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-09 18:28:05,240 [INFO] Orchestrator range execution: 1 tasks (from=T214, to=T214, budget=600m)
 2026-09-09 18:28:05,240 [INFO] [T214] --only mode: skipping dependency checks.
+2026-09-09 18:28:05,293 [INFO] [T214] --resume: Keeping existing tests/dynamic.test.ts (skip clean) to resume from last role.
+2026-09-09 18:28:05,293 [INFO] [T214] tests/dynamic.test.ts already exists → skipping QA-Gen (use --force-qa-gen to regenerate); will validate via Red check.
+2026-09-09 18:28:05,294 [INFO] [T214] --resume: last Postmortem retry_from=coder → strict resume (json-driven)
+2026-09-09 18:28:05,294 [INFO] [T214] --resume: next role = Coder (regenerate implementation)
+2026-09-09 18:28:05,296 [INFO] Starting implementation [T214] (attempt 5, cycle 1/10)
+2026-09-09 18:28:05,296 [INFO] [T214] Proceeding directly to Coder implementation (skipping Red check for Coder retry).
+2026-09-09 18:28:05,307 [INFO] RateLimit sleep: 5s...
+2026-09-09 18:28:10,308 [INFO] Dispatching [1mCoder(T214)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T214] Coder 4f7941fa)
+2026-09-09 18:29:56,284 [INFO] Persisted session ses_f7a80f43fffeMhsfT1bKqY8SHY for task=T214, role=coder
+2026-09-09 18:29:56,284 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
+2026-09-09 18:30:00,467 [ERROR] [T214] Gate A failed: src/screens/SelectScreen.tsx(187,41): error TS2448: Block-scoped variable 'handleZipFile' used before its declaration.
+src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is used before being assigned.
+
+2026-09-09 18:30:00,468 [INFO] Postmortem analyzing failure and formulating actionable prescriptions...
+2026-09-09 18:30:00,468 [INFO] RateLimit sleep: 5s...
+2026-09-09 18:30:05,469 [INFO] Dispatching [1mPostmortem[0m (model=[90mopencode/nemotron-3-ultra-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T214] Postmortem 87e1ffd3)
+2026-09-09 18:31:34,841 [INFO] Persisted session ses_f7a7f2efeffeVm7ZPSM4gjJJVR for task=T214, role=postmortem
+2026-09-09 18:31:34,841 [INFO] Updated POSTMORTEM.md.
+2026-09-09 18:31:34,846 [WARNING] [T214] No progress at stage 0 (best=0, streak 1/3)
+2026-09-09 18:31:34,848 [INFO] Starting implementation [T214] (attempt 6, cycle 1/10)
+2026-09-09 18:31:34,848 [INFO] [T214] Proceeding directly to Coder implementation (skipping Red check for Coder retry).
+2026-09-09 18:31:34,856 [INFO] RateLimit sleep: 5s...
+2026-09-09 18:31:39,857 [INFO] Dispatching [1mCoder(T214)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T214] Coder 4620cc8d)
+2026-09-09 18:32:29,789 [INFO] Persisted session ses_f7a7dc1b2ffeLIdM6m7e7cxPSo for task=T214, role=coder
+2026-09-09 18:32:29,790 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
+2026-09-09 18:32:32,585 [INFO] [T214] [38;2;74;222;128mGate A (tsc) PASS[0m
