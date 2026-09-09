@@ -9915,3 +9915,28 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-09 20:47:04,466 [INFO] Persisted session ses_f7a02b92fffejeLbUfkAqltp8P for task=T216, role=coder
 2026-09-09 20:47:04,466 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
 2026-09-09 20:47:08,294 [INFO] [T216] [38;2;74;222;128mGate A (tsc) PASS[0m
+2026-09-09 20:47:08,322 [INFO] [T216] Updated shared task context with 0 ID(s) and 0 data-testid(s).
+2026-09-09 20:47:08,322 [INFO] Running Vitest execution (flaky-retry enabled, test_runner=vitest)...
+2026-09-09 20:47:09,345 [WARNING] Vitest run attempt 1 failed. Retrying once...
+2026-09-09 20:47:12,371 [WARNING] Vitest run attempt 2 failed. Retrying once...
+2026-09-09 20:47:14,372 [ERROR] [T216] Gate B failed:  [31m❯[39m tests/dynamic.test.ts [2m([22m[2m55 tests[22m[2m | [22m[31m16 failed[39m[2m)[22m[90m 36[2mms[22m[39m
+[31m[1mAssertionError[22m: need>mouse shift must be gated by stationary check: expected false to be true // Object.is equality[39m
+[31m[1mAssertionError[22m: expected null not to be null[39m
+[31m[1mAssertionError[22m: expected 1.5 to be greater than or equal to 1.749999999[39m
+[31m[1mAssertionError[22m: expected 1.5 to be close to 2, received difference is 0.5, but expected 0.000049999999999999996[39m
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m16 failed[39m[22m[2m | [22m[1m[32m39 passed[39m[22m[90m (55)[39m
+2026-09-09 20:47:14,373 [INFO] Postmortem analyzing failure and formulating actionable prescriptions...
+2026-09-09 20:47:14,374 [INFO] RateLimit sleep: 5s...
+2026-09-09 20:47:19,374 [INFO] Dispatching [1mPostmortem[0m (model=[90mopencode/nemotron-3-ultra-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T216] Postmortem 55b2d032)
+2026-09-09 20:48:11,963 [INFO] Persisted session ses_f7a018c66ffemax0vfGL54qpIZ for task=T216, role=postmortem
+2026-09-09 20:48:11,963 [INFO] Updated POSTMORTEM.md.
+2026-09-09 20:48:11,969 [INFO] [T216] Progress: stage 0 -> 1
+2026-09-09 20:48:11,971 [INFO] Starting implementation [T216] (attempt 2, cycle 1/10)
+2026-09-09 20:48:11,971 [INFO] [T216] Proceeding directly to Coder implementation (skipping Red check for Coder retry).
+2026-09-09 20:48:11,981 [INFO] RateLimit sleep: 5s...
+2026-09-09 20:48:16,981 [INFO] Dispatching [1mCoder(T216)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T216] Coder 2028ed0e)
+2026-09-09 20:55:53,765 [INFO] Persisted session ses_f7a00aab0ffe8v68w1HAFbVxhs for task=T216, role=coder
+2026-09-09 20:55:53,767 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
+2026-09-09 20:55:58,113 [INFO] [T216] [38;2;74;222;128mGate A (tsc) PASS[0m

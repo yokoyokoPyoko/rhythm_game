@@ -67,25 +67,29 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   if (idx === 0 && segments.length > 0) {
     const nextPt = pts[1];
     const nextBeat = nextPt?.beat ?? pts[0].beat + safeSnap;
+    // T216: the first vertex's "current position" is nextBeat − seg0.beats (== 0).
+    // Stationary is decided on the quantized mouse beat vs that reference, so a
+    // drag clamped to the safeSnap floor is still detected as pure vertical.
+    const firstStaticRef = nextBeat - segments[0].beats;
+    const isFirstStationary = Math.abs(quantizeBeat(targetBeat, safeSnap) - firstStaticRef) < 1e-9;
     let clampedBeat = Math.max(safeSnap, Math.min(nextBeat - safeSnap, quantizeBeat(targetBeat, safeSnap)));
     // beats = horizontal distance, direction = from Y
     let beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
-    if (beats < safeSnap) return null;
     const snappedY = snapY(targetY);
     const d = dirBetween(pts[0].y, snappedY);
     // T215/T216: reach-shift only fires for pure vertical drags (mouse X unchanged).
-    // The only hard floor is beat 0 (the chart start) — re-clamping to safeSnap
-    // here would freeze the reach (e.g. nextBeat=0.5, need=0.5 -> beats 0.25).
-    const isFirstStaticX = Math.abs(clampedBeat - pts[0].beat) < 1e-9;
-    if (d !== 'stay' && isFirstStaticX) {
+    // When stationary, expand seg0 to `need` so the snapped Y zone is actually
+    // reached — even past the current nextBeat (the tail shifts right).
+    if (d !== 'stay' && isFirstStationary) {
       const pbAtPrev = bpmTimeline.amplitudeAt(pts[0].beat);
       const perBeat = 2 * TW_AMP * pbAtPrev;
       const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedY - pts[0].y) / perBeat, safeSnap));
       if (need > beats) {
-        clampedBeat = Math.max(0, nextBeat - need);
-        beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
+        clampedBeat = nextBeat - need;
+        beats = need;
       }
     }
+    if (beats < safeSnap) return null;
     return segments.map((s, i) => (i === 0 ? { ...s, beats, direction: d } : s));
   }
 
@@ -100,8 +104,8 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
     const snappedTargetY = snapY(targetY);
     const d = dirBetween(prevPt.y, snappedTargetY);
     // T215/T216: reach-shift only fires for pure vertical drags (mouse X unchanged).
-    const isLastStaticX = Math.abs(clampedBeat - pts[idx].beat) < 1e-9;
-    if ((d === 'down' || d === 'up') && isLastStaticX) {
+    const isLastStationary = Math.abs(clampedBeat - quantizeBeat(pts[idx].beat, safeSnap)) < 1e-9;
+    if ((d === 'down' || d === 'up') && isLastStationary) {
       const pbAtPrev = bpmTimeline.amplitudeAt(prevBeat);
       const perBeat = 2 * TW_AMP * pbAtPrev;
       const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedTargetY - prevPt.y) / perBeat, safeSnap));
@@ -137,10 +141,14 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
   // T215/T216: when the mouse X has not moved (pure vertical drag), shift beatPrime
   // rightward to guarantee the snapped Y zone is reachable. When X has moved
   // (diagonal/horizontal drag), X takes priority and beatPrime is left as-is.
+  // Stationary is decided on the snap-GRID position (quantizeBeat of the current
+  // beat), so an off-grid current beat (e.g. 1.25 with snap 0.5 -> grid 1.5) still
+  // registers as stationary when the mouse sits on that grid cell.
   const snappedTargetY_tmp = snapY(targetY);
   const dTmp = dirBetween(yPrev, snappedTargetY_tmp);
-  const isInteriorStaticX = Math.abs(beatPrime - pts[idx].beat) < 1e-9;
-  if (dTmp !== 'stay' && isInteriorStaticX) {
+  const isInteriorStationary =
+    Math.abs(beatPrime - quantizeBeat(pts[idx].beat, safeSnap)) < 1e-9;
+  if (dTmp !== 'stay' && isInteriorStationary) {
     const pbAtPrev = bpmTimeline.amplitudeAt(prevBeat);
     const perBeat = 2 * TW_AMP * pbAtPrev;
     const needRaw = Math.abs(snappedTargetY_tmp - yPrev) / perBeat;
