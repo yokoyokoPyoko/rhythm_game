@@ -73,14 +73,15 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
     if (beats < safeSnap) return null;
     const snappedY = snapY(targetY);
     const d = dirBetween(pts[0].y, snappedY);
-    // T215: shift leftward to increase beats when target Y requires more reach
-    if (d === 'up') {
+    // T215: shift leftward to increase beats when target Y requires more reach.
+    // The only hard floor is beat 0 (the chart start) — re-clamping to safeSnap
+    // here would freeze the reach (e.g. nextBeat=0.5, need=0.5 -> beats 0.25).
+    if (d !== 'stay') {
       const pbAtPrev = bpmTimeline.amplitudeAt(pts[0].beat);
       const perBeat = 2 * TW_AMP * pbAtPrev;
       const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedY - pts[0].y) / perBeat, safeSnap));
       if (need > beats) {
-        const minBeat = Math.max(safeSnap, nextBeat - need);
-        clampedBeat = minBeat;
+        clampedBeat = Math.max(0, nextBeat - need);
         beats = quantizeBeat(nextBeat - clampedBeat, safeSnap);
       }
     }
