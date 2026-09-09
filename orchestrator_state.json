@@ -1965,7 +1965,8 @@
       "sessions": {
         "qa": "ses_f7a29cbf4ffe7W18PHkg1KbfIA",
         "coder": "ses_f7a1d47e8ffeNubT10fAPX0Zd4",
-        "postmortem": "ses_f7a24ff5dffeWohIRIjfYUbai8"
+        "postmortem": "ses_f7a24ff5dffeWohIRIjfYUbai8",
+        "reviewer": "ses_f7a182d65ffeJq32odP5WSrlKU"
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
