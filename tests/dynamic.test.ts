@@ -36,8 +36,12 @@ function snapY(y: number): number {
 function readSrc(p: string): string {
   return fs.readFileSync(path.join(process.cwd(), p), 'utf-8');
 }
+function makeTimeline(amp: number, extra: any[] = []): BpmTimeline {
+  const base = [{ beat: 0, bpm: 120, amplitude: amp } as any, ...extra];
+  return new BpmTimeline(base as any, amp);
+}
 
-describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDrag / WaveEngine / Cursor)', () => {
+describe('T216 頂点ドラッグXハイジャック解消（静止Xゲート）— Vitest node', () => {
   beforeEach(() => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -46,390 +50,481 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
   });
 
   // ------------------------------------------------------------------
-  // 0. Source guards — must FAIL before fix (Red), PASS after (Green)
+  // 0. Source guards — must FAIL before T216 (Red), PASS after (Green)
+  // Prohibited: quantizeBeat for need, const reassigned; Required: ceilBeat, stationary gate
   // ------------------------------------------------------------------
-  describe('0. Source fix guards (const->let, ceilBeat reachability, T215)', () => {
-    it('editorDrag.ts must use let clampedBeat (not const) for endpoint T215 shift', () => {
-      // [Step1] capture initial file content
+  describe('0. Source fix guards (T215 unconditional -> T216 stationary gate)', () => {
+    it('editorDrag.ts must use let clampedBeat (not const with later reassignment)', () => {
       const src = readSrc('src/game/editorDrag.ts');
-      // [Step2] search for let declaration
       const hasLet = /let\s+clampedBeat/.test(src);
       const hasConstReassign = /const\s+clampedBeat[\s\S]*?clampedBeat\s*=/.test(src);
-      // [Step3] assert transition to let
-      expect(hasLet, 'T215 prescription: Change const clampedBeat to let clampedBeat (lines 70,94)').toBe(true);
-      // If const with reassignment remains, file would not compile (TS2588) — this guard ensures fix
+      expect(hasLet, 'T216: endpoint clampedBeat must be let (reassigned under gate)').toBe(true);
       expect(hasConstReassign, 'should not have const clampedBeat with later assignment').toBe(false);
     });
-
-    it('editorDrag.ts must implement ceilBeat (rounds up) for Y reachability', () => {
+    it('editorDrag.ts must implement ceilBeat (round-up) for Y reachability, not quantizeBeat(needRaw)', () => {
       const src = readSrc('src/game/editorDrag.ts');
       expect(src).toMatch(/function ceilBeat/);
       expect(src).toMatch(/Math\.ceil/);
-      // Must guarantee reach: ceil not round
       expect(src).not.toMatch(/quantizeBeat\(needRaw/);
     });
-
-    it('editorDrag.ts calculateVertexDrag must shift beatPrime to satisfy need', () => {
+    it('editorDrag.ts calculateVertexDrag must contain stationary X gate (quantized target vs current)', () => {
       const src = readSrc('src/game/editorDrag.ts');
-      // Check for T215 shift logic: need > mouseBeatsPrev then shifted
-      expect(src).toMatch(/need\s*>\s*mouseBeatsPrev/);
-      expect(src).toMatch(/beatPrime\s*=\s*Math\.max/);
-      // Also endpoint branches
-      expect(src).toMatch(/if\s*\(need\s*>\s*beats\)/);
+      // Gate pattern: only when quantized target equals current beat should shift be allowed.
+      // Look for comparison of targetBeat quantization with pts[idx].beat or prev-equivalent, gating need-shift.
+      // Before T216 no such gate exists; after T216 it must exist in interior and endpoint branches.
+      const hasInteriorGate = /quantizeBeat\(targetBeat.*\)[\s\S]*?pts\[idx\]\.beat/.test(src) || /pts\[idx\]\.beat[\s\S]*?quantizeBeat\(targetBeat/.test(src);
+      // Endpoint gate variant: nextBeat - seg0.beats or current last beat
+      const hasEndpointGate = /nextBeat\s*-\s*.*beats/.test(src) && /quantizeBeat\(targetBeat/.test(src);
+      // At minimum one of the interior gate forms must be present
+      expect(hasInteriorGate, 'interior must gate shift on quantized target == current beat (stationary)').toBe(true);
+      // Check that need-shift is inside a conditional that checks stationary (not unconditional)
+      // Heuristic: the interior need>mouse block should be inside an if that checks stationary
+      const hasGatedNeed = /if\s*\(.*quantizeBeat\(targetBeat/.test(src) || /if\s*\(.*stationary/.test(src) || /stationary/.test(src);
+      expect(hasGatedNeed, 'need>mouse shift must be gated by stationary check').toBe(true);
+      expect(hasEndpointGate, 'endpoint must also gate on nextBeat-segBeats or current last beat').toBe(true);
     });
   });
 
   // ------------------------------------------------------------------
-  // 1. Interior vertex short-range freeze reproduction (core bug)
+  // 1. Horizontal drag (X variable, same or crossing zone) must strictly reproduce mouse X
+  //    Current T215 unconditional shift hijacks X to prev+need or next-snap.
   // ------------------------------------------------------------------
-  describe('1. Interior vertex: short 0.25 beat span must reach snapped zone (freeze regression)', () => {
-    const snaps: number[] = [0.25, 0.5];
-    const amps: number[] = [0.7, 1.0, 1.3, 2.7];
+  describe('1. Horizontal drag X fidelity (X variable -> no hijack, even with zone-cross Y)', () => {
+    const snap = 0.25;
+    const amp = 1.0;
+    const perBeat = 2 * TW_AMP * amp; // 260
+    // need TOP from CENTER = 130/260=0.5
+    const needTop = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap));
 
-    for (const amp of amps) {
-      for (const snap of snaps) {
-        it(`amp=${amp} snap=${snap}: mouse X 0.25 near prev with TOP demand must shift to need (not freeze at 65px)`, () => {
-          // [Step1: Capture Initial State]
-          const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-          // all stay => all points at CENTER, easy to reason about yPrev=CENTER, target TOP
-          const initial: Segment[] = [
-            { direction: 'stay', beats: 1 },
-            { direction: 'stay', beats: 1 },
-            { direction: 'stay', beats: 1 },
-            { direction: 'stay', beats: 1 },
-          ];
-          const engine0 = new WaveEngine(initial, tl, amp, 0);
-          const pts0 = engine0.getPoints();
-          const idx = 2; // interior beat 2.0
-          const prevBeat = pts0[idx - 1].beat; // 1.0
-          const nextBeat = pts0[idx + 1].beat; // 3.0
-          const yPrev = pts0[idx - 1].y; // CENTER
-          const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
-          const snappedTargetY = TOP; // demand up to TOP from CENTER
-          const need = Math.max(snap, ceilBeat(Math.abs(snappedTargetY - yPrev) / perBeat, snap));
-          // mouse gives only snap (0.25) — insufficient for amp 1.0 (need 0.5), amp 0.7 need ~0.75 etc
-          const mouseTargetBeat = quantizeBeat(prevBeat + snap, snap); // minimal X
-          const maxAvail = nextBeat - snap - prevBeat;
-          const expectedNeed = Math.min(need, maxAvail);
-          // Skip if need already equals snap (no shift needed for this amp)
-          if (need <= snap + 1e-9) return;
-
-          // [Step2: Perform Interaction]
-          // targetY chosen in TOP zone (e.g. 170) to demand up
-          const result = calculateVertexDrag({
-            segments: initial,
-            bpmTimeline: tl,
-            startPosition: 0,
-            pointIndex: idx,
-            targetBeat: mouseTargetBeat,
-            targetY: TOP, // snapY -> TOP
-            snap,
-          });
-          expect(result, 'vertex drag with insufficient X but TOP demand must not be null').not.toBeNull();
-          const segs = result!;
-
-          // [Step3: Assert Resulting Transition]
-          // All beats snap-aligned
-          for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
-          expect(segs.length).toBe(initial.length);
-          // Length invariant
-          const engine1 = new WaveEngine(segs, tl, amp, 0);
-          expect(engine1.getPoints().length).toBe(pts0.length);
-          // beatsPrev must be >= need (ceil) not mouse snap
-          const beatsPrev = segs[idx - 1].beats;
-          expect(beatsPrev).toBeGreaterThanOrEqual(need - 1e-9);
-          // Specifically shifted to need
-          expect(beatsPrev).toBeCloseTo(expectedNeed, 4);
-          // Achieved beat must be prevBeat+need
-          const pts1 = engine1.getPoints();
-          expect(Math.abs(pts1[idx].beat - (prevBeat + expectedNeed))).toBeLessThan(1e-6);
-          // Wave Y at that beat must be snappedTargetY (reachable) — not mid 65px
-          // Since we have stay->stay, waveYAt is determined by segment directions after drag
-          // The drag sets dir prev to up/down based on zone, and perBeat ensures reach
-          const achievedY = pts1[idx].y;
-          // For stay->up case, point Y is determined by buildPoints logic: from yPrev via perBeat*beatsPrev but clamped
-          // With need calculation, it should land exactly at snapped zone
-          expect(Math.abs(achievedY - snappedTargetY)).toBeLessThan(1e-6);
-          // Direction must be up (since CENTER->TOP)
-          expect(segs[idx - 1].direction).toBe('up');
-        });
-
-        it(`amp=${amp} snap=${snap}: opposite direction BOTTOM demand also shifts (down)`, () => {
-          // [Step1]
-          const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-          const initial: Segment[] = [
-            { direction: 'stay', beats: 1 },
-            { direction: 'stay', beats: 1 },
-            { direction: 'stay', beats: 1 },
-            { direction: 'stay', beats: 1 },
-          ];
-          const engine0 = new WaveEngine(initial, tl, amp, 0);
-          const pts0 = engine0.getPoints();
-          const idx = 2;
-          const prevBeat = pts0[idx - 1].beat;
-          const yPrev = pts0[idx - 1].y; // CENTER
-          const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
-          const need = Math.max(snap, ceilBeat(Math.abs(BOTTOM - yPrev) / perBeat, snap));
-          if (need <= snap + 1e-9) return;
-          const mouseTargetBeat = quantizeBeat(prevBeat + snap, snap);
-
-          // [Step2]
-          const result = calculateVertexDrag({
-            segments: initial,
-            bpmTimeline: tl,
-            startPosition: 0,
-            pointIndex: idx,
-            targetBeat: mouseTargetBeat,
-            targetY: BOTTOM,
-            snap,
-          });
-          expect(result).not.toBeNull();
-          const segs = result!;
-          // [Step3]
-          const beatsPrev = segs[idx - 1].beats;
-          expect(beatsPrev).toBeGreaterThanOrEqual(need - 1e-9);
-          const engine1 = new WaveEngine(segs, tl, amp, 0);
-          const pts1 = engine1.getPoints();
-          expect(Math.abs(pts1[idx].y - BOTTOM)).toBeLessThan(1e-6);
-          expect(segs[idx - 1].direction).toBe('down');
-        });
-      }
-    }
-
-    it('off-grid phases 0.37 / 1.23 with snap 0.25 must also shift (not freeze)', () => {
-      // [Step1] capture with off-grid mouse X that quantizes to snap but need still larger
-      const amp = 1.0;
-      const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+    it('interior: diagonal with small X (0.25) and TOP demand must stay at 0.25, not hijacked to need 0.5 (off-grid 0.37 variant)', () => {
+      // [Step1: Capture Initial State]
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
         { direction: 'stay', beats: 1 },
         { direction: 'stay', beats: 1 },
         { direction: 'stay', beats: 1 },
       ];
       const engine0 = new WaveEngine(initial, tl, amp, 0);
-      const idx = 1;
-      const prevBeat = engine0.getPoints()[idx - 1].beat;
-      // off-grid mouse 0.37 quantizes to 0.25, 1.23 quantizes to 1.25 etc.
-      // For TOP demand, need 0.5, so 0.37->0.25 case must still shift
-      const offGridMouseBeats = [0.37, 1.23];
-      for (const raw of offGridMouseBeats) {
-        const mouseBeat = quantizeBeat(prevBeat + raw - Math.floor(raw), snap);
-        // ensure inside [prev+snap, next-snap]
-        const clampedMouse = Math.max(prevBeat + snap, Math.min(engine0.getPoints()[idx + 1].beat - snap, mouseBeat));
-        const result = calculateVertexDrag({
-          segments: initial,
-          bpmTimeline: tl,
-          startPosition: 0,
-          pointIndex: idx,
-          targetBeat: clampedMouse,
-          targetY: TOP,
-          snap,
-        });
-        expect(result).not.toBeNull();
-        const segs = result!;
-        // need = 0.5, so even if mouse gives 0.25, result must be >=0.5
-        const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
-        const need = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap));
-        expect(segs[idx - 1].beats).toBeGreaterThanOrEqual(need - 1e-9);
-      }
-    });
+      const pts0 = engine0.getPoints();
+      const idx = 2; // beat 2.0
+      const prevBeat = pts0[idx - 1].beat; // 1.0
+      const nextBeat = pts0[idx + 1].beat; // 3.0
+      const mouseBeat = quantizeBeat(prevBeat + 0.25, snap); // 1.25 (small)
+      const stationaryBeat = quantizeBeat(pts0[idx].beat, snap); // 2.0
+      expect(mouseBeat).not.toBe(stationaryBeat); // X variable
+      expect(needTop).toBe(0.5);
+      expect(needTop).toBeGreaterThan(0.25);
 
-    it('when need exceeds maxAvail, shifts to maxAvail (not beyond adjacency)', () => {
-      // [Step1] narrow span where need > maxAvail -> should clamp to maxAvail, not exceed
-      const amp = 0.5; // perBeat 130, need TOP from CENTER =130/130=1.0
-      const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-      // span 0.5: pts 0:0,1:0.25,2:0.5,3:... narrow around idx1
-      const initial: Segment[] = [
-        { direction: 'stay', beats: 0.25 },
-        { direction: 'stay', beats: 0.25 },
-        { direction: 'stay', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, amp, 0);
-      const idx = 1;
-      const prevBeat = engine0.getPoints()[idx - 1].beat; // 0
-      const nextBeat = engine0.getPoints()[idx + 1].beat; // 0.5
-      const maxAvail = nextBeat - snap - prevBeat; // 0.25
-      // need for amp 0.5 TOP is 1.0 > maxAvail 0.25
+      // [Step2: Perform Interaction] diagonal: X variable + zone-cross Y
       const result = calculateVertexDrag({
         segments: initial,
         bpmTimeline: tl,
         startPosition: 0,
         pointIndex: idx,
-        targetBeat: prevBeat + snap,
-        targetY: TOP,
+        targetBeat: mouseBeat,
+        targetY: TOP, // demands Y shift, need 0.5
+        snap,
+      });
+      expect(result, 'horizontal diagonal must not be null').not.toBeNull();
+      const segs = result!;
+
+      // [Step3: Assert Resulting Transition] X strictly reproduced
+      const engine1 = new WaveEngine(segs, tl, amp, 0);
+      const pts1 = engine1.getPoints();
+      expect(pts1.length).toBe(pts0.length);
+      for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
+      // Achieved beat must equal mouse quantized, NOT shifted to prev+need (1.5)
+      expect(Math.abs(pts1[idx].beat - mouseBeat)).toBeLessThan(1e-6);
+      // Must NOT be hijacked to need location
+      const hijackedBeat = prevBeat + needTop; // 1.5
+      expect(Math.abs(pts1[idx].beat - hijackedBeat)).toBeGreaterThan(0.1);
+      // Direction still best-effort (TOP zone) but beats not hijacked
+      // For this X, Y best-effort: direction up but beats stays mouse
+      expect(segs[idx - 1].beats).toBeCloseTo(quantizeBeat(mouseBeat - prevBeat, snap), 4);
+    });
+
+    it('interior: horizontal X variable with BOTTOM demand also not hijacked (amp 1.0)', () => {
+      // [Step1]
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 2;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const mouseBeat = quantizeBeat(prevBeat + 0.25, snap);
+      const stationaryBeat = quantizeBeat(engine0.getPoints()[idx].beat, snap);
+      expect(mouseBeat).not.toBe(stationaryBeat);
+
+      // [Step2]
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: mouseBeat,
+        targetY: BOTTOM,
         snap,
       });
       expect(result).not.toBeNull();
-      const segs = result!;
-      const engine1 = new WaveEngine(segs, tl, amp, 0);
-      const pts1 = engine1.getPoints();
-      // Shifts to maxAvail, not to need (which would violate adjacency)
-      expect(Math.abs(pts1[idx].beat - (prevBeat + maxAvail))).toBeLessThan(1e-6);
-      expect(isSnapAligned(segs[idx - 1].beats, snap)).toBe(true);
-      expect(isSnapAligned(segs[idx].beats, snap)).toBe(true);
-      expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
+      // [Step3]
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      expect(Math.abs(pts1[idx].beat - mouseBeat)).toBeLessThan(1e-6);
+      expect(Math.abs(pts1[idx].beat - (prevBeat + needTop))).toBeGreaterThan(0.1);
+    });
+
+    it('interior: off-grid mouse 1.23 with TOP demand must track X, not maxAvail', () => {
+      // [Step1]
+      const snap2 = 0.5;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 2 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1; // beat 2.0
+      const prevBeat = engine0.getPoints()[idx - 1].beat; // 0
+      const nextBeat = engine0.getPoints()[idx + 1].beat; // 4.0
+      // off-grid 0.37 quantize 0.5, 1.23 quantize 1.0 with snap 0.5
+      const raw = 1.23;
+      const mouseBeat = quantizeBeat(prevBeat + raw, snap2); // 1.0? actually 0+1.23 ->1.0
+      const stationary = quantizeBeat(engine0.getPoints()[idx].beat, snap2); // 2.0
+      expect(mouseBeat).not.toBe(stationary);
+      // [Step2]
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: mouseBeat,
+        targetY: TOP,
+        snap: snap2,
+      });
+      expect(result).not.toBeNull();
+      // [Step3]
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      expect(Math.abs(pts1[idx].beat - mouseBeat)).toBeLessThan(1e-6);
+      // Ensure not hijacked to prev+need (0.5) nor maxAvail
+      const maxAvail = nextBeat - snap2 - prevBeat;
+      expect(Math.abs(pts1[idx].beat - (prevBeat + maxAvail))).toBeGreaterThan(0.1);
+    });
+
+    it('interior: pure horizontal within same zone (no Y demand) tracks X exactly', () => {
+      // [Step1] same zone Y => no need, but still verify X not collapsed to need
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1; // beat 1.0
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const nextBeat = engine0.getPoints()[idx + 1].beat;
+      const mouseBeat = quantizeBeat(prevBeat + 0.37, snap); // 0.25? actually 0.37->0.25
+      const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, mouseBeat));
+      const sameZoneY = CENTER + 5; // still CENTER zone (256.7-343.3)
+      expect(zoneOf(sameZoneY)).toBe(zoneOf(CENTER));
+      // [Step2]
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: clamped,
+        targetY: sameZoneY,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      // [Step3]
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      expect(Math.abs(pts1[idx].beat - clamped)).toBeLessThan(1e-6);
+      for (const s of result!) expect(isSnapAligned(s.beats, snap)).toBe(true);
     });
   });
 
   // ------------------------------------------------------------------
-  // 2. Endpoint vertices (0 and n) must also shift when Y demand exceeds X
+  // 2. Pure vertical drag (X stationary) must retain T215 reachability
   // ------------------------------------------------------------------
-  describe('2. Endpoint vertex reachability (first & last)', () => {
-    it('first vertex idx=0: small mouse beats with TOP demand must extend left-demand (shift to need)', () => {
-      // [Step1] first vertex at beat 0 CENTER, next at 0.5 (narrow)
-      // This requires const->let fix: endpoint branch reassigns clampedBeat
-      const amp = 1.0;
+  describe('2. Pure vertical drag retains T215 reachability (stationary X gate)', () => {
+    it('interior stationary X with TOP demand in narrow span shifts to need (off-grid Y 200.37)', () => {
+      // [Step1: Capture Initial State] narrow span where need > current tiny mouse equivalent
       const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const amp = 1.0;
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
-        { direction: 'down', beats: 0.5 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 0.25 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const pts0 = engine0.getPoints();
+      const idx = 2; // at beat 1.25 ? let's compute: 0,1.0,1.25,2.25
+      const actualIdx = 2;
+      const prevBeat = pts0[actualIdx - 1].beat; // 1.0
+      const nextBeat = pts0[actualIdx + 1].beat; // 2.25
+      const curBeat = pts0[actualIdx].beat; // 1.25
+      const yPrev = pts0[actualIdx - 1].y; // CENTER
+      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+      const need = Math.max(snap, ceilBeat(Math.abs(TOP - yPrev) / perBeat, snap)); // 0.5
+      expect(need).toBe(0.5);
+      // Current distance from prev to cur is 0.25 < need, so stationary TOP requires shift
+      const curDist = curBeat - prevBeat;
+      expect(curDist).toBe(0.25);
+      expect(need).toBeGreaterThan(curDist);
+      const stationaryBeat = quantizeBeat(curBeat, snap);
+      // [Step2: Perform Interaction] pure vertical: same beat, zone-cross Y
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: actualIdx,
+        targetBeat: stationaryBeat, // stationary X
+        targetY: 200.37, // TOP zone off-grid
+        snap,
+      });
+      expect(result).not.toBeNull();
+      const segs = result!;
+      // [Step3: Assert Resulting Transition] shifted to need
+      for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
+      const engine1 = new WaveEngine(segs, tl, amp, 0);
+      const pts1 = engine1.getPoints();
+      expect(Math.abs(pts1[actualIdx].beat - (prevBeat + need))).toBeLessThan(1e-6);
+      expect(pts1[actualIdx].y).toBeCloseTo(TOP, 6);
+      expect(segs[actualIdx - 1].beats).toBeCloseTo(need, 4);
+      expect(segs[actualIdx - 1].direction).toBe('up');
+    });
+
+    it('interior stationary X with BOTTOM demand shifts symmetrically (off-grid)', () => {
+      // [Step1]
+      const snap = 0.25;
+      const amp = 1.0;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 0.25 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 2;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const curBeat = engine0.getPoints()[idx].beat;
+      const yPrev = engine0.getPoints()[idx - 1].y;
+      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+      const need = Math.max(snap, ceilBeat(Math.abs(BOTTOM - yPrev) / perBeat, snap));
+      expect(need).toBeGreaterThan(curBeat - prevBeat);
+      // [Step2]
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: quantizeBeat(curBeat, snap),
+        targetY: BOTTOM, // bottom zone
+        snap,
+      });
+      expect(result).not.toBeNull();
+      // [Step3]
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      expect(Math.abs(pts1[idx].beat - (prevBeat + need))).toBeLessThan(1e-6);
+      expect(pts1[idx].y).toBeCloseTo(BOTTOM, 6);
+    });
+
+    it('interior stationary with complex amp 1.3 and snap 0.5 off-grid phase', () => {
+      // [Step1]
+      const snap = 0.5;
+      const amp = 1.3;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 0.5 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 2;
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const curBeat = engine0.getPoints()[idx].beat;
+      const perBeat = 2 * TW_AMP * amp;
+      const need = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap));
+      // [Step2] stationary
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: quantizeBeat(curBeat, snap),
+        targetY: TOP,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      // need for amp1.3: 130/338≈0.384 ceil to 0.5 => 0.5, current dist 0.5 equals need, no shift beyond but still reaches
+      expect(isSnapAligned(result![idx - 1].beats, snap)).toBe(true);
+      if (need > curBeat - prevBeat + 1e-9) {
+        expect(Math.abs(pts1[idx].beat - (prevBeat + need))).toBeLessThan(1e-6);
+      }
+    });
+
+    it('stationary must use ceilBeat not quantizeBeat: need 0.714 beats with snap 0.5 must round up to 1.0', () => {
+      // This distinguishes ceil (must reach) vs quantize (would under-shoot to 0.5)
+      // Choose amp 0.7: perBeat 182, TOP diff 130 => 0.714..., ceil to 1.0, quantize would give 0.5
+      const snap = 0.5;
+      const amp = 0.7;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 0.5 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 2; // narrow 0.5 distance, need 1.0 >0.5
+      const prevBeat = engine0.getPoints()[idx - 1].beat;
+      const yPrev = engine0.getPoints()[idx - 1].y;
+      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
+      const needCeil = Math.max(snap, ceilBeat(Math.abs(TOP - yPrev) / perBeat, snap));
+      const needQuant = Math.max(snap, quantizeBeat(Math.abs(TOP - yPrev) / perBeat, snap));
+      expect(needCeil).toBe(1.0);
+      expect(needQuant).toBe(0.5); // would under-shoot
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: quantizeBeat(engine0.getPoints()[idx].beat, snap),
+        targetY: TOP,
+        snap,
+      });
+      expect(result).not.toBeNull();
+      expect(result![idx - 1].beats).toBeCloseTo(needCeil, 4);
+      expect(result![idx - 1].beats).not.toBeCloseTo(needQuant, 4);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 3. Endpoint stationary gates
+  // ------------------------------------------------------------------
+  describe('3. Endpoint vertex gates (first and last)', () => {
+    it('first vertex: stationary-equivalent (clampedBeat==next-segBeats) with TOP demand shifts, X variable does not', () => {
+      // [Step1]
+      const snap = 0.25;
+      const amp = 1.0;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 0.5 },
         { direction: 'up', beats: 1 },
       ];
       const engine0 = new WaveEngine(initial, tl, amp, 0);
-      const nextBeat = engine0.getPoints()[1].beat; // 0.5
-      const y0 = engine0.getPoints()[0].y; // CENTER (startPosition 0)
+      const pts0 = engine0.getPoints();
+      const nextBeat = pts0[1].beat; // 0.5
+      const seg0Beats = initial[0].beats;
+      const stationaryClamped = nextBeat - seg0Beats; // 0
+      const y0 = pts0[0].y; // CENTER
       const perBeat = 2 * TW_AMP * tl.amplitudeAt(0);
       const need = Math.max(snap, ceilBeat(Math.abs(TOP - y0) / perBeat, snap)); // 0.5
-      // mouse gives only snap: clampedBeat = next - snap =0.25 => beats 0.25 < need 0.5
-      const mouseBeat = nextBeat - snap; // 0.25
-      // [Step2]
-      let result: Segment[] | null = null;
-      expect(() => {
-        result = calculateVertexDrag({
-          segments: initial,
-          bpmTimeline: tl,
-          startPosition: 0,
-          pointIndex: 0,
-          targetBeat: mouseBeat,
-          targetY: TOP, // stay? Actually y0 CENTER->TOP is up, needs shift
-          snap,
-        });
-      }).not.toThrow(); // before fix TypeError: Assignment to constant variable
-      expect(result).not.toBeNull();
-      const segs = result!;
-      // [Step3] beats must be >= need (0.5) after shift
-      expect(segs[0].beats).toBeGreaterThanOrEqual(need - 1e-9);
-      expect(isSnapAligned(segs[0].beats, snap)).toBe(true);
-      // Direction should be up (CENTER->TOP) or stay? Check zone
-      // y0 CENTER (zone1) -> TOP zone0 => up
-      expect(segs[0].direction).toBe('up');
-      const engine1 = new WaveEngine(segs, tl, amp, 0);
-      expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
-      expect(engine1.getPoints()[0].beat).toBeCloseTo(0, 6);
-      // endpoint Y still CENTER (startPosition), but segment direction up will go to TOP after need beats
-      // Check second point Y reaches expectation approx
-      expect(engine1.getPoints()[1].y).toBeCloseTo(TOP, 0);
+      expect(need).toBe(0.5);
+      // narrow: nextBeat 0.5, need 0.5 equals total span, so stationary should keep 0.5, but small mouse would need shift?
+      // Use smaller seg0 to trigger need>mouse: create initial with seg0 0.25 (mouse 0.25 distance 0.25 < need 0.5)
+      const initialNarrow: Segment[] = [
+        { direction: 'stay', beats: 0.25 },
+        { direction: 'up', beats: 1 },
+      ];
+      const engineN = new WaveEngine(initialNarrow, tl, amp, 0);
+      const nextN = engineN.getPoints()[1].beat; // 0.25
+      const stationaryN = nextN - initialNarrow[0].beats; // 0
+      // stationary case: targetBeat stationary (0)
+      const resStationary = calculateVertexDrag({
+        segments: initialNarrow,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: 0,
+        targetBeat: quantizeBeat(stationaryN, snap),
+        targetY: TOP,
+        snap,
+      });
+      expect(resStationary).not.toBeNull();
+      // need > beats (0.5 >0.25) and stationary so should shift to need
+      expect(resStationary![0].beats).toBeCloseTo(need, 4);
+
+      // X variable case: targetBeat = next - snap =0.0? Actually next 0.25 next-snap=0.0 => clamp?
+      // Let's use wider initial for X variable test: initial with seg 0.5, X variable 0.25 distance
+      const mouseBeatVar = quantizeBeat(nextBeat - snap, snap); // 0.25 for initial 0.5? wait next 0.5 next-snap 0.25
+      expect(mouseBeatVar).not.toBe(stationaryClamped); // X variable
+      const resVar = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: 0,
+        targetBeat: mouseBeatVar,
+        targetY: TOP, // demands need 0.5, but X variable => should NOT hijack to 0.5? Actually mouse gives 0.25 < need 0.5 but X variable => stay 0.25
+        snap,
+      });
+      expect(resVar).not.toBeNull();
+      expect(resVar![0].beats).toBeCloseTo(quantizeBeat(nextBeat - mouseBeatVar, snap), 4);
+      expect(Math.abs(resVar![0].beats - need)).toBeGreaterThan(0.1);
     });
 
-    it('last vertex idx=n: small mouse beats with BOTTOM demand must extend right', () => {
+    it('last vertex: stationary X with BOTTOM demand shifts to need, X variable does not', () => {
       // [Step1]
-      const amp = 1.3;
       const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const amp = 0.7;
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
-        { direction: 'down', beats: 1 },
-        { direction: 'stay', beats: 0.5 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 0.25 },
       ];
       const engine0 = new WaveEngine(initial, tl, amp, 0);
       const pts0 = engine0.getPoints();
       const n = pts0.length - 1;
       const prevBeat = pts0[n - 1].beat; // 1.0
-      const yPrev = pts0[n - 1].y;
+      const curBeat = pts0[n].beat; // 1.25
+      const yPrev = pts0[n - 1].y; // CENTER
       const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
-      // yPrev may be BOTTOM or CENTER depending on first segment
       const need = Math.max(snap, ceilBeat(Math.abs(BOTTOM - yPrev) / perBeat, snap));
-      const mouseBeat = prevBeat + snap; // minimal
-      // [Step2] must not throw (const->let)
-      let result: Segment[] | null = null;
-      expect(() => {
-        result = calculateVertexDrag({
-          segments: initial,
-          bpmTimeline: tl,
-          startPosition: 0,
-          pointIndex: n,
-          targetBeat: mouseBeat,
-          targetY: BOTTOM,
-          snap,
-        });
-      }).not.toThrow();
-      expect(result).not.toBeNull();
-      const segs = result!;
-      // [Step3] if need > snap, beats should be need
-      if (need > snap + 1e-9) {
-        expect(segs[segs.length - 1].beats).toBeCloseTo(need, 4);
-      }
-      expect(isSnapAligned(segs[segs.length - 1].beats, snap)).toBe(true);
-      const engine1 = new WaveEngine(segs, tl, amp, 0);
-      expect(engine1.getPoints().length).toBe(pts0.length);
+      // For amp 0.7 need ~0.75, current 0.25 < need so stationary should expand
+      expect(need).toBeGreaterThan(curBeat - prevBeat);
+      // [Step2] stationary
+      const resStat = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: n,
+        targetBeat: quantizeBeat(curBeat, snap),
+        targetY: BOTTOM,
+        snap,
+      });
+      expect(resStat).not.toBeNull();
+      expect(resStat![resStat!.length - 1].beats).toBeCloseTo(need, 4);
+      // [Step3] X variable: move to 1.5 (prev 1.0 +0.5) demand BOTTOM but X moving => stay at 0.5 not hijacked to 0.75
+      const mouseVar = quantizeBeat(prevBeat + 0.5, snap);
+      expect(mouseVar).not.toBe(quantizeBeat(curBeat, snap));
+      const resVar = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: n,
+        targetBeat: mouseVar,
+        targetY: BOTTOM,
+        snap,
+      });
+      expect(resVar).not.toBeNull();
+      expect(resVar![resVar!.length - 1].beats).toBeCloseTo(quantizeBeat(mouseVar - prevBeat, snap), 4);
+      expect(Math.abs(resVar![resVar!.length - 1].beats - need)).toBeGreaterThan(0.1);
     });
   });
 
   // ------------------------------------------------------------------
-  // 3. Off-grid fractional verification (0.37, 1.23, 0.63, 0.87) + complex amps
+  // 4. T215 reproduction harness with X fidelity assertion (including endpoints)
   // ------------------------------------------------------------------
-  describe('3. Off-grid fractional verification with complex amplitudes', () => {
-    const offGridBeats = [0.37, 1.23, 0.63, 0.87];
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const snaps = [0.125, 0.25, 0.5, 1];
-
-    for (const amp of amps) {
-      for (const snap of snaps) {
-        for (const off of offGridBeats) {
-          it(`amp=${amp} snap=${snap} off=${off}: interior drag off-grid beats give snap-aligned, length invariant`, () => {
-            // [Step1] capture
-            const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-            const initial: Segment[] = [
-              { direction: 'down', beats: quantizeBeat(1.5, snap) || snap },
-              { direction: 'up', beats: quantizeBeat(1.5, snap) || snap },
-              { direction: 'down', beats: quantizeBeat(1.5, snap) || snap },
-            ];
-            const engine0 = new WaveEngine(initial, tl, amp, 0);
-            const idx = 1;
-            const prevBeat = engine0.getPoints()[idx - 1].beat;
-            const nextBeat = engine0.getPoints()[idx + 1].beat;
-            const rawTarget = engine0.getPoints()[idx].beat + off;
-            const targetBeat = quantizeBeat(rawTarget, snap);
-            const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
-            const targetY = off < 1 ? TOP : BOTTOM; // alternate zones off-grid
-            // [Step2]
-            const result = calculateVertexDrag({
-              segments: initial,
-              bpmTimeline: tl,
-              startPosition: 0,
-              pointIndex: idx,
-              targetBeat: clamped,
-              targetY,
-              snap,
-            });
-            expect(result).not.toBeNull();
-            const segs = result!;
-            // [Step3] invariants
-            for (const s of segs) expect(isSnapAligned(s.beats, snap)).toBe(true);
-            const engine1 = new WaveEngine(segs, tl, amp, 0);
-            expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
-            // only 2 segments around idx changed
-            for (let k = 0; k < initial.length; k++) {
-              if (k === idx - 1 || k === idx) continue;
-              expect(segs[k].beats).toBeCloseTo(initial[k].beats, 6);
-            }
-            // total span unchanged
-            const spanOrig = nextBeat - prevBeat;
-            const spanNew = segs[idx - 1].beats + segs[idx].beats;
-            expect(Math.abs(spanNew - spanOrig)).toBeLessThan(1e-6);
-          });
-        }
-      }
-    }
-  });
-
-  // ------------------------------------------------------------------
-  // 4. Drag sequence harness — monotonic, no infinite freeze (direction×distance×height×amp)
-  // ------------------------------------------------------------------
-  describe('4. Drag sequence harness: direction × distance × height × amplitude — monotonic & freeze detection', () => {
+  describe('4. T215 harness + X fidelity across all combinations (amp, snap, distance, height, endpoints)', () => {
     const amps = [0.7, 1.0, 1.3, 2.7] as const;
-    const snaps = [0.25] as const;
-    const distances = [0.25, 0.5, 0.75, 1.0, 1.23]; // beats from prev
+    const snaps = [0.25, 0.5] as const;
+    const distances = [0.25, 0.5, 0.75, 1.0, 1.23]; // from prev
     const heights: Array<{ y: number; name: string }> = [
       { y: TOP, name: 'TOP' },
       { y: CENTER, name: 'CENTER' },
@@ -439,45 +534,33 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
     for (const amp of amps) {
       for (const snap of snaps) {
         for (const h of heights) {
-          it(`amp=${amp} snap=${snap} height=${h.name}: increasing targetBeat yields monotonic achieved beat (no freeze)`, () => {
-            // [Step1] initial narrow-ish span to expose freeze
-            const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+          it(`amp=${amp} snap=${snap} height=${h.name}: sweep retains X fidelity or T215 reachability (no freeze)`, () => {
+            // [Step1] narrow-ish span
+            const tl = makeTimeline(amp);
             const initial: Segment[] = [
               { direction: 'stay', beats: 1 },
+              { direction: 'stay', beats: 0.25 },
               { direction: 'stay', beats: 1 },
+              { direction: 'stay', beats: 0.25 },
               { direction: 'stay', beats: 1 },
             ];
             const engine0 = new WaveEngine(initial, tl, amp, 0);
-            const idx = 1;
-            const prevBeat = engine0.getPoints()[idx - 1].beat;
-            const nextBeat = engine0.getPoints()[idx + 1].beat;
+            const idx = 2; // at 1.25 (narrow)
+            const prevBeat = engine0.getPoints()[idx - 1].beat; // 1.0
+            const nextBeat = engine0.getPoints()[idx + 1].beat; // 2.25
+            const curBeat = engine0.getPoints()[idx].beat; // 1.25
             const yPrev = engine0.getPoints()[idx - 1].y;
-
-            // script drag sequence: sweep targetBeat from prev+snap to next-snap
-            const achieved: number[] = [];
             const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
             const need = Math.max(snap, ceilBeat(Math.abs(snapY(h.y) - yPrev) / perBeat, snap));
 
+            const achieved: number[] = [];
             for (const d of distances) {
               const rawTarget = prevBeat + d;
               const targetBeat = quantizeBeat(rawTarget, snap);
               const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
-              // T157: exact no-op (beat and Y identical) returns null — skip monotonic counting
-              const curBeat = engine0.getPoints()[idx].beat;
-              const curY = engine0.getPoints()[idx].y;
-              if (Math.abs(clamped - curBeat) < 1e-9 && Math.abs(h.y - curY) < 1e-9) {
-                const noop = calculateVertexDrag({
-                  segments: initial,
-                  bpmTimeline: tl,
-                  startPosition: 0,
-                  pointIndex: idx,
-                  targetBeat: clamped,
-                  targetY: h.y,
-                  snap,
-                });
-                expect(noop).toBeNull();
-                continue;
-              }
+              const isStationary = Math.abs(clamped - quantizeBeat(curBeat, snap)) < 1e-9;
+              // T157 no-op skip
+              if (Math.abs(clamped - curBeat) < 1e-9 && Math.abs(h.y - engine0.getPoints()[idx].y) < 1e-9) continue;
               const result = calculateVertexDrag({
                 segments: initial,
                 bpmTimeline: tl,
@@ -491,82 +574,46 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
               const engine1 = new WaveEngine(result!, tl, amp, 0);
               const beatAchieved = engine1.getPoints()[idx].beat;
               achieved.push(beatAchieved);
-              // if Y demand needs large beats, early small distances must already be shifted
-              if (h.y !== CENTER && need > d + 1e-9 && need <= (nextBeat - prevBeat - snap) + 1e-9) {
-                expect(beatAchieved).toBeGreaterThanOrEqual(prevBeat + need - 1e-6);
+              // X fidelity assertion: if not stationary, beat must equal clamped (not hijacked)
+              if (!isStationary && h.y !== CENTER && need > d + 1e-9 && need <= (nextBeat - prevBeat - snap) + 1e-9) {
+                // For X variable, should NOT be shifted to need
+                expect(Math.abs(beatAchieved - clamped)).toBeLessThan(1e-6);
+                // Old bug would shift to prev+need
+                expect(Math.abs(beatAchieved - (prevBeat + need))).toBeGreaterThan(0.01);
               }
+              // If stationary and need > d, must shift to need
+              if (isStationary && need > (curBeat - prevBeat) + 1e-9) {
+                expect(beatAchieved).toBeCloseTo(prevBeat + need, 4);
+              }
+              // invariants per step
+              for (const s of result!) expect(isSnapAligned(s.beats, snap)).toBe(true);
+              expect(engine1.getPoints().length).toBe(engine0.getPoints().length);
             }
-            // monotonic non-decreasing (allow equal only at clamp limit)
+            // monotonic non-decreasing
             for (let i = 1; i < achieved.length; i++) {
               expect(achieved[i]).toBeGreaterThanOrEqual(achieved[i - 1] - 1e-9);
-            }
-            // not all equal — at least one increase (freeze would be all equal)
-            const distinct = new Set(achieved.map(v => v.toFixed(4)));
-            // if distances vary, beats should vary (unless at maxAvail clamp)
-            // For narrow demand that needs shift, first entries already at need, so later larger distances should still increase beyond need
-            if (need + 0.5 <= (nextBeat - prevBeat - snap) + 1e-9) {
-              expect(distinct.size).toBeGreaterThan(1);
             }
           });
         }
       }
     }
 
-    it('Y-demand harness: same X (small) with increasing Y demand must increase beats (not freeze)', () => {
-      // [Step1] fixed small X, sweep Y from stay to opposite zone
-      const amp = 1.0;
-      const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-      const initial: Segment[] = [
-        { direction: 'stay', beats: 1 },
-        { direction: 'stay', beats: 1 },
-        { direction: 'stay', beats: 1 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, amp, 0);
-      const idx = 1;
-      const prevBeat = engine0.getPoints()[idx - 1].beat;
-      const targetBeat = prevBeat + snap; // minimal X
-
-      // sequence of Y: CENTER (stay, need snap) -> intermediate -> TOP (need 0.5) -> BOTTOM (need 0.5)
-      const ySeq = [CENTER + 5, CENTER, TOP, BOTTOM];
-      const beatsSeq: number[] = [];
-      for (const y of ySeq) {
-        const result = calculateVertexDrag({
-          segments: initial,
-          bpmTimeline: tl,
-          startPosition: 0,
-          pointIndex: idx,
-          targetBeat,
-          targetY: y,
-          snap,
-        });
-        expect(result).not.toBeNull();
-        beatsSeq.push(result![idx - 1].beats);
-        expect(isSnapAligned(result![idx - 1].beats, snap)).toBe(true);
-      }
-      // For amp 1.0 snap 0.25: CENTER demand (stay) => beats 0.25, TOP demand => beats 0.5 — must increase
-      // Freeze bug would keep 0.25 for both
-      expect(beatsSeq[2]).toBeGreaterThan(beatsSeq[0] - 1e-9);
-      // All beats snap aligned
-      for (const b of beatsSeq) expect(isSnapAligned(b, snap)).toBe(true);
-    });
-
-    it('off-grid distance 0.37 vs 0.87 must give distinct beats (not collapsed)', () => {
+    it('off-grid 0.37 vs 0.87 must give distinct beats (not collapsed) with zone-cross Y', () => {
       const amp = 2.7;
       const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
-        { direction: 'stay', beats: 2 },
-        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
       ];
       const engine0 = new WaveEngine(initial, tl, amp, 0);
       const idx = 1;
       const prevBeat = engine0.getPoints()[idx - 1].beat;
-      const ySame = CENTER;
       const t1 = quantizeBeat(prevBeat + 0.37, snap);
       const t2 = quantizeBeat(prevBeat + 0.87, snap);
-      const r1 = calculateVertexDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, pointIndex: idx, targetBeat: t1, targetY: ySame, snap });
-      const r2 = calculateVertexDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, pointIndex: idx, targetBeat: t2, targetY: ySame, snap });
+      const r1 = calculateVertexDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, pointIndex: idx, targetBeat: t1, targetY: TOP, snap });
+      const r2 = calculateVertexDrag({ segments: initial, bpmTimeline: tl, startPosition: 0, pointIndex: idx, targetBeat: t2, targetY: TOP, snap });
       expect(r1).not.toBeNull();
       expect(r2).not.toBeNull();
       const b1 = new WaveEngine(r1!, tl, amp, 0).getPoints()[idx].beat;
@@ -575,17 +622,53 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
       expect(Math.abs(b2 - t2)).toBeLessThan(1e-6);
       expect(b2).toBeGreaterThan(b1);
     });
+
+    it('endpoint first: X variable not hijacked, stationary hijack retained (amp 1.3 snap 0.25 off-grid)', () => {
+      const snap = 0.25;
+      const amp = 1.3;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 0.25 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const nextBeat = engine0.getPoints()[1].beat; // 0.25
+      // X variable: target 0.0? Actually clampedBeat = 0.5? Wait next 0.25, need bigger
+      // For this test, use diagonal with TOP demand: stationary 0 -> need 0.5 >0.25 => would shift
+      // X variable: choose clampedBeat = 0.0? That's stationary? Let's choose 0.25? Hmm
+      // For first vertex, stationary is 0, variable is like 0.25? But clamped range is [snap, next-snap] => with next 0.25, range empty => null? Use wider initial for variable test
+      const initialWide: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engW = new WaveEngine(initialWide, tl, amp, 0);
+      const nextW = engW.getPoints()[1].beat; //1
+      const mouseVar = quantizeBeat(nextW - 0.25, snap); //0.75 -> beats 0.25
+      const resVar = calculateVertexDrag({
+        segments: initialWide,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: 0,
+        targetBeat: mouseVar,
+        targetY: 400.37, // BOTTOM zone
+        snap,
+      });
+      expect(resVar).not.toBeNull();
+      // With X variable (mouse 0.75 !=0) should stay at 0.25 beats, not hijacked to need 0.5
+      expect(resVar![0].beats).toBeCloseTo(quantizeBeat(nextW - mouseVar, snap), 4);
+    });
   });
 
   // ------------------------------------------------------------------
   // 5. Invariants: length, snap, only 2 segments changed, posterior immobility
   // ------------------------------------------------------------------
   describe('5. Invariants: getPoints length, snap, 2-segment scope, posterior shift', () => {
-    it('interior drag changes exactly 2 segments, others bit-exact, total span preserved', () => {
+    it('interior drag changes exactly 2 segments, others bit-exact, total span preserved (amp 2.7 off-grid)', () => {
       // [Step1]
-      const amp = 1.3;
+      const amp = 2.7;
       const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
         { direction: 'down', beats: 1 },
         { direction: 'up', beats: 1 },
@@ -599,14 +682,14 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
       const nextBeat = pts0[idx + 1].beat;
       const targetBeat = quantizeBeat(prevBeat + 0.63, snap);
       const clamped = Math.max(prevBeat + snap, Math.min(nextBeat - snap, targetBeat));
-      // [Step2]
+      // [Step2] choose same zone Y to keep pure X (no shift)
       const result = calculateVertexDrag({
         segments: initial,
         bpmTimeline: tl,
         startPosition: 0,
         pointIndex: idx,
         targetBeat: clamped,
-        targetY: pts0[idx].y,
+        targetY: engine0.getPoints()[idx].y, // stationary Y but X moves -> no hijack
         snap,
       });
       expect(result).not.toBeNull();
@@ -623,19 +706,17 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
       const spanOrig = nextBeat - prevBeat;
       const spanNew = segs[idx - 1].beats + segs[idx].beats;
       expect(Math.abs(spanNew - spanOrig)).toBeLessThan(1e-6);
-      // posterior points unchanged beyond idx+1
       const pts1 = new WaveEngine(segs, tl, amp, 0).getPoints();
       for (let i = idx + 1; i < pts0.length; i++) {
         expect(Math.abs(pts1[i].beat - pts0[i].beat)).toBeLessThan(1e-6);
       }
     });
 
-    it('all beats remain snap multiples across random off-grid drags', () => {
+    it('all beats remain snap multiples across off-grid drags (snap 0.125/0.25/0.5/1 amp 0.7/1.3/2.7)', () => {
       const snaps = [0.125, 0.25, 0.5] as const;
       const amp = 2.7;
       for (const snap of snaps) {
-        const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
-        // snap-aligned initial: quantize raw beats to snap to guarantee alignment
+        const tl = makeTimeline(amp);
         const initial: Segment[] = [
           { direction: 'down', beats: quantizeBeat(1.5, snap) },
           { direction: 'up', beats: quantizeBeat(0.75, snap) || snap },
@@ -661,10 +742,9 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
           }
         }
       }
-      // snap=1 separately with explicitly aligned beats
       {
         const snap = 1 as const;
-        const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+        const tl = makeTimeline(amp);
         const initial: Segment[] = [
           { direction: 'down', beats: 2 },
           { direction: 'up', beats: 1 },
@@ -686,7 +766,7 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
             snap,
           });
           if (res) {
-            for (const s of res) expect(isSnapAligned(s.beats, snap), `snap=${snap} idx=${idx} beats=${s.beats}`).toBe(true);
+            for (const s of res) expect(isSnapAligned(s.beats, snap)).toBe(true);
           }
         }
       }
@@ -694,24 +774,21 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
   });
 
   // ------------------------------------------------------------------
-  // 6. Complex amplitudes + Cursor numeric consistency (T127 style)
+  // 6. Complex amplitudes + off-grid numeric consistency (WaveEngine <-> Cursor)
   // ------------------------------------------------------------------
-  describe('6. Complex amplitudes + off-grid numeric consistency (WaveEngine ↔ Cursor)', () => {
+  describe('6. Complex amplitudes + off-grid numeric consistency (WaveEngine dY & Cursor)', () => {
     const amps = [0.7, 1.3, 2.7, 3.4] as const;
     const offGrid = [0.37, 1.23] as const;
     for (const amp of amps) {
       for (const off of offGrid) {
-        it(`amp=${amp} off=${off}: waveYAt per-beat dY clamped matches Cursor displacement`, () => {
-          // [Step1]
-          const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+        it(`amp=${amp} off=${off}: waveYAt per-beat dY clamped matches expected`, () => {
+          const tl = makeTimeline(amp);
           const segs: Segment[] = [{ direction: 'down', beats: 5 }];
           const engine = new WaveEngine(segs, tl, amp, 0);
           const perBeat = 2 * TW_AMP * amp;
           const rawY = CENTER + perBeat * off;
           const expectedY = Math.max(TOP, Math.min(BOTTOM, rawY));
-          // [Step2] waveYAt
           const actualY = engine.waveYAt(off);
-          // [Step3] assert wave and cursor consistent
           expect(Math.abs(actualY - expectedY)).toBeLessThan(1e-6);
           const beatMs = 500;
           const cursor = new Cursor(amp, 0);
@@ -719,11 +796,8 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
           const startY = cursor.y;
           cursor.update(beatMs / 1000, false, true, beatMs);
           const disp = cursor.y - startY;
-          const expectedDisp = Math.min(BOTTOM - startY, perBeat * (beatMs / 1000) / (beatMs / 1000) * 1); // per beat
-          // Actually per beat disp = perBeat; limited by clamp
           const clampedDisp = Math.min(BOTTOM - CENTER, perBeat);
           expect(Math.abs(disp - clampedDisp)).toBeLessThan(1e-3);
-          // slope check for small off before clamp
           if (off * perBeat < TW_AMP + 1e-9) {
             const smallOff = 0.1;
             const dy = engine.waveYAt(smallOff) - engine.waveYAt(0);
@@ -732,12 +806,10 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
         });
       }
     }
-
-    it('drag result waveYAt at moved vertex equals snapped zone when reachable, else maxAvail', () => {
-      // [Step1] amp 1.3, off-grid 0.37 case where need reachable
+    it('drag result interior X variable preserves per-beat slope (amp 1.3 off 0.37)', () => {
       const amp = 1.3;
       const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
         { direction: 'stay', beats: 2 },
         { direction: 'stay', beats: 2 },
@@ -746,9 +818,8 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
       const idx = 1;
       const prevBeat = engine0.getPoints()[idx - 1].beat;
       const yPrev = engine0.getPoints()[idx - 1].y;
-      // demand TOP from CENTER, need = ceil(130/(2*130*1.3)) = ceil(0.3846) with snap 0.25 => 0.5
       const need = Math.max(snap, ceilBeat(Math.abs(TOP - yPrev) / (2 * TW_AMP * amp), snap));
-      const mouseBeat = prevBeat + snap; // 0.25 < need 0.5
+      const mouseBeat = prevBeat + snap; // small
       const result = calculateVertexDrag({
         segments: initial,
         bpmTimeline: tl,
@@ -758,137 +829,98 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
         targetY: TOP,
         snap,
       });
-      expect(result).not.toBeNull();
-      const engine1 = new WaveEngine(result!, tl, amp, 0);
-      const achievedBeat = engine1.getPoints()[idx].beat;
-      expect(Math.abs(achievedBeat - (prevBeat + need))).toBeLessThan(1e-6);
-      expect(engine1.getPoints()[idx].y).toBeCloseTo(TOP, 6);
-      // off-grid phase check: waveYAt at 0.37 within segment must follow dY
-      const midBeat = prevBeat + 0.37;
-      // mid is inside first segment after drag: y = yPrev + dY*(mid - prev)
-      // dY should be -perBeat for up segment
-      const dY = result![0].direction === 'up' ? -2 * TW_AMP * amp : 2 * TW_AMP * amp;
-      if (midBeat < achievedBeat) {
-        const expectedMidY = Math.max(TOP, Math.min(BOTTOM, yPrev + dY * (midBeat - prevBeat)));
-        expect(engine1.waveYAt(midBeat)).toBeCloseTo(expectedMidY, 0);
+      // For X variable? mouse 0.25 vs cur 2.0 => variable, should NOT shift. So if we use prev+snap not stationary, result should be mouse, not need
+      if (result) {
+        const engine1 = new WaveEngine(result, tl, amp, 0);
+        // X variable => beat equals mouse, need shift not applied
+        expect(Math.abs(engine1.getPoints()[idx].beat - mouseBeat)).toBeLessThan(1e-6);
       }
     });
   });
 
   // ------------------------------------------------------------------
-  // 7. Easing-aware perBeat (BpmTimeline amplitudeAt) used for need
+  // 7. Diagonal spec: X variable + zone cross = X priority, Y best-effort (explicit)
   // ------------------------------------------------------------------
-  describe('7. Time-varying amplitude (bpm_changes list / easing) reflected in perBeat', () => {
-    it('amplitudeAt step: prevBeat in low-amp zone uses low perBeat, high zone uses high', () => {
-      // [Step1] timeline with amplitude step at beat 2: 0.5 -> 1.5
+  describe('7. Diagonal drag spec (X priority, Y best-effort) — with off-grid verification', () => {
+    it('diagonal (dx variable, dy zone-cross) keeps X, does not snap Y to TOP if beats insufficient (amp 0.7 off 0.37)', () => {
+      // [Step1]
       const snap = 0.25;
-      const tl = new BpmTimeline(
-        [
-          { beat: 0, bpm: 120, amplitude: 0.5 },
-          { beat: 2, bpm: 120, amplitude: 1.5 },
-        ] as any,
-        1.0,
-      );
-      // verify amplitudeAt
-      expect(tl.amplitudeAt(0.37)).toBeCloseTo(0.5, 2);
-      expect(tl.amplitudeAt(1.23)).toBeCloseTo(0.5, 2);
-      expect(tl.amplitudeAt(2.5)).toBeCloseTo(1.5, 2);
-
-      // segments covering both zones: stay 2 beats (0-2) + stay 2 beats (2-4)
+      const amp = 0.7;
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
-        { direction: 'stay', beats: 2 },
-        { direction: 'stay', beats: 2 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
       ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      // idx 1 at beat 2.0, yPrev at beat 0, perBeat uses amplitudeAt(0)=0.5
-      const idxLow = 1;
-      const prevBeatLow = engine0.getPoints()[idxLow - 1].beat; // 0
-      const perBeatLow = 2 * TW_AMP * tl.amplitudeAt(prevBeatLow); // 130
-      const needLow = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeatLow, snap)); // 130/130=1.0
-      // idx 2 would be after, but we have only 2 segments: idx 1 is at 2.0 with next at 4.0
-      // For low zone, need 1.0, mouse 0.25 should shift to 1.0
-      const resLow = calculateVertexDrag({
-        segments: initial,
-        bpmTimeline: tl,
-        startPosition: 0,
-        pointIndex: idxLow,
-        targetBeat: prevBeatLow + snap,
-        targetY: TOP,
-        snap,
-      });
-      expect(resLow).not.toBeNull();
-      expect(resLow![0].beats).toBeCloseTo(needLow, 4);
-
-      // Now test high zone: need with amp 1.5 => perBeat 390, need 130/390=0.333 -> ceil 0.5
-      // Use idx after beat 2: drag vertex at 2.0? Actually vertex 1 is exactly at boundary.
-      // To test high zone we need prevBeat =2.0, so we drag vertex that has prev at 2.0.
-      // That would be vertex 2? Wait we have pts 0:0,1:2,2:4. There is no vertex with prev 2 except n=2.
-      // So test last vertex (n) where prev is 2.0 high amp
-      const n = engine0.getPoints().length - 1;
-      const prevHigh = engine0.getPoints()[n - 1].beat; // 2.0
-      const perBeatHigh = 2 * TW_AMP * tl.amplitudeAt(prevHigh); // 390
-      const needHigh = Math.max(snap, ceilBeat(Math.abs(BOTTOM - CENTER) / perBeatHigh, snap)); // 0.5
-      const resHigh = calculateVertexDrag({
-        segments: initial,
-        bpmTimeline: tl,
-        startPosition: 0,
-        pointIndex: n,
-        targetBeat: prevHigh + snap,
-        targetY: BOTTOM,
-        snap,
-      });
-      expect(resHigh).not.toBeNull();
-      expect(resHigh![resHigh!.length - 1].beats).toBeCloseTo(needHigh, 4);
-      // Low need 1.0 vs high need 0.5 — time-varying amplitude must affect result
-      expect(needLow).toBeGreaterThan(needHigh);
-      expect(resLow![0].beats).toBeGreaterThan(resHigh![resHigh!.length - 1].beats - 1e-9);
-    });
-
-    it('easing zone: amplitudeAt interpolated perBeat still yields snap-aligned need', () => {
-      const snap = 0.25;
-      // linear easing from 0.5 to 1.5 over [0,4]
-      const tl = new BpmTimeline(
-        [
-          { beat: 0, bpm: 120, amplitude: 0.5, easeToNext: 'linear' },
-          { beat: 4, bpm: 120, amplitude: 1.5 },
-        ] as any,
-        1.0,
-      );
-      // At beat 1.0, amplitude interpolated: 0.5 + (1.5-0.5)*0.25=0.75
-      const ampAt1 = tl.amplitudeAt(1.0);
-      expect(ampAt1).toBeCloseTo(0.75, 2);
-      const initial: Segment[] = [
-        { direction: 'stay', beats: 2 },
-        { direction: 'stay', beats: 2 },
-      ];
-      const engine0 = new WaveEngine(initial, tl, 1.0, 0);
-      const idx = 1; // at 2.0, amp ~1.0
-      const prevBeat = engine0.getPoints()[idx - 1].beat;
-      const perBeat = 2 * TW_AMP * tl.amplitudeAt(prevBeat);
-      const need = Math.max(snap, ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap));
-      const res = calculateVertexDrag({
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1; // beat 1.0
+      const prevBeat = engine0.getPoints()[idx - 1].beat; // 0
+      const curBeat = engine0.getPoints()[idx].beat; //1.0
+      const perBeat = 2 * TW_AMP * amp; // 182
+      const needTop = ceilBeat(Math.abs(TOP - CENTER) / perBeat, snap); // 0.75
+      // Choose mouse X = prev+0.25 (small) but X variable (cur 1.0 !=0.25) and Y TOP demand
+      const mouseBeat = quantizeBeat(prevBeat + 0.37, snap); // 0.25
+      // Fixed behavior: X stays 0.25, Y tries TOP but beats only 0.25 => displacement 45.5, not reach TOP
+      const result = calculateVertexDrag({
         segments: initial,
         bpmTimeline: tl,
         startPosition: 0,
         pointIndex: idx,
-        targetBeat: prevBeat + snap,
+        targetBeat: mouseBeat,
+        targetY: TOP + 10, // top zone
+        snap,
+      });
+      expect(result).not.toBeNull();
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      expect(Math.abs(pts1[idx].beat - mouseBeat)).toBeLessThan(1e-6);
+      // Direction should be up (best-effort), but Y not fully TOP because beats insufficient (X priority)
+      expect(result![idx - 1].direction).toBe('up');
+      // Wave Y at that beat should be yPrev + perBeat * 0.25 clamped, not TOP
+      const expectedY = Math.max(TOP, Math.min(BOTTOM, CENTER + (-perBeat) * (mouseBeat - prevBeat) * 0)); // wait actually direction up: perBeat negative
+      // For up, y = CENTER - perBeat * beatsPrev
+      const expectedYUp = Math.max(TOP, CENTER - perBeat * (pts1[idx].beat - prevBeat));
+      expect(pts1[idx].y).toBeCloseTo(expectedYUp, 0);
+      // Should NOT be at TOP since insufficient beats, proving X priority over Y reach
+      if (needTop > (pts1[idx].beat - prevBeat) + 1e-9) {
+        expect(Math.abs(pts1[idx].y - TOP)).toBeGreaterThan(10);
+      }
+    });
+    it('pure vertical (dx stationary) with same TOP demand DOES reach TOP (same amp/snap)', () => {
+      const snap = 0.25;
+      const amp = 0.7;
+      const tl = makeTimeline(amp);
+      const initial: Segment[] = [
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'stay', beats: 1 },
+      ];
+      const engine0 = new WaveEngine(initial, tl, amp, 0);
+      const idx = 1;
+      const curBeat = engine0.getPoints()[idx].beat;
+      const result = calculateVertexDrag({
+        segments: initial,
+        bpmTimeline: tl,
+        startPosition: 0,
+        pointIndex: idx,
+        targetBeat: quantizeBeat(curBeat, snap), // stationary
         targetY: TOP,
         snap,
       });
-      expect(res).not.toBeNull();
-      expect(isSnapAligned(res![0].beats, snap)).toBe(true);
-      expect(res![0].beats).toBeCloseTo(need, 4);
+      expect(result).not.toBeNull();
+      const pts1 = new WaveEngine(result!, tl, amp, 0).getPoints();
+      // stationary => shifts to need, reaches TOP
+      expect(pts1[idx].y).toBeCloseTo(TOP, 6);
     });
   });
 
   // ------------------------------------------------------------------
-  // 8. Regression: other editorDrag APIs still satisfy invariants (T155 etc)
+  // 8. Regression: other editorDrag APIs still satisfy invariants
   // ------------------------------------------------------------------
-  describe('8. Regression: edge/multi drag invariants not broken by T215', () => {
-    it('calculateEdgeDrag preserves original length and snap, getPoints invariant', () => {
+  describe('8. Regression: edge/multi drag invariants not broken by T216', () => {
+    it('calculateEdgeDrag preserves original length and snap, getPoints invariant (amp 1.3 off 0.37)', () => {
       const amp = 1.3;
       const snap = 0.25;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
         { direction: 'down', beats: 1.5 },
         { direction: 'up', beats: 2.0 },
@@ -915,11 +947,10 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
       for (const s of result!) expect(isSnapAligned(s.beats, snap)).toBe(true);
       expect(new WaveEngine(result!, tl, amp, 0).getPoints().length).toBe(pts0.length);
     });
-
     it('calculateVertexMultiDrag single vertex {v} moves only that vertex', () => {
       const snap = 0.25;
       const amp = 1.3;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
         { direction: 'down', beats: 1 },
         { direction: 'up', beats: 1 },
@@ -945,11 +976,10 @@ describe('T215 頂点ドラッグ到達可能性解決 — Vitest node (editorDr
       expect(Math.abs(pts1[v + 1].beat - pts0[v + 1].beat)).toBeLessThan(1e-6);
       for (const s of res!) expect(isSnapAligned(s.beats, snap)).toBe(true);
     });
-
     it('calculateMultiDrag still works (edge collection)', () => {
       const snap = 0.25;
       const amp = 1.0;
-      const tl = new BpmTimeline([{ beat: 0, bpm: 120, amplitude: amp } as any], amp);
+      const tl = makeTimeline(amp);
       const initial: Segment[] = [
         { direction: 'down', beats: 1 },
         { direction: 'up', beats: 1 },

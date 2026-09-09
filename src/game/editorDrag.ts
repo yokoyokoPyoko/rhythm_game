@@ -73,10 +73,11 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
     if (beats < safeSnap) return null;
     const snappedY = snapY(targetY);
     const d = dirBetween(pts[0].y, snappedY);
-    // T215: shift leftward to increase beats when target Y requires more reach.
+    // T215/T216: reach-shift only fires for pure vertical drags (mouse X unchanged).
     // The only hard floor is beat 0 (the chart start) — re-clamping to safeSnap
     // here would freeze the reach (e.g. nextBeat=0.5, need=0.5 -> beats 0.25).
-    if (d !== 'stay') {
+    const isFirstStaticX = Math.abs(clampedBeat - pts[0].beat) < 1e-9;
+    if (d !== 'stay' && isFirstStaticX) {
       const pbAtPrev = bpmTimeline.amplitudeAt(pts[0].beat);
       const perBeat = 2 * TW_AMP * pbAtPrev;
       const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedY - pts[0].y) / perBeat, safeSnap));
@@ -98,8 +99,9 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
     if (beats < safeSnap) return null;
     const snappedTargetY = snapY(targetY);
     const d = dirBetween(prevPt.y, snappedTargetY);
-    // T215: shift rightward to increase beats when target Y requires more reach
-    if (d === 'down' || d === 'up') {
+    // T215/T216: reach-shift only fires for pure vertical drags (mouse X unchanged).
+    const isLastStaticX = Math.abs(clampedBeat - pts[idx].beat) < 1e-9;
+    if ((d === 'down' || d === 'up') && isLastStaticX) {
       const pbAtPrev = bpmTimeline.amplitudeAt(prevBeat);
       const perBeat = 2 * TW_AMP * pbAtPrev;
       const need = Math.max(safeSnap, ceilBeat(Math.abs(snappedTargetY - prevPt.y) / perBeat, safeSnap));
@@ -132,13 +134,13 @@ export function calculateVertexDrag(input: VertexDragInput): Segment[] | null {
     return null;
   }
 
-  // T215: when the mouse X width is too small to reach the snapped Y zone,
-  // shift beatPrime rightward (toward the needed direction) within adjacency
-  // limits so beatsPrev ≥ need. "need" = |snappedY − yPrev| / perBeat quantized
-  // to snap. Without this, the vertex clamps mid-move and freezes indefinitely.
+  // T215/T216: when the mouse X has not moved (pure vertical drag), shift beatPrime
+  // rightward to guarantee the snapped Y zone is reachable. When X has moved
+  // (diagonal/horizontal drag), X takes priority and beatPrime is left as-is.
   const snappedTargetY_tmp = snapY(targetY);
   const dTmp = dirBetween(yPrev, snappedTargetY_tmp);
-  if (dTmp !== 'stay') {
+  const isInteriorStaticX = Math.abs(beatPrime - pts[idx].beat) < 1e-9;
+  if (dTmp !== 'stay' && isInteriorStaticX) {
     const pbAtPrev = bpmTimeline.amplitudeAt(prevBeat);
     const perBeat = 2 * TW_AMP * pbAtPrev;
     const needRaw = Math.abs(snappedTargetY_tmp - yPrev) / perBeat;

@@ -1974,9 +1974,15 @@
       "finished": 1788953203.4805548
     },
     "T216": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788954183.168876
+      "started": 1788954183.168876,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f7a055ca3ffeinRxJFDkqFpnQH",
+        "coder": "ses_f7a02b92fffejeLbUfkAqltp8P"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
