@@ -1981,7 +1981,8 @@
       "sessions": {
         "qa": "ses_f79f0459effepHnlvSdl7LDuR9",
         "coder": "ses_f79ed5191ffeSwHXzA1Jw1pvsV",
-        "postmortem": "ses_f79f9757dffe19neyVMAjd5AWI"
+        "postmortem": "ses_f79f9757dffe19neyVMAjd5AWI",
+        "reviewer": "ses_f79df57b4ffeq3AY3GTvS6yp6Z"
       },
       "gate_b_golden": true,
       "last_retry_from": "qa",
