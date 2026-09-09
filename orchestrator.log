@@ -9830,3 +9830,39 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-09 18:32:29,789 [INFO] Persisted session ses_f7a7dc1b2ffeLIdM6m7e7cxPSo for task=T214, role=coder
 2026-09-09 18:32:29,790 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
 2026-09-09 18:32:32,585 [INFO] [T214] [38;2;74;222;128mGate A (tsc) PASS[0m
+2026-09-09 18:32:32,610 [INFO] [T214] Updated shared task context with 0 ID(s) and 8 data-testid(s).
+2026-09-09 18:32:32,610 [INFO] Running Vitest execution (flaky-retry enabled, test_runner=vitest)...
+2026-09-09 18:32:33,622 [WARNING] Vitest run attempt 1 failed. Retrying once...
+2026-09-09 18:32:37,795 [WARNING] Vitest run attempt 2 failed. Retrying once...
+2026-09-09 18:32:39,796 [ERROR] [T214] Gate B failed:  [31m❯[39m tests/dynamic.test.ts [2m([22m[2m22 tests[22m[2m | [22m[31m17 failed[39m[2m)[22m[90m 99[2mms[22m[39m
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected true to be false // Object.is equality[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[31m[1mAssertionError[22m: expected null to be truthy[39m
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m17 failed[39m[22m[2m | [22m[1m[32m5 passed[39m[22m[90m (22)[39m
+2026-09-09 18:32:39,797 [INFO] Postmortem analyzing failure and formulating actionable prescriptions...
+2026-09-09 18:32:39,798 [INFO] RateLimit sleep: 5s...
+2026-09-09 18:32:44,798 [INFO] Dispatching [1mPostmortem[0m (model=[90mopencode/nemotron-3-ultra-free, variant=max[0m, attempt=1/5, timeout=∞) (title=[T214] Postmortem 70a080c8)
+2026-09-09 19:08:50,350 [INFO] Persisted session ses_f7a7cc0f9ffeRGY2iYpjz9d6pj for task=T214, role=postmortem
+2026-09-09 19:08:50,351 [INFO] Updated POSTMORTEM.md.
+2026-09-09 19:08:50,354 [INFO] [T214] Progress: stage 0 -> 1
+2026-09-09 19:08:50,356 [INFO] Starting implementation [T214] (attempt 7, cycle 1/10)
+2026-09-09 19:08:50,356 [INFO] [T214] Proceeding directly to Coder implementation (skipping Red check for Coder retry).
+2026-09-09 19:08:50,366 [INFO] RateLimit sleep: 5s...
+2026-09-09 19:08:55,367 [INFO] Dispatching [1mCoder(T214)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T214] Coder c9d64f3c)
+2026-09-09 19:09:35,297 [INFO] Persisted session ses_f7a5ba23effeQV3DTdIw20xgOp for task=T214, role=coder
+2026-09-09 19:09:35,298 [INFO] Checking TypeScript static types (`tsc -b --noEmit`)...
+2026-09-09 19:09:37,889 [INFO] [T214] [38;2;74;222;128mGate A (tsc) PASS[0m
