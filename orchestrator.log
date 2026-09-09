@@ -9896,3 +9896,7 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-09 19:45:25,186 [INFO] Dispatching [1mCoder(T215)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T215] Coder 0d70793f)
 2026-09-09 19:59:21,000 [INFO] [T215] Gate B (Dynamic Test) PASS
 2026-09-09 19:59:21,000 [INFO] [T215] Coder (big-pickle) implemented reach fix in src/game/editorDrag.ts (T215); tests/dynamic.test.ts 125/125; no non-gateb regressions; removed stale golden tests/.gateb_T149.test.ts (superseded by dynamic.test.ts, reproduction of pre-T215 bug).
+2026-09-09 20:41:50,108 [WARNING] Selected range has unpassed prerequisite dependencies: T212 (status: None)
+2026-09-09 20:43:02,167 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-09 20:43:03,168 [INFO] Orchestrator range execution: 1 tasks (from=T216, to=T216, budget=600m)
+2026-09-09 20:43:03,168 [INFO] [T216] --only mode: skipping dependency checks.

@@ -1959,7 +1959,7 @@
     },
     "T215": {
       "attempts": 3,
-      "status": "running",
+      "status": "passed",
       "started": 1788950537.4633086,
       "cycles": 1,
       "sessions": {
@@ -1970,7 +1970,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1788952616.7501707
+      "last_postmortem_at": 1788952616.7501707,
+      "finished": 1788953203.4805548
+    },
+    "T216": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788954183.168876
     }
   },
   "consecutive_no_action": 0
