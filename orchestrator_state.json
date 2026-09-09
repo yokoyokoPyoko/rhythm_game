@@ -1949,7 +1949,8 @@
       "sessions": {
         "qa": "ses_f7ae88090ffeD7MLj04CR5LKst",
         "postmortem": "ses_f7a7cc0f9ffeRGY2iYpjz9d6pj",
-        "coder": "ses_f7a5ba23effeQV3DTdIw20xgOp"
+        "coder": "ses_f7a5ba23effeQV3DTdIw20xgOp",
+        "reviewer": "ses_f7a5ae5fbffe07dEWc0fep0Ghy"
       },
       "last_retry_from": "coder",
       "last_postmortem_at": 1788948530.3523705,
