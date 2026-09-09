@@ -2665,3 +2665,33 @@ const minorStep =
 2. 各ステージが規定拍数で自動進行し、最終的に本編へ遷移すること。スキップで即本編へ行けること。
 3. 本編スコアにチュートリアル分が混ざらないこと。デバッグ・プレイテスト時には出ないこと。
 4. `tsc --noEmit` エラーなし。
+
+---
+
+### [T212] チュートリアル4点修正（暗転残留・開始位置-1・玉一致・Space開始統一）
+
+**要求（ユーザー確定・T211実行後の不具合報告）**:
+1. 上下キー押下後も画面が暗いままに見える。
+2. 上下移動チュートリアル（波形ステージ）の譜面の開始位置を `-1`（下端）に。
+3. チュートリアル開始毎（波形／リング）に玉を波形に完全に合わせる。
+4. チュートリアル後すぐ本編が始まるのをやめ、チュートリアル後・スキップ時・デバッグ時で統一してスペースキー開始にし、チュートリアル操作表示の形式でテキスト表示する。
+
+**根本原因（コード確定）**:
+1. `enterMain` が不透明度を戻さないため、暗いままスキップすると本編が `opacity 0.35` で固まる（E2E再現済み）。矢印キー自体の確定経路は正常動作を確認。
+2. `generateWavePracticeChart()` の `start_position: 0.0`（中央）。
+3. `new Cursor(...)` は `start_position` 換算の初期Yを持つが、開始拍の `waveYAt(0)` との明示的一致がない。
+4. `enterMain` が（`startedRef` 済みなら）即座に音楽＋メトロノームを開始する。デバッグ初回は初回Spaceで即開始し、開始合図の表示がない。
+
+**修正**（`src/game/tutorial.ts`＋`src/screens/GameScreen.tsx`＋`src/index.css`。`judgeHit`・スコアロジック不変）:
+- `tutorial.ts`: 波形練習譜面の `start_position` を `-1.0` に（下から上へ動かす練習）。
+- `GameScreen.tsx`: 波形ステージ初期設定・`startRingStage` で `new Cursor(...)` 直後に `cursor.y = wave.waveYAt(0)` を設定。
+- `GameScreen.tsx`: `enterMain` で不透明度を必ず1に戻し、音楽を開始せず `mainWaiting` 状態（`mainWaitingRef`＋`main-wait-overlay`＋`Spaceを押してスタート` 表示）にする。`startGame` は初期化専用にし、音楽開始は新規 `startMainMusic`（スポナー作り直し・リング破棄・カーソル初期化・時計リセット→音楽＋メトロノーム）に一本化。本編Space待ち中（`inMainWait`）は時計・スポーン・MISS・トレース・終了判定を全て凍結する。
+- `index.css`: `.tutorial-overlay.main-wait { background: transparent; }`（テキスト形式は同一、減光なし）。
+- ついで修正：`manifest.ts` で `songs.toml` 応答がHTML（SPAフォールバック）の場合は空リスト扱い（Vite devで曲一覧がエラー画面になる問題）。
+
+**完了条件（E2Eで検証済みの回帰点を含む）**:
+1. 波形ステージで矢印押下→不透明度1、5拍でリングステージ（暗転）→Spaceで不透明度1→最終リング後に本編待機（明るいまま＋指示文）となること。
+2. 暗いままスキップしても本編待機が明るく、Spaceで本編が始まり描画が継続すること。
+3. デバッグ初回もSpace待ち＋指示文表示で、Spaceで開始すること。
+4. 波形練習譜面の `start_position === -1` であること（旧T211期待値の中央想定を下端に更新）。
+5. `tsc --noEmit` エラーなし。

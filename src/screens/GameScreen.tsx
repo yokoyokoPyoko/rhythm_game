@@ -93,6 +93,12 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   // confirmation key; 1 once the practice starts.
   const [canvasOpacity, setCanvasOpacity] = useState(0.35)
   const canvasOpacityRef = useRef(0.35)
+  // 本編の音楽開始はSpace待ちに統一する（チュートリアル完了後・スキップ時・デバッグ初回）。
+  // trueの間は時計・判定・終了判定を進めず、「Spaceを押してスタート」の指示だけ出す。
+  const [mainWaiting, setMainWaiting] = useState(
+    () => !(getViewMode() === 'public' && !isPlaytest),
+  )
+  const mainWaitingRef = useRef(!(getViewMode() === 'public' && !isPlaytest))
 
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -184,14 +190,27 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     const ctx = audioMgr.ctx
     resetClock(ctx)
     startedRef.current = true
-    if (phaseRef.current === 'main') {
-      // Main chart: music starts immediately.
-      playMusic(ctx, chartRef.current?.audio_offset ?? 0)
-      startMetronome(ctx)
-    }
-    // T211: tutorial stages stay "waiting" — the clock does not advance and
-    // the metronome does not sound until the stage's confirmation key is
-    // pressed (confirmTutorialStart resets the clock + starts the metronome).
+    // NOTE: 音楽・メトロノームの開始は呼び出し側が明示的に行う。
+    // チュートリアル確認 → confirmTutorialStart がメトロノームのみ開始。
+    // 本編 → Space待ち経路が startMainMusic で音楽＋メトロノームを開始。
+  }, [])
+
+  // 本編の音楽開始（Space待ち解除時）。スポナー・リング・カーソルを初期化し、
+  // 時計リセット→音楽＋メトロノーム開始までを一気に行う。
+  const startMainMusic = useCallback(async () => {
+    const audioMgr = AudioManager.getInstance()
+    await audioMgr.ensure()
+    const ctx = audioMgr.ctx
+    const chart = chartRef.current
+    spawnerRef.current = new RingSpawner()
+    ringsRef.current = []
+    judgementEventsRef.current = []
+    cursorRef.current = new Cursor(chart?.amplitude ?? 1.0, chart?.start_position ?? 0.0)
+    keysRef.current = { up: false, down: false, space: true }
+    resetClock(ctx)
+    startedRef.current = true
+    playMusic(ctx, chart?.audio_offset ?? 0)
+    startMetronome(ctx)
   }, [playMusic, startMetronome])
 
   // T211: called on the first ArrowUp/ArrowDown (stage A) or Space (stage B)
@@ -224,6 +243,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     timelineRef.current = timeline
     waveRef.current = wave
     cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+    // 玉を開始拍の波形位置に完全に合わせる
+    cursorRef.current.y = wave.waveYAt(0)
     ringsRef.current = []
     judgementEventsRef.current = []
     keysRef.current = { up: false, down: false, space: false }
@@ -242,7 +263,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   }, [stopMetronome])
 
   // T210: swap the tutorial engines for the main chart, discard any tutorial
-  // score / combo / trace bonus, and start the main game seamlessly.
+  // score / combo / trace bonus. 本編の音楽はすぐ鳴らさず Space 待ちにする
+  // （チュートリアル完了後・スキップ時・デバッグ初回で統一）。
   const enterMain = useCallback(() => {
     const chart = mainChartRef.current
     const timeline = mainTimelineRef.current
@@ -254,23 +276,19 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     timelineRef.current = timeline
     waveRef.current = wave
     scoreRef.current = new ScoreManager()
+    spawnerRef.current = new RingSpawner()
     ringsRef.current = []
     judgementEventsRef.current = []
     cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
     keysRef.current = { up: false, down: false, space: false }
     phaseRef.current = 'main'
     setPhase('main')
-    if (startedRef.current) {
-      try {
-        const ctx = AudioManager.getInstance().ctx
-        resetClock(ctx)
-        playMusic(ctx, chart.audio_offset ?? 0)
-        startMetronome(ctx)
-      } catch {
-        // AudioContext not initialized yet
-      }
-    }
-  }, [playMusic, startMetronome, stopMusic, stopMetronome])
+    // スキップ時に暗いまま本編へ遷移する問題の修正：不透明度を必ず戻す。
+    canvasOpacityRef.current = 1
+    setCanvasOpacity(1)
+    mainWaitingRef.current = true
+    setMainWaiting(true)
+  }, [stopMusic, stopMetronome])
 
   const skipTutorial = useCallback(() => {
     if (phaseRef.current === 'main') return
@@ -413,6 +431,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           timelineRef.current = wavePracticeTimeline
           waveRef.current = wavePracticeWave
           cursorRef.current = new Cursor(wavePracticeChart.amplitude, wavePracticeChart.start_position)
+          // 玉を開始拍の波形位置に完全に合わせる
+          cursorRef.current.y = wavePracticeWave.waveYAt(0)
           tutorialStageRef.current = 'wave'
           tutorialConfirmedRef.current = false
           setCanvasOpacity(0.35)
@@ -512,7 +532,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       // T211: while a tutorial stage waits for its confirmation key the clock
       // stays frozen (songTimeMs = 0) even though the AudioContext has started.
       const inTutorialWait = phaseRef.current !== 'main' && !tutorialConfirmedRef.current
-      if (startedRef.current && !inTutorialWait) {
+      // 本編のSpace待ち中も時計・判定・終了判定を進めない（静止した波形を背景表示）。
+      const inMainWait = phaseRef.current === 'main' && mainWaitingRef.current
+      if (startedRef.current && !inTutorialWait && !inMainWait) {
         try {
           songTimeMs = songNow()
         } catch {
@@ -553,7 +575,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         setTutorialInstruction((prev) => (prev === text ? prev : text))
       }
 
-      ringsRef.current = spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
+      // 本編のSpace待ち中はリングを出さない（開始時にスポナーを作り直すため）。
+      ringsRef.current = inMainWait ? [] : spawnerRef.current.update(songTimeMs, chart.rings, timeline, wave)
 
       const currentBeat = timeline.msToBeat(renderTimeMs)
       const currentBeatMs = timeline.beatMsAt(currentBeat)
@@ -566,7 +589,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
          currentBeatMs,
          wave.waveYAtMs(renderTimeMs),
        )
-      if (startedRef.current) {
+      if (startedRef.current && !inMainWait) {
         for (const ring of ringsRef.current) {
           if (ring.resolved) continue
           if (ring.type === 'hold' && ring.hit && ring.holding) {
@@ -618,7 +641,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         (e) => songTimeMs - e.at < JUDGEMENT_LIFETIME_MS,
       )
 
-      if (startedRef.current) {
+      if (startedRef.current && !inMainWait) {
         const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE;
         scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
       }
@@ -650,7 +673,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           : (buffer ? buffer.duration * 1000 : fallbackEnd)
       const endThreshold = baseEnd + (chart?.audio_offset ?? 0)
 
-      if (!endedRef.current && phaseRef.current === 'main' && songTimeMs > endThreshold) {
+      if (!endedRef.current && phaseRef.current === 'main' && !inMainWait && songTimeMs > endThreshold) {
         endedRef.current = true
         stopMusic()
         stopMetronome()
@@ -722,11 +745,23 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           }
           return
         }
-        if (!startedRef.current) {
-          void startGame()
-        } else {
-          handleHit()
+        // 本編のSpace待ち（チュートリアル完了後・スキップ時・デバッグ初回で統一）:
+        // この1打は開始合図として消費し、判定には回さない。
+        if (mainWaitingRef.current || !startedRef.current) {
+          mainWaitingRef.current = false
+          setMainWaiting(false)
+          void (async () => {
+            try {
+              await startMainMusic()
+            } catch {
+              // AudioContext not ready — stay waiting
+              mainWaitingRef.current = true
+              setMainWaiting(true)
+            }
+          })()
+          return
         }
+        handleHit()
       }
     }
 
@@ -793,7 +828,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [navigate, startGame, handleHit, confirmTutorialStart])
+  }, [navigate, startGame, startMainMusic, handleHit, confirmTutorialStart])
 
   return (
     <div className="screen game-screen screen-fade">
@@ -839,6 +874,13 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               >
                 スキップ (本編へ)
               </button>
+            </div>
+          )}
+          {phase === 'main' && mainWaiting && (
+            <div className="tutorial-overlay main-wait" data-testid="main-wait-overlay">
+              <div className="tutorial-instruction" data-testid="main-wait-instruction">
+                Spaceを押してスタート
+              </div>
             </div>
           )}
           <div className="game-offset">

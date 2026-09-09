@@ -322,6 +322,11 @@ button:focus-visible {
   z-index: 100;
 }
 
+/* 本編のSpace待ち表示：テキスト形式はチュートリアルと同一、背景の減光なし */
+.tutorial-overlay.main-wait {
+  background: transparent;
+}
+
 .tutorial-instruction {
   color: var(--text);
   font-size: 1.5rem;

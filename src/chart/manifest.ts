@@ -43,6 +43,12 @@ export async function loadSongList(): Promise<SongEntry[]> {
   try {
     raw = parse(text) as Record<string, unknown>;
   } catch {
+    // SPAフォールバック（Vite dev等）が存在しないパスにHTMLを200で返す場合がある。
+    // songs.toml自体は廃止済みのため、HTML応答は「空リスト」とみなす。
+    const trimmed = text.trimStart().toLowerCase();
+    if (trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html')) {
+      return [];
+    }
     throw new Error(`曲リストの読み込みに失敗しました: ${SONGS_URL}`);
   }
 

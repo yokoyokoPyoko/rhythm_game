@@ -236,17 +236,17 @@ describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, compu
     expect(maxY).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1);
     expect(minY).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1);
 
-    // start_position 0 => center at beat 0
-    expect(engine.waveYAt(0)).toBeCloseTo(TW_CENTER_Y, 5);
-    // stay 1 beat: beats 0..1 should stay center (off-grid)
-    expect(engine.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y, 3);
-    expect(engine.waveYAt(0.99)).toBeCloseTo(TW_CENTER_Y, 3);
+    // start_position -1 => bottom at beat 0 (wave practice starts low)
+    expect(engine.waveYAt(0)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 5);
+    // stay 1 beat: beats 0..1 should stay at bottom (off-grid)
+    expect(engine.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
+    expect(engine.waveYAt(0.99)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
     // up 1 beat from 1..2 should move toward top (negative dY)
     const yAt1 = engine.waveYAt(1);
-    expect(yAt1).toBeCloseTo(TW_CENTER_Y, 3);
-    // off-grid inside up segment should be between center and top
+    expect(yAt1).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
+    // off-grid inside up segment should be between bottom and top
     const yAt137 = engine.waveYAt(1.37);
-    expect(yAt137).toBeLessThan(TW_CENTER_Y);
+    expect(yAt137).toBeLessThan(TW_CENTER_Y + TW_AMP);
     expect(yAt137).toBeGreaterThan(TW_CENTER_Y - TW_AMP - 1);
     // down segment 2..3 should go back toward center/bottom
     const yAt237 = engine.waveYAt(2.37);

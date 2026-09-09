@@ -1397,5 +1397,14 @@
     ],
     "type": "feat",
     "test": true
+  },
+  {
+    "id": "T212",
+    "desc": "チュートリアル4点修正（暗転残留・開始位置-1・玉一致・Space開始統一）。要求: (1)上下キー押下後も画面が暗いままに見える (2)波形練習譜面の開始位置を-1（下端）に (3)チュートリアル開始毎（波形／リング）に玉を波形に完全に合わせる (4)チュートリアル後すぐ本編が始まるのをやめ、チュートリアル後・スキップ時・デバッグ時で統一してスペースキー開始にし、チュートリアル操作表示の形式でテキスト表示する。根本原因: enterMainが不透明度を戻さないため暗いままスキップすると本編がopacity 0.35で固まる（E2E再現済み）。修正: tutorial.tsの波形練習start_positionを-1.0に。GameScreen.tsxの波形ステージ初期設定・startRingStageでnew Cursor直後にcursor.y=wave.waveYAt(0)。enterMainで不透明度を必ず1に戻し音楽を開始せずmainWaiting状態（main-wait-overlay＋Spaceを押してスタート表示）に。startGameは初期化専用にし音楽開始は新規startMainMusic（スポナー作り直し・リング破棄・カーソル初期化・時計リセット→音楽＋メトロノーム）に一本化。本編Space待ち中（inMainWait）は時計・スポーン・MISS・トレース・終了判定を全て凍結。index.cssに.tutorial-overlay.main-wait{background:transparent}（テキスト形式は同一、減光なし）。ついで修正：manifest.tsでsongs.toml応答がHTML（SPAフォールバック）の場合は空リスト扱い。完了条件（E2E検証済み）: (1)矢印押下→不透明度1、5拍でリングステージ（暗転）→Spaceで不透明度1→最終リング後に本編待機（明るいまま＋指示文） (2)暗いままスキップしても本編待機が明るくSpaceで本編が始まり描画継続 (3)デバッグ初回もSpace待ち＋指示文でSpaceで開始 (4)波形練習start_position===-1（旧T211期待値の中央想定を下端に更新） (5)tsc --noEmit。",
+    "depends_on": [
+      "T211"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]

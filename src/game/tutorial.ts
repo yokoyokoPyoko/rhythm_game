@@ -42,7 +42,8 @@ export function getTutorialInstruction(beat: number, stage: TutorialStage): stri
   return lookupInstruction(WAVE_INSTRUCTIONS, beat);
 }
 
-/** ステージA: 波形練習 (stay 1 + up 1 + down 1 + up 1 + down 1 = 5拍、リングなし) */
+/** ステージA: 波形練習 (stay 1 + up 1 + down 1 + up 1 + down 1 = 5拍、リングなし。
+ * 開始位置は下端(-1.0): 下から上へ動かす練習になる) */
 export function generateWavePracticeChart(): Chart {
   return {
     title: 'チュートリアル - 波形練習',
@@ -50,7 +51,7 @@ export function generateWavePracticeChart(): Chart {
     audio: '',
     audio_offset: 0,
     amplitude: 1.0,
-    start_position: 0.0,
+    start_position: -1.0,
     bpm_changes: [{ beat: 0, bpm: TUTORIAL_BPM }],
     segments: [
       { direction: 'stay', beats: 1 },
