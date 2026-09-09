@@ -1920,7 +1920,8 @@
       "sessions": {
         "qa": "ses_f7bcf551affe9J90xodbJ5xQbE",
         "postmortem": "ses_f7bd0b64fffe1zL508YRh6NUyc",
-        "coder": "ses_f7bccf2c4ffefKAZBI29WK81eV"
+        "coder": "ses_f7bccf2c4ffefKAZBI29WK81eV",
+        "reviewer": "ses_f7bbf42a3ffeiCxBMFIc6V0OTi"
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788924171.1148493,
