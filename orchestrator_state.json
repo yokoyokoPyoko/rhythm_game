@@ -1929,9 +1929,15 @@
       "finished": 1788925255.5333655
     },
     "T213": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1788928146.451068
+      "started": 1788928146.451068,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f7b92a8feffe6ebKPdNr1hLNOi",
+        "coder": "ses_f7b8fc613ffe6mwJsoZxUhURee"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

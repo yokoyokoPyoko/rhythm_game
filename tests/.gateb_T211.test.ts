@@ -4,9 +4,11 @@
  * Spec:
  *  - 対象はパブリックモードの通常プレイ時のみ（デバッグ・プレイテスト時は出さない、T210と同一）
  *  - ステージA（波形練習・BPM90）: stay 1拍 → up 1 / down 1 / up 1 / down 1 の計5拍、リングなし。
- *    開始時は暗く（canvas不透明度0.35）、↑/↓初回押下で不透明度100＋時計リセット、5拍完走でステージBへ自動進行
+ *    開始時は暗く（オーバーレイ減光）、↑/↓初回押下で練習開始＋時計リセット、5拍完走でステージBへ自動進行
  *  - ステージB（リング練習・BPM90・上下なし）: stay波形の上にリング4個を1拍ごと（beat 1,2,3,4, single）に配置。
- *    開始時は暗く、Space初回押下で不透明度100＋練習開始、最終リング後に本編へ遷移
+ *    開始時は暗く、Space初回押下で練習開始、最終リング後に本編へ遷移
+ *  - T213: 暗さの制御はオーバーレイ1層のみ（canvas常時不透明度1）。待機中（押下前・本編Space待ち）は
+ *    rgba(10,10,10,0.45)の減光ON、練習中は減光OFF（透明）。指示文・スキップは上部配置。
  *  - 待機中は時計を進めない（押下でresetClockし直し）、待機中にメトロノームは鳴らさない
  *  - スキップボタンは常時表示でいつでも本編へ脱出可。チュートリアル中のスコアは破棄し本編開始時にリセット
  *  - T208判定表示制御は両ステージに適用
@@ -134,9 +136,9 @@ describe('T211-0: ファイル契約 — tutorial.ts / GameScreen.tsx / phases',
     // Must call resetClock on stage start
     expect(src).toMatch(/resetClock/);
 
-    // Dim opacity 0.35
-    expect(src).toMatch(/0\.35/);
-    expect(src).toMatch(/opacity/);
+    // T213: dim is now a single overlay layer (rgba 0.45) — no canvas opacity.
+    expect(src).toMatch(/overlayDimmed|overlayDim/);
+    expect(src).toMatch(/setOverlayDimmed|set\w*[Dd]im\w*\s*\(/);
 
     // Skip button always visible
     expect(src).toMatch(/tutorial-skip/);
@@ -534,11 +536,10 @@ describe('T211-4: ステージ遷移と押下確認（待機→練習開始→�
     expect(src).toMatch(/'tutorial-wave'/);
     expect(src).toMatch(/'tutorial-ring'/);
 
-    // Opacity 0.35 (dim) and transition to 1
-    expect(src).toMatch(/0\.35/);
-    expect(src).toMatch(/opacity/);
-    // Must have CSS transition or inline style for opacity
-    expect(src).toMatch(/transition|opacity/);
+    // T213: dim is the overlay layer's state, not a canvas opacity.
+    expect(src).toMatch(/overlayDimmed|overlayDim/);
+    // Overlay dim setter must toggle across stage transitions
+    expect(src).toMatch(/setOverlayDimmed|set\w*[Dd]im\w*\s*\(/);
 
     // Key handlers: ArrowUp / ArrowDown for wave stage
     expect(src).toMatch(/ArrowUp/);
@@ -653,22 +654,20 @@ describe('T211-5: スキップ常時表示・メトロノーム抑制・不透�
     expect(src).toMatch(/onClick=\{skipTutorial\}|onClick=\{enterMain\}|skipTutorial/);
   });
 
-  it('Step1 暗い不透明度 0.35 を capture → Step2 canvas の style/opacity を探索 → Step3 待機中は 0.35、練習開始で 1 に切替（transition付き）', () => {
+  it('Step1 待機中は canvas 不透明度でなくオーバーレイ減光であることを capture → Step2 新方式（overlayDimmed）を探索 → Step3 canvasは常時opacity 1・dimクラス切替になり、旧canvasOpacity検証が残っていない', () => {
     const src = readFile('src/screens/GameScreen.tsx');
-    expect(src).toMatch(/0\.35/);
-    // Canvas opacity must be state-driven (e.g. tutorialOpacity, dimmed, isWaiting)
-    const opacityIdx = src.indexOf('0.35');
-    const around = src.slice(Math.max(0, opacityIdx - 1200), opacityIdx + 1200);
-    expect(around).toMatch(/opacity|style|className.*canvas/i);
-    // Must have state for dim/bright toggle
-    const hasOpacityState =
-      /useState\(0\.35|useState\(1\)|tutorialOpacity|isDimmed|waiting|tutorialStarted/.test(src);
-    expect(hasOpacityState).toBe(true);
-    // Transition should be present (CSS or inline)
-    expect(src).toMatch(/transition/);
-    // Must toggle to 1 after key press
-    const hasBright = src.includes(': 1') || src.includes('opacity: 1') || src.includes('opacity={1') || src.match(/opacity.*1/);
-    expect(hasBright !== null).toBe(true);
+    const css = readFile('src/index.css');
+    // T213: canvas opacity state must be GONE from GameScreen (単一層化)
+    expect(src).toMatch(/overlayDimmed|overlayDim/);
+    expect(src).not.toMatch(/canvasOpacity/);
+    // Single dim layer constant (rgba(10,10,10,0.45)) in CSS
+    expect(css).toMatch(/rgba\(10,\s*10,\s*10,\s*0\.45/);
+    expect(css).toMatch(/\.dim/);
+    // Canvas keeps full opacity (no dynamic dim binding on canvas)
+    expect(src).not.toMatch(/opacity\s*:\s*canvasOpacity/);
+    // Dim setter must toggle: waiting -> true, confirmed practice -> false
+    expect(src).toMatch(/setOverlayDimmed\(true\)/);
+    expect(src).toMatch(/setOverlayDimmed\(false\)/);
   });
 
   it('Step1 待機中にメトロノームが鳴らないことを capture (schedule 未呼び出し) → Step2 startMetronome のガードを探索 → Step3 待機解除後まで schedule が呼ばれない（startedRef + waiting/phase ガード）', () => {

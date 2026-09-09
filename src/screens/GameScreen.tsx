@@ -89,10 +89,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   )
   const phaseRef = useRef(phase)
   const [tutorialInstruction, setTutorialInstruction] = useState('')
-  // T211: canvas opacity — dimmed (0.35) while waiting for the stage's
-  // confirmation key; 1 once the practice starts.
-  const [canvasOpacity, setCanvasOpacity] = useState(0.35)
-  const canvasOpacityRef = useRef(0.35)
+  // T213: 暗さの制御はオーバーレイ層のみに一本化する（canvasは常時不透明度1）。
+  // チュートリアル待機（押下前）と本編のSpace待ちは減光ON、練習中は減光OFF。
+  const [overlayDimmed, setOverlayDimmed] = useState(true)
   // 本編の音楽開始はSpace待ちに統一する（チュートリアル完了後・スキップ時・デバッグ初回）。
   // trueの間は時計・判定・終了判定を進めず、「Spaceを押してスタート」の指示だけ出す。
   const [mainWaiting, setMainWaiting] = useState(
@@ -109,10 +108,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
-
-  useEffect(() => {
-    canvasOpacityRef.current = canvasOpacity
-  }, [canvasOpacity])
 
   useEffect(() => {
     statusRef.current = status
@@ -214,12 +209,12 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   }, [playMusic, startMetronome])
 
   // T211: called on the first ArrowUp/ArrowDown (stage A) or Space (stage B)
-  // press. Resets the clock so practice starts now, brightens the canvas, and
-  // starts the metronome.
+  // press. Resets the clock so practice starts now, clears the overlay dim
+  // (canvas is always fully opaque — dimming lives on the overlay layer only).
   const confirmTutorialStart = useCallback(() => {
     if (tutorialConfirmedRef.current) return
     tutorialConfirmedRef.current = true
-    setCanvasOpacity(1)
+    setOverlayDimmed(false)
     try {
       const ctx = AudioManager.getInstance().ctx
       resetClock(ctx)
@@ -230,8 +225,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   }, [startMetronome])
 
   // T211: swap the wave-practice chart for the ring-practice chart after stage
-  // A completes. The ring stage also waits (dimmed, clock paused) for its
-  // confirmation key (Space).
+  // A completes. The ring stage also waits (dimmed overlay, clock paused) for
+  // its confirmation key (Space).
   const startRingStage = useCallback(() => {
     if (phaseRef.current !== 'tutorial-wave') return
     const chart = ringPracticeChartRef.current
@@ -250,7 +245,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     keysRef.current = { up: false, down: false, space: false }
     tutorialStageRef.current = 'ring'
     tutorialConfirmedRef.current = false
-    setCanvasOpacity(0.35)
+    setOverlayDimmed(true)
     setTutorialInstruction(getTutorialInstruction(0, 'ring'))
     phaseRef.current = 'tutorial-ring'
     setPhase('tutorial-ring')
@@ -283,9 +278,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     keysRef.current = { up: false, down: false, space: false }
     phaseRef.current = 'main'
     setPhase('main')
-    // スキップ時に暗いまま本編へ遷移する問題の修正：不透明度を必ず戻す。
-    canvasOpacityRef.current = 1
-    setCanvasOpacity(1)
+    // 本編はSpace待ちに入る：オーバーレイを減光して待機表示（canvasは常時1）。
+    setOverlayDimmed(true)
     mainWaitingRef.current = true
     setMainWaiting(true)
   }, [stopMusic, stopMetronome])
@@ -435,7 +429,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           cursorRef.current.y = wavePracticeWave.waveYAt(0)
           tutorialStageRef.current = 'wave'
           tutorialConfirmedRef.current = false
-          setCanvasOpacity(0.35)
+          setOverlayDimmed(true)
           phaseRef.current = 'tutorial-wave'
           setPhase('tutorial-wave')
         } else {
@@ -443,7 +437,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           timelineRef.current = timeline
           waveRef.current = mainWave
           cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
-          setCanvasOpacity(1)
           phaseRef.current = 'main'
           setPhase('main')
         }
@@ -849,7 +842,6 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             height={CANVAS_HEIGHT}
             className="game-canvas"
             data-testid="playtest-canvas"
-            style={{ opacity: canvasOpacity, transition: 'opacity 0.3s ease' }}
           />
           {onExitRef.current && (
             <button
@@ -862,10 +854,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             </button>
           )}
           {(phase === 'tutorial-wave' || phase === 'tutorial-ring') && (
-            <div className="tutorial-overlay" data-testid="tutorial-overlay">
-              <div className="tutorial-instruction" data-testid="tutorial-instruction">
-                {tutorialInstruction || getTutorialInstruction(0, tutorialStageRef.current)}
-              </div>
+            <div
+              className={`tutorial-overlay${overlayDimmed ? ' dim' : ''}`}
+              data-testid="tutorial-overlay"
+            >
               <button
                 type="button"
                 className="tutorial-skip"
@@ -874,10 +866,13 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               >
                 スキップ (本編へ)
               </button>
+              <div className="tutorial-instruction" data-testid="tutorial-instruction">
+                {tutorialInstruction || getTutorialInstruction(0, tutorialStageRef.current)}
+              </div>
             </div>
           )}
           {phase === 'main' && mainWaiting && (
-            <div className="tutorial-overlay main-wait" data-testid="main-wait-overlay">
+            <div className="tutorial-overlay dim main-wait" data-testid="main-wait-overlay">
               <div className="tutorial-instruction" data-testid="main-wait-instruction">
                 Spaceを押してスタート
               </div>

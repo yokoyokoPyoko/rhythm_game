@@ -315,16 +315,27 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 1.25rem;
-  background: rgba(10, 10, 10, 0.35);
+  justify-content: flex-start;
+  gap: 1rem;
+  padding-top: 2rem;
+  background: rgba(10, 10, 10, 0.45);
   pointer-events: none;
   z-index: 100;
 }
 
-/* 本編のSpace待ち表示：テキスト形式はチュートリアルと同一、背景の減光なし */
-.tutorial-overlay.main-wait {
+/* 待機中（押下前・本編Space待ち）の減光ON：rgba(10,10,10,0.45) の1層のみ */
+.tutorial-overlay.dim {
+  background: rgba(10, 10, 10, 0.45);
+}
+
+/* 練習中（押下確定後）は透明：譜面をくっきり表示 */
+.tutorial-overlay.clear {
   background: transparent;
+}
+
+/* 本編のSpace待ち表示：テキストのみ・減光は1層に統一（透明上書きはしない） */
+.tutorial-overlay.main-wait {
+  background: rgba(10, 10, 10, 0.45);
 }
 
 .tutorial-instruction {
