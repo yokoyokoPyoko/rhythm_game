@@ -318,7 +318,7 @@ button:focus-visible {
   justify-content: flex-start;
   gap: 1rem;
   padding-top: 2rem;
-  background: rgba(10, 10, 10, 0.45);
+  background: transparent;
   pointer-events: none;
   z-index: 100;
 }

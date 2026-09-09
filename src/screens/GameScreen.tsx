@@ -855,7 +855,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           )}
           {(phase === 'tutorial-wave' || phase === 'tutorial-ring') && (
             <div
-              className={`tutorial-overlay${overlayDimmed ? ' dim' : ''}`}
+              className={`tutorial-overlay${overlayDimmed ? ' dim' : ' clear'}`}
               data-testid="tutorial-overlay"
             >
               <button
