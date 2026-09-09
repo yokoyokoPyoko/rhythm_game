@@ -9799,3 +9799,8 @@ src/screens/GameScreen.tsx(61,20): error TS6133: 'setOffsetMs' is declared but i
 2026-09-09 16:00:27,675 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-09 16:00:28,677 [INFO] Orchestrator range execution: 1 tasks (from=T214, to=T214, budget=600m)
 2026-09-09 16:00:28,677 [INFO] [T214] --only mode: skipping dependency checks.
+2026-09-09 18:27:06,527 [INFO] --resume: resuming T214
+2026-09-09 18:27:06,527 [WARNING] Selected range has unpassed prerequisite dependencies: T212 (status: None)
+2026-09-09 18:28:04,240 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-09 18:28:05,240 [INFO] Orchestrator range execution: 1 tasks (from=T214, to=T214, budget=600m)
+2026-09-09 18:28:05,240 [INFO] [T214] --only mode: skipping dependency checks.
