@@ -9761,3 +9761,9 @@ src/screens/GameScreen.tsx(61,20): error TS6133: 'setOffsetMs' is declared but i
 2026-09-09 12:40:47,935 [INFO] Persisted session ses_f7bbf42a3ffeiCxBMFIc6V0OTi for task=T211, role=reviewer
 2026-09-09 12:40:47,937 [INFO] Code Review Verdict: [38;2;74;222;128mPASS[0m | Reason: Score=100, Verdict=PASS: Task T211 implementation for 2-stage press-confirmed tutorial has been thoroughly verified in src/game/tutorial.ts and src/screens/GameScreen.tsx.
 2026-09-09 12:40:47,937 [INFO] [T211] [38;2;74;222;128mGate C (Dynamic Review) PASS[0m
+2026-09-09 12:40:47,988 [INFO] [T211] Building docs/ dist for GitHub Pages...
+2026-09-09 12:40:53,217 [INFO] [T211] Pushing latest build to GitHub...
+2026-09-09 12:40:55,533 [INFO] [T211] [38;2;74;222;128mSuccessfully deployed to GitHub Pages![0m
+2026-09-09 13:28:15,149 [WARNING] Selected range has unpassed prerequisite dependencies: T212 (status: None)
+2026-09-09 13:29:06,450 [INFO] Orchestrator range execution: 1 tasks (from=T213, to=T213, budget=600m)
+2026-09-09 13:29:06,451 [INFO] [T213] --only mode: skipping dependency checks.

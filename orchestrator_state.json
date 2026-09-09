@@ -1914,7 +1914,7 @@
     },
     "T211": {
       "attempts": 2,
-      "status": "running",
+      "status": "passed",
       "started": 1788923897.1997988,
       "cycles": 1,
       "sessions": {
@@ -1925,7 +1925,13 @@
       },
       "last_retry_from": "qa",
       "last_postmortem_at": 1788924171.1148493,
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1788925255.5333655
+    },
+    "T213": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1788928146.451068
     }
   },
   "consecutive_no_action": 0
