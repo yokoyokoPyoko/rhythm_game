@@ -1953,7 +1953,7 @@
       },
       "last_retry_from": "coder",
       "last_postmortem_at": 1788948530.3523705,
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
