@@ -15,7 +15,12 @@ import { judgeHit } from '../game/hitJudge'
 import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
 import { ScoreManager, type ScoreStats } from '../game/score'
-import { generateTutorialChart, getTutorialInstruction } from '../game/tutorial'
+import {
+  generateWavePracticeChart,
+  generateRingPracticeChart,
+  getTutorialInstruction,
+  type TutorialStage,
+} from '../game/tutorial'
 import { WaveEngine } from '../game/waveEngine'
 import { getViewMode } from '../viewMode'
 import type { Chart, RingState } from '../types'
@@ -52,10 +57,18 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   const mainChartRef = useRef<Chart | null>(null)
   const mainTimelineRef = useRef<BpmTimeline | null>(null)
   const mainWaveRef = useRef<WaveEngine | null>(null)
-  const tutorialChartRef = useRef<Chart | null>(null)
-  const tutorialTimelineRef = useRef<BpmTimeline | null>(null)
-  const tutorialWaveRef = useRef<WaveEngine | null>(null)
-  const tutorialEndRef = useRef(0)
+  const wavePracticeChartRef = useRef<Chart | null>(null)
+  const wavePracticeTimelineRef = useRef<BpmTimeline | null>(null)
+  const wavePracticeWaveRef = useRef<WaveEngine | null>(null)
+  const wavePracticeEndRef = useRef(0)
+  const ringPracticeChartRef = useRef<Chart | null>(null)
+  const ringPracticeTimelineRef = useRef<BpmTimeline | null>(null)
+  const ringPracticeWaveRef = useRef<WaveEngine | null>(null)
+  const ringPracticeEndRef = useRef(0)
+  const tutorialStageRef = useRef<TutorialStage>('wave')
+  // T211: key-press confirmation — the clock only starts after the first
+  // ArrowUp/ArrowDown (stage A) or Space (stage B) press.
+  const tutorialConfirmedRef = useRef(false)
   const cursorRef = useRef(new Cursor())
   const spawnerRef = useRef(new RingSpawner())
   const scoreRef = useRef(new ScoreManager())
@@ -71,11 +84,15 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   // T210: tutorial is only shown in public mode for normal play.
   // Debug mode and playtest (playtest* / onExit) never show the tutorial.
   const isPlaytest = !!(playtest || playtestChart || playtestBuffer || onExit)
-  const [phase, setPhase] = useState<'tutorial' | 'main'>(() =>
-    getViewMode() === 'public' && !isPlaytest ? 'tutorial' : 'main',
+  const [phase, setPhase] = useState<'tutorial-wave' | 'tutorial-ring' | 'main'>(() =>
+    getViewMode() === 'public' && !isPlaytest ? 'tutorial-wave' : 'main',
   )
   const phaseRef = useRef(phase)
   const [tutorialInstruction, setTutorialInstruction] = useState('')
+  // T211: canvas opacity — dimmed (0.35) while waiting for the stage's
+  // confirmation key; 1 once the practice starts.
+  const [canvasOpacity, setCanvasOpacity] = useState(0.35)
+  const canvasOpacityRef = useRef(0.35)
 
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -86,6 +103,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
+
+  useEffect(() => {
+    canvasOpacityRef.current = canvasOpacity
+  }, [canvasOpacity])
 
   useEffect(() => {
     statusRef.current = status
@@ -164,12 +185,61 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     resetClock(ctx)
     startedRef.current = true
     if (phaseRef.current === 'main') {
-      // T210: the tutorial phase plays the metronome only (~8s, no music).
-      // Music starts when the main chart begins (auto-advance or skip).
+      // Main chart: music starts immediately.
       playMusic(ctx, chartRef.current?.audio_offset ?? 0)
+      startMetronome(ctx)
     }
-    startMetronome(ctx)
+    // T211: tutorial stages stay "waiting" — the clock does not advance and
+    // the metronome does not sound until the stage's confirmation key is
+    // pressed (confirmTutorialStart resets the clock + starts the metronome).
   }, [playMusic, startMetronome])
+
+  // T211: called on the first ArrowUp/ArrowDown (stage A) or Space (stage B)
+  // press. Resets the clock so practice starts now, brightens the canvas, and
+  // starts the metronome.
+  const confirmTutorialStart = useCallback(() => {
+    if (tutorialConfirmedRef.current) return
+    tutorialConfirmedRef.current = true
+    setCanvasOpacity(1)
+    try {
+      const ctx = AudioManager.getInstance().ctx
+      resetClock(ctx)
+      startMetronome(ctx)
+    } catch {
+      // AudioContext not initialized yet
+    }
+  }, [startMetronome])
+
+  // T211: swap the wave-practice chart for the ring-practice chart after stage
+  // A completes. The ring stage also waits (dimmed, clock paused) for its
+  // confirmation key (Space).
+  const startRingStage = useCallback(() => {
+    if (phaseRef.current !== 'tutorial-wave') return
+    const chart = ringPracticeChartRef.current
+    const timeline = ringPracticeTimelineRef.current
+    const wave = ringPracticeWaveRef.current
+    if (!chart || !timeline || !wave) return
+    stopMetronome()
+    chartRef.current = chart
+    timelineRef.current = timeline
+    waveRef.current = wave
+    cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+    ringsRef.current = []
+    judgementEventsRef.current = []
+    keysRef.current = { up: false, down: false, space: false }
+    tutorialStageRef.current = 'ring'
+    tutorialConfirmedRef.current = false
+    setCanvasOpacity(0.35)
+    setTutorialInstruction(getTutorialInstruction(0, 'ring'))
+    phaseRef.current = 'tutorial-ring'
+    setPhase('tutorial-ring')
+    try {
+      const ctx = AudioManager.getInstance().ctx
+      resetClock(ctx)
+    } catch {
+      // AudioContext not initialized yet
+    }
+  }, [stopMetronome])
 
   // T210: swap the tutorial engines for the main chart, discard any tutorial
   // score / combo / trace bonus, and start the main game seamlessly.
@@ -203,7 +273,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   }, [playMusic, startMetronome, stopMusic, stopMetronome])
 
   const skipTutorial = useCallback(() => {
-    if (phaseRef.current !== 'tutorial') return
+    if (phaseRef.current === 'main') return
     enterMain()
   }, [enterMain])
 
@@ -308,38 +378,52 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         mainTimelineRef.current = timeline
         mainWaveRef.current = mainWave
 
-        // T210: fixed, code-generated tutorial chart (~8s, metronome only).
-        const tutorialChart = generateTutorialChart()
-        const tutorialTimeline = new BpmTimeline(tutorialChart.bpm_changes, tutorialChart.amplitude)
-        const tutorialWave = new WaveEngine(
-          tutorialChart.segments,
-          tutorialTimeline,
-          tutorialChart.amplitude,
-          tutorialChart.start_position,
+        // T211: fixed, code-generated 2-stage tutorial charts (BPM90, metronome only).
+        const wavePracticeChart = generateWavePracticeChart()
+        const wavePracticeTimeline = new BpmTimeline(wavePracticeChart.bpm_changes, wavePracticeChart.amplitude)
+        const wavePracticeWave = new WaveEngine(
+          wavePracticeChart.segments,
+          wavePracticeTimeline,
+          wavePracticeChart.amplitude,
+          wavePracticeChart.start_position,
         )
-        tutorialChartRef.current = tutorialChart
-        tutorialTimelineRef.current = tutorialTimeline
-        tutorialWaveRef.current = tutorialWave
-        tutorialEndRef.current =
-          tutorialTimeline.beatToMs(
-            tutorialChart.rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity),
-          ) + END_DELAY_MS
+        wavePracticeChartRef.current = wavePracticeChart
+        wavePracticeTimelineRef.current = wavePracticeTimeline
+        wavePracticeWaveRef.current = wavePracticeWave
+        wavePracticeEndRef.current = wavePracticeTimeline.beatToMs(5)
 
-        // T210: tutorial only for public normal play. Debug / playtest go straight
-        // to the main chart (本編先行読込済み).
+        const ringPracticeChart = generateRingPracticeChart()
+        const ringPracticeTimeline = new BpmTimeline(ringPracticeChart.bpm_changes, ringPracticeChart.amplitude)
+        const ringPracticeWave = new WaveEngine(
+          ringPracticeChart.segments,
+          ringPracticeTimeline,
+          ringPracticeChart.amplitude,
+          ringPracticeChart.start_position,
+        )
+        ringPracticeChartRef.current = ringPracticeChart
+        ringPracticeTimelineRef.current = ringPracticeTimeline
+        ringPracticeWaveRef.current = ringPracticeWave
+        ringPracticeEndRef.current = ringPracticeTimeline.beatToMs(5)
+
+        // T210/T211: tutorial only for public normal play. Debug / playtest go
+        // straight to the main chart (本編先行読込済み).
         const useTutorial = getViewMode() === 'public' && !isPlaytest
         if (useTutorial) {
-          chartRef.current = tutorialChart
-          timelineRef.current = tutorialTimeline
-          waveRef.current = tutorialWave
-          cursorRef.current = new Cursor(tutorialChart.amplitude, tutorialChart.start_position)
-          phaseRef.current = 'tutorial'
-          setPhase('tutorial')
+          chartRef.current = wavePracticeChart
+          timelineRef.current = wavePracticeTimeline
+          waveRef.current = wavePracticeWave
+          cursorRef.current = new Cursor(wavePracticeChart.amplitude, wavePracticeChart.start_position)
+          tutorialStageRef.current = 'wave'
+          tutorialConfirmedRef.current = false
+          setCanvasOpacity(0.35)
+          phaseRef.current = 'tutorial-wave'
+          setPhase('tutorial-wave')
         } else {
           chartRef.current = chart
           timelineRef.current = timeline
           waveRef.current = mainWave
           cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+          setCanvasOpacity(1)
           phaseRef.current = 'main'
           setPhase('main')
         }
@@ -425,15 +509,34 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       }
 
       let songTimeMs = 0
-      if (startedRef.current) {
+      // T211: while a tutorial stage waits for its confirmation key the clock
+      // stays frozen (songTimeMs = 0) even though the AudioContext has started.
+      const inTutorialWait = phaseRef.current !== 'main' && !tutorialConfirmedRef.current
+      if (startedRef.current && !inTutorialWait) {
         try {
           songTimeMs = songNow()
         } catch {
           songTimeMs = 0
         }
       }
-      // T210: tutorial auto-advances after the last ring + 2s (成否不問・時間で自動進行).
-      if (startedRef.current && phaseRef.current === 'tutorial' && songTimeMs > tutorialEndRef.current) {
+      // T211: tutorial stages advance by beats once the confirmation key gave
+      // the go-ahead:
+      //   tutorial-wave  → 5 beats complete → tutorial-ring
+      //   tutorial-ring  → final ring (beat 4) + small margin → main chart
+      if (
+        startedRef.current &&
+        tutorialConfirmedRef.current &&
+        phaseRef.current === 'tutorial-wave' &&
+        songTimeMs > wavePracticeEndRef.current
+      ) {
+        setTimeout(() => startRingStage(), 0)
+      }
+      if (
+        startedRef.current &&
+        tutorialConfirmedRef.current &&
+        phaseRef.current === 'tutorial-ring' &&
+        songTimeMs > ringPracticeEndRef.current
+      ) {
         enterMain()
         try {
           songTimeMs = songNow()
@@ -443,9 +546,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       }
       const renderTimeMs = songTimeMs - getManualOffsetMs()
 
-      // T210: beat-synced instruction overlay while the tutorial runs
-      if (phaseRef.current === 'tutorial') {
-        const text = getTutorialInstruction(timeline.msToBeat(renderTimeMs))
+      // T211: beat-synced instruction overlay while the tutorial runs
+      if (phaseRef.current === 'tutorial-wave' || phaseRef.current === 'tutorial-ring') {
+        const stage = tutorialStageRef.current
+        const text = getTutorialInstruction(timeline.msToBeat(renderTimeMs), stage)
         setTutorialInstruction((prev) => (prev === text ? prev : text))
       }
 
@@ -569,15 +673,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       stopMusic()
       stopMetronome()
     }
-  }, [status, navigate, stopMusic, stopMetronome, songId])
+  }, [status, navigate, stopMusic, stopMetronome, songId, enterMain, startRingStage])
 
-  // T210: auto-play the tutorial once the chart is loaded (public mode only).
-  // Skipping sets phase to 'main' so this never re-runs for the main chart.
-  useEffect(() => {
-    if (status !== 'ready') return
-    if (phase !== 'tutorial') return
-    void startGame()
-  }, [status, phase, startGame])
+  // T211: the tutorial does NOT auto-play. Each stage waits (clock paused,
+  // canvas dimmed) for its confirmation key, which calls startGame() +
+  // confirmTutorialStart() on the first press. Skipping sets phase to 'main'.
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -589,18 +689,39 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         }
         return
       }
-      if (e.key === 'ArrowUp') {
-        keysRef.current.up = true
-        return
-      }
-      if (e.key === 'ArrowDown') {
-        keysRef.current.down = true
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (e.key === 'ArrowUp') keysRef.current.up = true
+        if (e.key === 'ArrowDown') keysRef.current.down = true
+        // T211: stage A waits for the first arrow press to start practice.
+        if (
+          statusRef.current === 'ready' &&
+          phaseRef.current === 'tutorial-wave' &&
+          !tutorialConfirmedRef.current
+        ) {
+          void (async () => {
+            if (!startedRef.current) await startGame()
+            confirmTutorialStart()
+          })()
+        }
         return
       }
       if (e.code === 'Space') {
         e.preventDefault()
         if (statusRef.current !== 'ready') return
         keysRef.current.space = true
+        const inTutorial = phaseRef.current !== 'main'
+        if (inTutorial) {
+          // T211: stage B waits for the first Space press to start practice.
+          if (phaseRef.current === 'tutorial-ring' && !tutorialConfirmedRef.current) {
+            void (async () => {
+              if (!startedRef.current) await startGame()
+              confirmTutorialStart()
+            })()
+          } else if (tutorialConfirmedRef.current) {
+            handleHit()
+          }
+          return
+        }
         if (!startedRef.current) {
           void startGame()
         } else {
@@ -672,7 +793,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [navigate, startGame, handleHit])
+  }, [navigate, startGame, handleHit, confirmTutorialStart])
 
   return (
     <div className="screen game-screen screen-fade">
@@ -693,6 +814,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             height={CANVAS_HEIGHT}
             className="game-canvas"
             data-testid="playtest-canvas"
+            style={{ opacity: canvasOpacity, transition: 'opacity 0.3s ease' }}
           />
           {onExitRef.current && (
             <button
@@ -704,10 +826,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               終了
             </button>
           )}
-          {phase === 'tutorial' && (
+          {(phase === 'tutorial-wave' || phase === 'tutorial-ring') && (
             <div className="tutorial-overlay" data-testid="tutorial-overlay">
               <div className="tutorial-instruction" data-testid="tutorial-instruction">
-                {tutorialInstruction || getTutorialInstruction(0)}
+                {tutorialInstruction || getTutorialInstruction(0, tutorialStageRef.current)}
               </div>
               <button
                 type="button"

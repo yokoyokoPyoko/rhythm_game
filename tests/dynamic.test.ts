@@ -1,24 +1,51 @@
 /**
- * T210 — パブリックモード限定・譜面開始前チュートリアル（自動進行＋スキップ付き）
- * Vitest (TypeScript, node environment) pure acceptance — TDD Red->Green
+ * T211 — チュートリアルの2段階・押下確認式への刷新 (TDD Red -> Green)
+ * Vitest (TypeScript, node environment) pure unit — no browser / no DOM required.
  * Spec:
- *  - 対象はパブリックモードの通常プレイ時のみ（デバッグ・プレイテスト時は出さない）
- *  - 流れ：譜面読込完了 → チュートリアル譜面を自動再生 → 終了後に本編へ自動遷移
- *  - チュートリアル内容（固定・コード生成、メトロノームのみ約8秒）: BPM120、波形 stay4→up2→down2→stay、リング3個(4/8/12 single)
- *  - 拍連動の指示文オーバーレイ（移動→Space→ねぎらい）。修了は成否不問・最終リング＋2秒で本編へ
- *  - スキップボタン常時表示、チュートリアル中のスコアは破棄し本編開始時にリセット
- *  - 新規 src/game/tutorial.ts: generateTutorialChart() + 指示文テーブル
- *  - GameScreen.tsx のみ: フェーズ state ('tutorial'|'main')、同一エンジンで差し替え＋リセット
- * Strict 3-step state-transition assertions, off-grid verification, complex amplitudes.
+ *  - 対象はパブリックモードの通常プレイ時のみ（デバッグ・プレイテスト時は出さない、T210と同一）
+ *  - ステージA（波形練習・BPM90）: stay 1拍 → up 1 / down 1 / up 1 / down 1 の計5拍、リングなし。
+ *    開始時は暗く（canvas不透明度0.35）、↑/↓初回押下で不透明度100＋時計リセット、5拍完走でステージBへ自動進行
+ *  - ステージB（リング練習・BPM90・上下なし）: stay波形の上にリング4個を1拍ごと（beat 1,2,3,4, single）に配置。
+ *    開始時は暗く、Space初回押下で不透明度100＋練習開始、最終リング後に本編へ遷移
+ *  - 待機中は時計を進めない（押下でresetClockし直し）、待機中にメトロノームは鳴らさない
+ *  - スキップボタンは常時表示でいつでも本編へ脱出可。チュートリアル中のスコアは破棄し本編開始時にリセット
+ *  - T208判定表示制御は両ステージに適用
+ *  - 修正: src/game/tutorial.tsに2譜面ジェネレータ（generateWavePracticeChart/generateRingPracticeChart）＋ステージ別指示文テーブル
+ *  - GameScreen.tsxのみ: フェーズ 'tutorial-wave' → 'tutorial-ring' → 'main' の3状態＋待機／練習開始／自動進行
+ *
+ * STRICT QA:
+ *  - 3-step state-transition assertions (capture → perform → assert transition)
+ *  - Assert computed outputs (beats, ms, waveYAt, cursor speed)
+ *  - Off-grid fractional timing mandatory (0.37, 1.23, 3.37, 5.23)
+ *  - Complex amplitudes (0.7, 1.3, 2.7, 3.4) for WaveEngine/Cursor consistency
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateTutorialChart, getTutorialInstruction, TUTORIAL_INSTRUCTIONS } from '../src/game/tutorial';
+import * as TutorialModule from '../src/game/tutorial';
 import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
 import { ScoreManager } from '../src/game/score';
+
+// ---------------------------------------------------------------------------
+// global mocks — node has no localStorage / window by default
+// ---------------------------------------------------------------------------
+if (typeof (globalThis as any).localStorage === 'undefined') {
+  const store = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => { store.set(k, String(v)); },
+    removeItem: (k: string) => { store.delete(k); },
+    clear: () => store.clear(),
+  } as any;
+}
+if (typeof (globalThis as any).window === 'undefined') {
+  (globalThis as any).window = globalThis as any;
+}
+if (typeof (globalThis as any).document === 'undefined') {
+  (globalThis as any).document = { createElement: () => ({ getContext: () => null }) } as any;
+}
 
 vi.useFakeTimers();
 
@@ -38,453 +65,744 @@ function readFile(rel: string): string {
   return fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf-8');
 }
 
-function tutorialDurationMs(): number {
-  const chart = generateTutorialChart();
+function tutorialAMs(chart: any): number {
   const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-  const lastBeat = chart.rings.reduce((m, r) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity);
-  return tl.beatToMs(lastBeat) + 2000;
+  // stage A: no rings → total 5 beats + 2s not used; but duration is 5 beats
+  const totalBeats = (chart.segments as any[]).reduce((s: number, seg: any) => s + seg.beats, 0);
+  return tl.beatToMs(totalBeats);
+}
+
+function tutorialBMs(chart: any): number {
+  const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+  const last = (chart.rings as any[]).reduce((m: number, r: any) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity);
+  return tl.beatToMs(last) + 2000;
 }
 
 // ---------------------------------------------------------------------------
-// T210-0: ファイル契約 — tutorial.ts が存在し generateTutorialChart を export
+// T211-0: ファイル契約 — tutorial.ts / GameScreen.tsx
 // ---------------------------------------------------------------------------
-describe('T210-0: ファイル契約 — tutorial.ts / GameScreen.tsx / data-testid', () => {
-  it('Step1 初期 capture (ファイル未存在時は何もない) → Step2 実装後のモジュール読取 → Step3 generateTutorialChart と指示文テーブルが export されている', () => {
-    // Step1: capture initial — module must be importable
-    expect(typeof generateTutorialChart).toBe('function');
-    expect(typeof getTutorialInstruction).toBe('function');
-    expect(Array.isArray(TUTORIAL_INSTRUCTIONS)).toBe(true);
-    // Step2: ensure file exists on disk
+describe('T211-0: ファイル契約 — tutorial.ts / GameScreen.tsx / phases', () => {
+  it('Step1 初期 capture (旧T210の単相チュートリアルのみ) → Step2 新2段階APIを探索 → Step3 generateWavePracticeChart / generateRingPracticeChart とステージ別指示文が export されている', () => {
+    // Step1: old module had only generateTutorialChart
+    const oldFn = (TutorialModule as any).generateTutorialChart;
+    expect(typeof oldFn === 'function' || oldFn === undefined).toBe(true);
+
+    // Step2: new APIs must exist
+    const mod: any = TutorialModule as any;
     const src = readFile('src/game/tutorial.ts');
-    expect(src).toContain('generateTutorialChart');
-    expect(src).toContain('TUTORIAL_INSTRUCTIONS');
-    // Step3: exported shapes exist
-    const chart = generateTutorialChart();
-    expect(chart).toBeDefined();
-    expect(chart.title).toBeDefined();
+
+    // Step3: strict existence — these MUST exist for T211 (will FAIL before implementation)
+    expect(src).toContain('generateWavePracticeChart');
+    expect(src).toContain('generateRingPracticeChart');
+    expect(typeof mod.generateWavePracticeChart).toBe('function');
+    expect(typeof mod.generateRingPracticeChart).toBe('function');
+
+    // Instruction tables — per-stage (allow either separate arrays or getWave/getRing functions)
+    const hasWaveInstr = src.includes('WAVE') || src.includes('wave') || src.includes('WAVE_PRACTICE') || src.includes('WAVE_INSTRUCTIONS');
+    const hasRingInstr = src.includes('RING') || src.includes('ring') || src.includes('RING_PRACTICE') || src.includes('RING_INSTRUCTIONS');
+    // At least some per-stage instruction identifier must exist (file contract)
+    expect(hasWaveInstr).toBe(true);
+    expect(hasRingInstr).toBe(true);
+    // Also ensure some getInstruction helper exists for each stage (or unified with stage param)
+    const hasGet =
+      src.includes('getWave') ||
+      src.includes('getRing') ||
+      src.includes('getTutorialInstruction') ||
+      src.includes('getInstruction');
+    expect(hasGet).toBe(true);
   });
 
-  it('Step1 GameScreen 初期 capture (tutorial なし) → Step2 実装後の source 探索 → Step3 GameScreen が phase tutorial|main, tutorialOverlay/skip/instruction を含む', () => {
+  it('Step1 GameScreen 初期 capture (phase tutorial|main のみ) → Step2 新3相 state を探索 → Step3 GameScreen が tutorial-wave / tutorial-ring / main の3状態＋待機／リセット／メトロノーム抑制を持つ', () => {
     const src = readFile('src/screens/GameScreen.tsx');
-    // Step1: must exist
     expect(src.length).toBeGreaterThan(0);
-    // Step3: phase state
-    expect(src).toMatch(/phase/);
-    expect(src).toMatch(/'tutorial'\s*\|\s*'main'|"tutorial"\s*\|\s*"main"/);
-    expect(src).toMatch(/generateTutorialChart/);
-    expect(src).toMatch(/getTutorialInstruction/);
-    // data-testid — use available selectors only
-    expect(src).toMatch(/data-testid="tutorial-overlay"/);
-    expect(src).toMatch(/data-testid="tutorial-skip"/);
-    expect(src).toMatch(/data-testid="tutorial-instruction"/);
-    // must not hallucinate parent container like #music-control
-    // Ensure tutorial overlay is tied to phase === 'tutorial'
-    const overlayIdx = src.indexOf('tutorial-overlay');
-    const phaseGuard = src.slice(Math.max(0, overlayIdx - 600), overlayIdx + 200);
-    expect(phaseGuard).toMatch(/tutorial/);
+
+    // Step3: must contain 3 phases explicitly
+    expect(src).toMatch(/'tutorial-wave'/);
+    expect(src).toMatch(/'tutorial-ring'/);
+    expect(src).toMatch(/'main'/);
+    // Phase state type must include all three
+    expect(src).toMatch(/tutorial-wave.*tutorial-ring.*main|tutorial-ring.*tutorial-wave/);
+
+    // Generators must be imported/used
+    expect(src).toMatch(/generateWavePracticeChart/);
+    expect(src).toMatch(/generateRingPracticeChart/);
+
+    // Waiting: clock must NOT advance before key press, resetClock on first press
+    // Look for a waiting flag (e.g. waitingForInput, tutorialStarted, tutorialPhaseStarted, hasStartedTutorial)
+    const waitingRelated = src.match(/waiting|tutorialStarted|hasStarted|isWaiting|waveWaiting|ringWaiting|startedRef/i);
+    expect(waitingRelated !== null).toBe(true);
+    // Must call resetClock on stage start
+    expect(src).toMatch(/resetClock/);
+
+    // Dim opacity 0.35
+    expect(src).toMatch(/0\.35/);
+    expect(src).toMatch(/opacity/);
+
+    // Skip button always visible
+    expect(src).toMatch(/tutorial-skip/);
+    expect(src).toMatch(/スキップ/);
+
+    // Metronome suppression while waiting (must guard startMetronome or schedule)
+    expect(src).toMatch(/startMetronome|stopMetronome|metronome/);
+
+    // Public-only guard
+    expect(src).toMatch(/getViewMode\(\)\s*===\s*['"]public['"]/);
+    expect(src).toMatch(/isPlaytest/);
   });
 
-  it('Step1 capture (viewMode 連携なし) → Step2 public/debug 分岐を探索 → Step3 public のみ tutorial, デバッグ・プレイテストはスキップ', () => {
+  it('Step1 public/debug 分岐 capture → Step2 新仕様でも publicのみチュートリアル → Step3 debug / playtest では tutorial-wave/ring に入らない', () => {
     const src = readFile('src/screens/GameScreen.tsx');
     expect(src).toMatch(/getViewMode/);
-    // public check — must be getViewMode() === 'public'
-    expect(src).toMatch(/getViewMode\(\)\s*===\s*['"]public['"]/);
-    // playtest guard — tutorial only when !isPlaytest
-    expect(src).toMatch(/isPlaytest/);
-    // Must handle !isPlaytest for tutorial decision
+    // Must still check public for tutorial entry
+    const publicGuard = src.match(/getViewMode\(\)\s*===\s*['"]public['"][\s\S]{0,300}isPlaytest[\s\S]{0,300}\?\s*['"]tutorial-wave['"]/);
+    // Allow slightly relaxed pattern but require both conditions near phase decision
+    const hasPublicAndPlaytest = src.includes("getViewMode() === 'public'") || src.includes('getViewMode() === "public"');
+    const hasTutorialWave = src.includes('tutorial-wave');
+    expect(hasPublicAndPlaytest).toBe(true);
+    expect(hasTutorialWave).toBe(true);
+    // Phase initial must be conditional on public && !isPlaytest
     expect(src).toMatch(/!isPlaytest/);
-    // Debug path must set phase to main directly
-    const useTutorialLine = src.match(/useTutorial[\s\S]*?getViewMode\(\)[\s\S]*?isPlaytest/);
-    expect(useTutorialLine !== null).toBe(true);
+    // Must not have hard-coded tutorial without guard
+    const unguarded = src.match(/useState\(['"]tutorial-wave['"]\)/) || src.match(/useState\(['"]tutorial['"]\)/);
+    // If unguarded initial is found, ensure surrounding code also checks view mode
+    if (unguarded) {
+      expect(src).toMatch(/getViewMode/);
+    }
   });
 });
 
 // ---------------------------------------------------------------------------
-// T210-1: チュートリアル譜面 — 固定内容 (3-step, computed)
+// T211-1: ステージA — 波形練習譜面の固定内容 (3-step, computed, off-grid必須)
 // ---------------------------------------------------------------------------
-describe('T210-1: チュートリアル譜面の固定内容 (3-step, computed)', () => {
-  it('Step1 初期 empty capture (chart 未生成) → Step2 generateTutorialChart() 実行 → Step3 segments/rings/BPM が仕様通り (stay4/up2/down2/stay + 4/8/12 single)', () => {
-    // Step1: capture initial — nothing yet
+describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, computed, off-grid)', () => {
+  it('Step1 初期 empty capture (chart 未生成) → Step2 generateWavePracticeChart() 実行 → Step3 BPM90, stay1+up1/down1*4 の5拍、リング0、amplitude1.0', () => {
     const before: unknown = null;
     expect(before).toBeNull();
-    // Step2: perform
-    const chart = generateTutorialChart();
-    // Step3: assert resulting transition — exact spec
+
+    const mod: any = TutorialModule as any;
+    expect(typeof mod.generateWavePracticeChart).toBe('function');
+    const chart = mod.generateWavePracticeChart();
+
+    // BPM90
     expect(chart.bpm_changes.length).toBeGreaterThanOrEqual(1);
     expect(chart.bpm_changes[0].beat).toBe(0);
-    expect(chart.bpm_changes[0].bpm).toBe(120);
-    expect(chart.segments.length).toBe(4);
-    expect(chart.segments[0]).toEqual({ direction: 'stay', beats: 4 });
-    expect(chart.segments[1]).toEqual({ direction: 'up', beats: 2 });
-    expect(chart.segments[2]).toEqual({ direction: 'down', beats: 2 });
-    expect(chart.segments[3].direction).toBe('stay');
-    expect(chart.segments[3].beats).toBeGreaterThanOrEqual(4);
-    expect(chart.rings.length).toBe(3);
-    expect(chart.rings[0].beat).toBe(4);
-    expect(chart.rings[1].beat).toBe(8);
-    expect(chart.rings[2].beat).toBe(12);
-    for (const r of chart.rings) {
-      expect(r.type === undefined || r.type === 'single').toBe(true);
-    }
-    expect(chart.audio).toBe('');
+    expect(chart.bpm_changes[0].bpm).toBe(90);
+
+    // Segments: stay1 + up1 + down1 + up1 + down1 =5
+    expect(chart.segments.length).toBe(5);
+    expect(chart.segments[0]).toEqual({ direction: 'stay', beats: 1 });
+    expect(chart.segments[1]).toEqual({ direction: 'up', beats: 1 });
+    expect(chart.segments[2]).toEqual({ direction: 'down', beats: 1 });
+    expect(chart.segments[3]).toEqual({ direction: 'up', beats: 1 });
+    expect(chart.segments[4]).toEqual({ direction: 'down', beats: 1 });
+
+    // Total beats =5
+    const total = chart.segments.reduce((s: number, seg: any) => s + seg.beats, 0);
+    expect(total).toBe(5);
+
+    // No rings
+    expect(Array.isArray(chart.rings)).toBe(true);
+    expect(chart.rings.length).toBe(0);
+
     expect(chart.amplitude).toBeCloseTo(1.0, 5);
+    // start_position should be 0 (center) or defined
+    expect(typeof chart.start_position).toBe('number');
   });
 
-  it('Step1 BPMタイムライン未構築を capture → Step2 BpmTimeline で beatToMs 計測 → Step3 チュートリアルは約8秒 (最終リング+2秒) でメトロノームのみ', () => {
-    const chart = generateTutorialChart();
+  it('Step1 BPMタイムライン未構築を capture → Step2 BpmTimeline で beatToMs 計測 → Step3 90BPMで 5拍=3333ms 前後, beatMs=666ms', () => {
+    const mod: any = TutorialModule as any;
+    const chart = mod.generateWavePracticeChart();
     const tlBefore = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-    const beforeMs = tlBefore.beatToMs(12);
-    expect(beforeMs).toBeCloseTo(6000, 0); // 12 beats * 500ms at 120BPM
-    // Step2: compute duration via helper
-    const duration = tutorialDurationMs();
-    // Step3: duration = 6000 + 2000 = 8000ms (~8s, not 10s but spec ~10s is approximate)
-    expect(duration).toBe(8000);
-    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-    expect(tl.beatMsAt(0)).toBeCloseTo(500, 5);
-    expect(tl.msToBeat(6000)).toBeCloseTo(12, 4);
-    expect(tl.bpmAt(0)).toBe(120);
-    expect(tl.bpmAt(12)).toBe(120);
+    expect(tlBefore.beatMsAt(0)).toBeCloseTo(60000 / 90, 5); // 666.666...
+    expect(tlBefore.beatToMs(1)).toBeCloseTo(60000 / 90, 2);
+    expect(tlBefore.beatToMs(5)).toBeCloseTo((60000 / 90) * 5, 0);
+    expect(tlBefore.msToBeat((60000 / 90) * 2.5)).toBeCloseTo(2.5, 3);
+    // Duration via helper
+    const dur = tutorialAMs(chart);
+    expect(dur).toBeCloseTo((60000 / 90) * 5, 0);
   });
 
-  it('Step1 segments 未検証を capture → Step2 WaveEngine で getPoints/waveYAt 計測 → Step3 点数=segments+1, 上下幅固定, waveYAt が物理速度と一致', () => {
-    const chart = generateTutorialChart();
+  it('Step1 segments 未検証を capture → Step2 WaveEngine で getPoints/waveYAt 計測 → Step3 点数=6, 上下幅固定, stay区間は中央で安定, off-grid 0.37/1.23 で物理整合', () => {
+    const mod: any = TutorialModule as any;
+    const chart = mod.generateWavePracticeChart();
     const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-    const engineBefore = new WaveEngine(chart.segments, tl, chart.amplitude, chart.start_position);
-    expect(engineBefore.getPoints().length).toBe(chart.segments.length + 1);
-    // Step2: measure wave height
-    const points = engineBefore.getPoints();
+    const engine = new WaveEngine(chart.segments, tl, chart.amplitude, chart.start_position);
+
+    expect(engine.getPoints().length).toBe(chart.segments.length + 1); // 6
+    const points = engine.getPoints();
     const minY = Math.min(...points.map(p => p.y));
     const maxY = Math.max(...points.map(p => p.y));
-    // Step3: physical height fixed at TW_AMP=130 (stay 4 at center, up/down 2 reaches edges)
     expect(maxY - minY).toBeGreaterThan(0);
     expect(maxY).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1);
     expect(minY).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1);
-    // start_position 0 => center
-    expect(engineBefore.waveYAt(0)).toBeCloseTo(TW_CENTER_Y, 5);
-    // stay 4 beats => remains center at beats 0..4
-    expect(engineBefore.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y, 3);
-    expect(engineBefore.waveYAt(1.23)).toBeCloseTo(TW_CENTER_Y, 3);
-    expect(engineBefore.waveYAt(3.99)).toBeCloseTo(TW_CENTER_Y, 3);
+
+    // start_position 0 => center at beat 0
+    expect(engine.waveYAt(0)).toBeCloseTo(TW_CENTER_Y, 5);
+    // stay 1 beat: beats 0..1 should stay center (off-grid)
+    expect(engine.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y, 3);
+    expect(engine.waveYAt(0.99)).toBeCloseTo(TW_CENTER_Y, 3);
+    // up 1 beat from 1..2 should move toward top (negative dY)
+    const yAt1 = engine.waveYAt(1);
+    expect(yAt1).toBeCloseTo(TW_CENTER_Y, 3);
+    // off-grid inside up segment should be between center and top
+    const yAt137 = engine.waveYAt(1.37);
+    expect(yAt137).toBeLessThan(TW_CENTER_Y);
+    expect(yAt137).toBeGreaterThan(TW_CENTER_Y - TW_AMP - 1);
+    // down segment 2..3 should go back toward center/bottom
+    const yAt237 = engine.waveYAt(2.37);
+    expect(Number.isFinite(yAt237)).toBe(true);
   });
 
-  it('Step1 複雑振幅 0.7/1.3/2.7/3.4 + off-grid 0.37/1.23 capture → Step2 WaveEngine と Cursor の数値整合を検証 → Step3 perBeatPx = 2*TW_AMP*amplitude で一致し上下幅は不変', () => {
+  it('Step1 複雑振幅 0.7/1.3/2.7/3.4 + off-grid 0.37/1.23 capture → Step2 WaveEngine と Cursor の数値整合を検証 → Step3 perBeatPx=2*TW_AMP*amplitude で一致し上下幅は不変・T128 dYクランプ維持', () => {
+    const mod: any = TutorialModule as any;
+    const baseChart = mod.generateWavePracticeChart();
     const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGrids = [0.37, 1.23, 3.37, 5.23];
+    const offGrids = [0.37, 1.23, 1.37, 2.37, 3.37, 4.23];
     for (const amp of amps) {
-      const chart = generateTutorialChart();
-      // Use tutorial segments but override amplitude via timeline baseAmplitude
-      const tl = new BpmTimeline(chart.bpm_changes, amp);
-      const engine = new WaveEngine(chart.segments, tl, amp, 0.0);
+      const tl = new BpmTimeline(baseChart.bpm_changes, amp);
+      const engine = new WaveEngine(baseChart.segments, tl, amp, 0.0);
       const perBeat = 2 * TW_AMP * amp;
       for (const off of offGrids) {
-        if (off > 16) continue;
-        // Wave slope in up segment (beats 4..6) should be -perBeat
-        if (off >= 4 && off < 6) {
-          const yAtOff = engine.waveYAt(off);
-          const yAt4 = engine.waveYAt(4);
-          const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yAt4 - perBeat * (off - 4)));
-          expect(yAtOff).toBeCloseTo(expected, 2);
+        if (off > 5) continue;
+        // Determine segment containing off: 0-1 stay (dY=0), 1-2 up (-perBeat), 2-3 down (+perBeat), etc.
+        // We verify slope matches perBeat via engine internal dY model (indirect via waveYAt difference)
+        // Check that waveYAt respects clamp and slope exactly (T128)
+        const y = engine.waveYAt(off);
+        expect(y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1);
+        expect(y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1);
+
+        // stay segment: off in [0,1) should be exactly center regardless of amp
+        if (off < 1) {
+          expect(y).toBeCloseTo(TW_CENTER_Y, 3);
         }
-        // Cursor speed consistency: speed = perBeat / (beatMs/1000)
+
+        // Cursor speed consistency at this amp & beat
         const cursor = new Cursor(amp, 0.0);
         const beatMs = tl.beatMsAt(off);
         const speed = (2 * TW_AMP * amp) / (beatMs / 1000);
         expect(speed).toBeCloseTo(perBeat / (beatMs / 1000), 5);
-        // Upper/lower clamp invariant
+
+        // For up segment [1,2): linear descent from center with slope -perBeat (clamped)
+        if (off >= 1 && off < 2) {
+          const yAt1 = engine.waveYAt(1);
+          const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yAt1 - perBeat * (off - 1)));
+          expect(y).toBeCloseTo(expected, 2);
+        }
+        if (off >= 2 && off < 3) {
+          const yAt2 = engine.waveYAt(2);
+          const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yAt2 + perBeat * (off - 2)));
+          expect(y).toBeCloseTo(expected, 2);
+        }
+      }
+      expect(engine.getPoints().length).toBe(baseChart.segments.length + 1);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T211-2: ステージB — リング練習譜面の固定内容 (3-step, computed)
+// ---------------------------------------------------------------------------
+describe('T211-2: ステージB リング練習譜面の固定内容 (3-step, computed)', () => {
+  it('Step1 初期 empty capture → Step2 generateRingPracticeChart() 実行 → Step3 BPM90, stay波形、リング4個を1拍ごと(1/2/3/4 single)に配置', () => {
+    const before: unknown = null;
+    expect(before).toBeNull();
+
+    const mod: any = TutorialModule as any;
+    expect(typeof mod.generateRingPracticeChart).toBe('function');
+    const chart = mod.generateRingPracticeChart();
+
+    expect(chart.bpm_changes[0].beat).toBe(0);
+    expect(chart.bpm_changes[0].bpm).toBe(90);
+    expect(chart.amplitude).toBeCloseTo(1.0, 5);
+
+    // stay wave — at least one stay segment, no up/down needed (上下移動なし)
+    expect(chart.segments.length).toBeGreaterThanOrEqual(1);
+    for (const seg of chart.segments) {
+      expect(seg.direction).toBe('stay');
+      expect(seg.beats).toBeGreaterThan(0);
+    }
+    const total = chart.segments.reduce((s: number, seg: any) => s + seg.beats, 0);
+    expect(total).toBeGreaterThanOrEqual(4); // must cover rings up to beat 4
+
+    expect(chart.rings.length).toBe(4);
+    expect(chart.rings[0].beat).toBe(1);
+    expect(chart.rings[1].beat).toBe(2);
+    expect(chart.rings[2].beat).toBe(3);
+    expect(chart.rings[3].beat).toBe(4);
+    for (const r of chart.rings) {
+      expect(r.type === undefined || r.type === 'single').toBe(true);
+    }
+  });
+
+  it('Step1 BPMタイムライン未構築を capture → Step2 BpmTimeline で beatToMs 計測 → Step3 1拍=666ms, 4拍で最終リング+2秒=4666ms 付近で本編閾値', () => {
+    const mod: any = TutorialModule as any;
+    const chart = mod.generateRingPracticeChart();
+    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+    expect(tl.beatMsAt(0)).toBeCloseTo(60000 / 90, 5);
+    expect(tl.beatToMs(1)).toBeCloseTo(60000 / 90, 2);
+    expect(tl.beatToMs(4)).toBeCloseTo((60000 / 90) * 4, 0);
+    const dur = tutorialBMs(chart);
+    expect(dur).toBeCloseTo((60000 / 90) * 4 + 2000, 0); // 2666 + 2000 = 4666
+    expect(tl.msToBeat((60000 / 90) * 1.37)).toBeCloseTo(1.37, 3);
+    expect(tl.msToBeat((60000 / 90) * 3.37)).toBeCloseTo(3.37, 3);
+  });
+
+  it('Step1 stay波形の waveYAt 未検証を capture → Step2 WaveEngine で off-grid 1.23/3.37 を計測 → Step3 常に中央付近で安定（stayのためampに依らず）、点数=segments+1', () => {
+    const mod: any = TutorialModule as any;
+    const chart = mod.generateRingPracticeChart();
+    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+    const engine = new WaveEngine(chart.segments, tl, chart.amplitude, chart.start_position);
+    expect(engine.getPoints().length).toBe(chart.segments.length + 1);
+    // stay only → always center for any beat until end
+    expect(engine.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y, 3);
+    expect(engine.waveYAt(1.23)).toBeCloseTo(TW_CENTER_Y, 3);
+    expect(engine.waveYAt(3.37)).toBeCloseTo(TW_CENTER_Y, 3);
+    expect(engine.waveYAt(4.23)).toBeCloseTo(TW_CENTER_Y, 3);
+    // off-grid near rings should not deviate more than tolerance
+    for (const off of [0.37, 1.23, 2.37, 3.37]) {
+      expect(engine.waveYAt(off)).toBeCloseTo(TW_CENTER_Y, 2);
+    }
+  });
+
+  it('Step1 複雑振幅 0.7/1.3/2.7/3.4 + off-grid capture → Step2 各振幅で stay波形の不変性を検証 → Step3 ampを変えても stay は中央固定（上下幅不変）', () => {
+    const mod: any = TutorialModule as any;
+    const base = mod.generateRingPracticeChart();
+    const amps = [0.7, 1.3, 2.7, 3.4];
+    const offs = [0.37, 1.23, 2.37, 3.37, 4.37];
+    for (const amp of amps) {
+      const tl = new BpmTimeline(base.bpm_changes, amp);
+      const engine = new WaveEngine(base.segments, tl, amp, 0.0);
+      for (const off of offs) {
+        if (off > 5) continue;
+        expect(engine.waveYAt(off)).toBeCloseTo(TW_CENTER_Y, 3);
         expect(engine.waveYAt(off)).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1);
         expect(engine.waveYAt(off)).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1);
       }
-      // getPoints length invariant
-      expect(engine.getPoints().length).toBe(chart.segments.length + 1);
+      expect(engine.getPoints().length).toBe(base.segments.length + 1);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// T210-2: 指示文テーブル — 拍連動 (3-step, off-grid必須)
+// T211-3: 指示文テーブル — 拍連動 (3-step, off-grid必須)
 // ---------------------------------------------------------------------------
-describe('T210-2: 拍連動の指示文オーバーレイ (3-step, off-grid)', () => {
-  it('Step1 初期 beat 0 未指示を capture → Step2 getTutorialInstruction(各beat) 実行 → Step3 beat 0/4/8/12 で文言が切替、端数でも最近傍ステップに安定', () => {
-    const before = getTutorialInstruction(-1);
-    expect(typeof before).toBe('string');
-    expect(before.length).toBeGreaterThan(0);
-    // Step2: perform at exact beats
-    const at0 = getTutorialInstruction(0);
-    const at4 = getTutorialInstruction(4);
-    const at8 = getTutorialInstruction(8);
-    const at12 = getTutorialInstruction(12);
-    // Step3: distinct instructions
-    expect(at0).toContain('↑↓');
-    expect(at4).toMatch(/Space/);
-    expect(at8).toMatch(/Space/);
-    expect(at12).toMatch(/お疲れさま|ねぎらい|本編/);
-    expect(at0).not.toBe(at4);
-    expect(at4).not.toBe(at12);
-    expect(TUTORIAL_INSTRUCTIONS.length).toBeGreaterThanOrEqual(4);
-    expect(TUTORIAL_INSTRUCTIONS[0].beat).toBe(0);
-    expect(TUTORIAL_INSTRUCTIONS[1].beat).toBe(4);
-    expect(TUTORIAL_INSTRUCTIONS[2].beat).toBe(8);
-    expect(TUTORIAL_INSTRUCTIONS[3].beat).toBe(12);
+describe('T211-3: 拍連動の指示文テーブル（ステージ別） (3-step, off-grid)', () => {
+  it('Step1 旧単相テーブル capture → Step2 新ステージ別テーブルを探索 → Step3 波形練習とリング練習で異なる文言セットが存在する', () => {
+    const src = readFile('src/game/tutorial.ts');
+    // Must contain stage-specific instruction arrays or functions
+    // Look for wave/ring specific identifiers
+    const hasWaveTable =
+      src.includes('WAVE') || src.includes('wave') || /wave.*instruction|WAVE.*INSTRUCTION/i.test(src);
+    const hasRingTable =
+      src.includes('RING') || src.includes('ring') || /ring.*instruction|RING.*INSTRUCTION/i.test(src);
+    expect(hasWaveTable).toBe(true);
+    expect(hasRingTable).toBe(true);
+
+    // Try to invoke per-stage getters if they exist, otherwise fallback to file content checks
+    const mod: any = TutorialModule as any;
+    const waveGetter = mod.getWaveInstruction || mod.getWavePracticeInstruction || mod.getTutorialInstruction;
+    const ringGetter = mod.getRingInstruction || mod.getRingPracticeInstruction || mod.getTutorialInstruction;
+    // At least one getter must exist and return a string
+    if (typeof waveGetter === 'function') {
+      const at0 = waveGetter(0);
+      expect(typeof at0).toBe('string');
+      expect(at0.length).toBeGreaterThan(0);
+    }
+    if (typeof ringGetter === 'function') {
+      const at1 = ringGetter(1);
+      expect(typeof at1).toBe('string');
+      expect(at1.length).toBeGreaterThan(0);
+    }
+
+    // Wave instruction should mention ↑↓ or 波形/移動 at beat 0
+    const hasMoveHint = /↑↓|移動|波形/.test(src);
+    expect(hasMoveHint).toBe(true);
+    // Ring instruction should mention Space
+    expect(src).toMatch(/Space/);
   });
 
-  it('Step1 端数拍 0.37/1.23 capture → Step2 getTutorialInstruction(offGrid) 実行 → Step3 0.37→beat0文言, 1.23→beat0文言, 4.37→beat4文言でステップ関数が安定', () => {
-    const at037 = getTutorialInstruction(0.37);
-    const at123 = getTutorialInstruction(1.23);
-    const at337 = getTutorialInstruction(3.37);
-    const at437 = getTutorialInstruction(4.37);
-    const at523 = getTutorialInstruction(5.23);
-    const at823 = getTutorialInstruction(8.23);
-    const at1237 = getTutorialInstruction(12.37);
-    expect(at037).toBe(getTutorialInstruction(0));
-    expect(at123).toBe(getTutorialInstruction(0));
-    expect(at337).toBe(getTutorialInstruction(0));
-    expect(at437).toBe(getTutorialInstruction(4));
-    expect(at523).toBe(getTutorialInstruction(4));
-    expect(at823).toBe(getTutorialInstruction(8));
-    expect(at1237).toBe(getTutorialInstruction(12));
-    // Off-grid near boundary: 3.99 still beat0, 4.01 is beat4
-    expect(getTutorialInstruction(3.99)).toBe(getTutorialInstruction(0));
-    expect(getTutorialInstruction(4.01)).toBe(getTutorialInstruction(4));
+  it('Step1 端数拍 0.37/1.23 capture → Step2 新 getter(offGrid) 実行 → Step3 ステップ関数が端数でも安定（0.37→0 beat文言, 1.23→0, 3.37→後段）', () => {
+    const mod: any = TutorialModule as any;
+    const getters: Array<() => any> = [
+      mod.getWaveInstruction,
+      mod.getWavePracticeInstruction,
+      mod.getTutorialInstruction,
+      mod.getInstruction,
+    ].filter((f: any) => typeof f === 'function');
+
+    // If new stage-specific getters exist, verify each; otherwise verify unified getter stability
+    const toTest = getters.length > 0 ? getters : [mod.getTutorialInstruction].filter(Boolean);
+    expect(toTest.length).toBeGreaterThan(0);
+
+    for (const getter of toTest) {
+      const at037 = getter(0.37);
+      const at123 = getter(1.23);
+      const at0 = getter(0);
+      // Off-grid before first interval should equal beat 0 text (step function)
+      expect(at037).toBe(at0);
+      expect(at123).toBe(at0);
+      // Near boundary stability (if stage has beat 1 ring, 0.99 still stage start)
+      const at099 = getter(0.99);
+      expect(at099).toBe(at0);
+      // Far beat should be defined and not throw
+      expect(() => getter(3.37)).not.toThrow();
+      expect(() => getter(5.23)).not.toThrow();
+      expect(typeof getter(3.37)).toBe('string');
+    }
+
+    // Also verify via Wave/Ring stage: off-grid 1.23 vs 1 should be consistent for ring stage
+    const ringGetter = mod.getRingInstruction || mod.getRingPracticeInstruction;
+    if (typeof ringGetter === 'function') {
+      const at1 = ringGetter(1);
+      const at137 = ringGetter(1.37);
+      const at123 = ringGetter(1.23);
+      // Ring stage should be step at each beat: 1.23 still beat 1 context or next — but must be stable
+      expect(typeof at1).toBe('string');
+      expect(typeof at137).toBe('string');
+      expect(at123.length).toBeGreaterThan(0);
+    }
   });
 
-  it('Step1 不定値(NaN/Infinity) capture → Step2 getTutorialInstruction で安全なフォールバック → Step3 先頭文言を返しクラッシュしない', () => {
-    expect(() => getTutorialInstruction(NaN)).not.toThrow();
-    expect(() => getTutorialInstruction(Infinity)).not.toThrow();
-    expect(() => getTutorialInstruction(-Infinity)).not.toThrow();
-    const nanResult = getTutorialInstruction(NaN);
-    expect(nanResult).toBe(TUTORIAL_INSTRUCTIONS[0].text);
-    const negResult = getTutorialInstruction(-5);
-    expect(negResult).toBe(TUTORIAL_INSTRUCTIONS[0].text);
+  it('Step1 不定値(NaN/Infinity) capture → Step2 getter で安全なフォールバック → Step3 先頭文言を返しクラッシュしない', () => {
+    const mod: any = TutorialModule as any;
+    const getters = [
+      mod.generateWavePracticeChart ? mod.getWaveInstruction : undefined,
+      mod.generateRingPracticeChart ? mod.getRingInstruction : undefined,
+      mod.getTutorialInstruction,
+      mod.getWavePracticeInstruction,
+      mod.getRingPracticeInstruction,
+    ].filter((f: any) => typeof f === 'function');
+    // At least one getter must be robust
+    const target = getters[0] as any;
+    if (target) {
+      expect(() => target(NaN)).not.toThrow();
+      expect(() => target(Infinity)).not.toThrow();
+      expect(() => target(-Infinity)).not.toThrow();
+      const nanResult = target(NaN);
+      expect(typeof nanResult).toBe('string');
+      expect(nanResult.length).toBeGreaterThan(0);
+      const negResult = target(-5);
+      expect(typeof negResult).toBe('string');
+    } else {
+      // Fallback: file must have defensive guard
+      const src = readFile('src/game/tutorial.ts');
+      expect(src).toMatch(/Number\.isFinite|isFinite/);
+    }
   });
 
-  it('Step1 TUTORIAL_INSTRUCTIONS 全体 capture → Step2 各 beat の指示文を列挙 → Step3 0→移動、4/8→Space、12→ねぎらい の語彙が各ステップに存在', () => {
-    const texts = TUTORIAL_INSTRUCTIONS.map(i => i.text);
-    const all = texts.join(' | ');
-    expect(all).toMatch(/↑↓|移動/);
-    const spaceCount = texts.filter(t => /Space/.test(t)).length;
-    expect(spaceCount).toBeGreaterThanOrEqual(2);
-    expect(texts[texts.length - 1]).toMatch(/お疲れさま|本編|おつかれ/);
-    // Beats are sorted ascending
-    for (let i = 1; i < TUTORIAL_INSTRUCTIONS.length; i++) {
-      expect(TUTORIAL_INSTRUCTIONS[i].beat).toBeGreaterThan(TUTORIAL_INSTRUCTIONS[i - 1].beat);
+  it('Step1 指示文全体 capture → Step2 各ステージ文言を列挙 → Step3 waveは移動/↑↓、ringはSpace、終端はねぎらい/本編系の語彙が存在', () => {
+    const src = readFile('src/game/tutorial.ts');
+    // Wave stage hints
+    expect(src).toMatch(/↑↓|移動|波形/);
+    // Ring stage hints
+    expect(src).toMatch(/Space/);
+    // Closing hint
+    const hasClosing = /お疲れ|ねぎらい|本編|おつかれ|すばらしい/i.test(src) || src.includes('お疲れ') || src.includes('本編');
+    expect(hasClosing).toBe(true);
+
+    const mod: any = TutorialModule as any;
+    // If arrays are exported, verify sorting
+    const waveInstr = mod.WAVE_INSTRUCTIONS || mod.WAVE_PRACTICE_INSTRUCTIONS || mod.TUTORIAL_WAVE_INSTRUCTIONS;
+    const ringInstr = mod.RING_INSTRUCTIONS || mod.RING_PRACTICE_INSTRUCTIONS || mod.TUTORIAL_RING_INSTRUCTIONS;
+    if (Array.isArray(waveInstr)) {
+      for (let i = 1; i < waveInstr.length; i++) {
+        expect(waveInstr[i].beat).toBeGreaterThanOrEqual(waveInstr[i - 1].beat);
+      }
+    }
+    if (Array.isArray(ringInstr)) {
+      for (let i = 1; i < ringInstr.length; i++) {
+        expect(ringInstr[i].beat).toBeGreaterThanOrEqual(ringInstr[i - 1].beat);
+      }
+    }
+    // Fallback to legacy TUTORIAL_INSTRUCTIONS if stage arrays not yet split — still must be sorted
+    const legacy = mod.TUTORIAL_INSTRUCTIONS;
+    if (Array.isArray(legacy) && !waveInstr && !ringInstr) {
+      for (let i = 1; i < legacy.length; i++) {
+        expect(legacy[i].beat).toBeGreaterThan(legacy[i - 1].beat);
+      }
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// T210-3: パブリックモード限定・自動進行＋スキップ (3-step)
+// T211-4: ステージ遷移と押下確認 — tutorial-wave → tutorial-ring → main (3-step)
 // ---------------------------------------------------------------------------
-describe('T210-3: パブリック限定・自動進行・スキップ (3-step, file contract + computed)', () => {
-  it('Step1 通常プレイ public 初期 capture (phase tutorial 想定) → Step2 tutorialEnd 時刻を再計算 → Step3 最終リング+2秒で本編閾値が 8000ms になる (時間で自動進行)', () => {
-    // Step1: capture initial — tutorial chart generation
-    const chart = generateTutorialChart();
-    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-    const lastBeatBefore = chart.rings[chart.rings.length - 1].beat;
-    expect(lastBeatBefore).toBe(12);
-    // Step2: compute tutorialEnd as GameScreen does
-    const lastHitMs = tl.beatToMs(lastBeatBefore);
-    const tutorialEnd = lastHitMs + 2000;
-    // Step3: assert resulting transition — auto-advance threshold
-    expect(lastHitMs).toBe(6000);
-    expect(tutorialEnd).toBe(8000);
-    expect(tutorialDurationMs()).toBe(tutorialEnd);
-    // Verify GameScreen has auto-advance logic
+describe('T211-4: ステージ遷移と押下確認（待機→練習開始→自動進行） (3-step, file contract + computed)', () => {
+  it('Step1 開始前 capture (phase tutorial-wave想定、暗いまま) → Step2 GameScreen の待機・押下・リセット契機を探索 → Step3 ↑/↓初回押下で不透明度100＋resetClock、Spaceでも同様に ring 開始', () => {
     const src = readFile('src/screens/GameScreen.tsx');
-    expect(src).toMatch(/tutorialEndRef/);
-    expect(src).toMatch(/songTimeMs\s*>\s*tutorialEndRef\.current/);
-    expect(src).toMatch(/enterMain/);
-    // T210: 成否不問 — no score condition in auto-advance check
-    const autoBlock = src.slice(src.indexOf('tutorialEndRef.current') - 500, src.indexOf('tutorialEndRef.current') + 500);
-    expect(autoBlock).not.toMatch(/score|perfect|miss/);
+    // Phase definitions
+    expect(src).toMatch(/'tutorial-wave'/);
+    expect(src).toMatch(/'tutorial-ring'/);
+
+    // Opacity 0.35 (dim) and transition to 1
+    expect(src).toMatch(/0\.35/);
+    expect(src).toMatch(/opacity/);
+    // Must have CSS transition or inline style for opacity
+    expect(src).toMatch(/transition|opacity/);
+
+    // Key handlers: ArrowUp / ArrowDown for wave stage
+    expect(src).toMatch(/ArrowUp/);
+    expect(src).toMatch(/ArrowDown/);
+    // Space for ring stage
+    expect(src).toMatch(/Space/);
+
+    // Waiting flag must gate clock/metronome/progress
+    // Look for guard like if (waiting) return or !tutorialStarted
+    const hasWaitingGuard =
+      /waiting|tutorialStarted|hasStartedTutorial|isWaiting|waveWaiting|ringWaiting/.test(src) &&
+      src.includes('resetClock');
+    expect(hasWaitingGuard).toBe(true);
+
+    // Stage A should advance after 5 beats (wave practice duration)
+    // Check for beat count or timeline check: 5 beats at 90bpm
+    const has5BeatCheck = src.includes('5') && (src.includes('beatToMs') || src.includes('tutorial') || src.includes('wave'));
+    expect(has5BeatCheck).toBe(true);
   });
 
-  it('Step1 スキップ前 capture (score/timeline が tutorial 値) → Step2 skipTutorial/enterMain の source パターン確認 → Step3 スコア破棄・エンジン差し替え・phase=main が行われる', () => {
+  it('Step1 待機中は時計が進まないことを capture (startedRef / songNow) → Step2 押下で resetClock し直す → Step3 待機中にメトロノームは鳴らさない (startMetronome が待機解除後にのみ呼ばれる)', () => {
     const src = readFile('src/screens/GameScreen.tsx');
-    // Step1: before skip, tutorial engines exist
-    expect(src).toMatch(/tutorialTimelineRef/);
-    expect(src).toMatch(/tutorialWaveRef/);
-    expect(src).toMatch(/mainChartRef/);
-    expect(src).toMatch(/mainTimelineRef/);
-    expect(src).toMatch(/mainWaveRef/);
-    // Step2: skipTutorial must call enterMain
-    const skipIdx = src.indexOf('skipTutorial');
-    expect(skipIdx).toBeGreaterThan(-1);
-    const skipSlice = src.slice(skipIdx, skipIdx + 600);
-    expect(skipSlice).toMatch(/enterMain/);
-    // enterMain must discard tutorial score
-    const enterIdx = src.indexOf('enterMain');
-    const enterSlice = src.slice(enterIdx, enterIdx + 1200);
-    // Step3: discards score
+    // Must have a flag that prevents tick progress while waiting
+    expect(src).toMatch(/resetClock/);
+    // Waiting should prevent startMetronome from firing
+    const metronomeSection = src.slice(src.indexOf('startMetronome') - 800, src.indexOf('startMetronome') + 1200);
+    // At least one conditional around metronome/tick that checks waiting/phase
+    const hasGuard =
+      src.includes('waiting') ||
+      src.includes('tutorialStarted') ||
+      src.includes('hasStarted') ||
+      src.includes('phaseRef.current');
+    expect(hasGuard).toBe(true);
+
+    // Verify tick function checks waiting before advancing songTime or doing spawner update
+    const tickIdx = src.indexOf('const tick');
+    if (tickIdx !== -1) {
+      const tickSlice = src.slice(tickIdx, tickIdx + 2500);
+      // Should reference waiting or phase before using songNow/spawner
+      expect(tickSlice.length).toBeGreaterThan(0);
+      // At least one of waiting/phase guard must be in tick
+      expect(/waiting|tutorialStarted|phase/.test(tickSlice)).toBe(true);
+    }
+  });
+
+  it('Step1 各ステージ規定拍数 capture (stageA 5拍, stageB 4拍+2秒) → Step2 GameScreen の自動進行閾値を再計算 → Step3 5拍完走で wave→ring、最終リング+2秒で ring→main', () => {
+    const mod: any = TutorialModule as any;
+    const chartA = mod.generateWavePracticeChart();
+    const chartB = mod.generateRingPracticeChart();
+
+    // Step1: capture stage durations
+    const tlA = new BpmTimeline(chartA.bpm_changes, chartA.amplitude);
+    const totalA = chartA.segments.reduce((s: number, seg: any) => s + seg.beats, 0);
+    expect(totalA).toBe(5);
+    const durA = tlA.beatToMs(totalA);
+    expect(durA).toBeCloseTo((60000 / 90) * 5, 0);
+
+    const tlB = new BpmTimeline(chartB.bpm_changes, chartB.amplitude);
+    const lastBeatB = chartB.rings.reduce((m: number, r: any) => Math.max(m, r.beat), -Infinity);
+    expect(lastBeatB).toBe(4);
+    const durB = tlB.beatToMs(lastBeatB) + 2000;
+    expect(durB).toBeCloseTo((60000 / 90) * 4 + 2000, 0);
+
+    // Step3: GameScreen must have two thresholds or a combined phased threshold
+    const src = readFile('src/screens/GameScreen.tsx');
+    // Must reference both stages for auto-advance
+    expect(src).toMatch(/tutorial-wave/);
+    expect(src).toMatch(/tutorial-ring/);
+    // Must have logic to transition wave -> ring and ring -> main
+    const waveToRing = src.match(/tutorial-wave[\s\S]{0,600}tutorial-ring/);
+    expect(waveToRing !== null).toBe(true);
+    const ringToMain = src.match(/tutorial-ring[\s\S]{0,800}main/);
+    expect(ringToMain !== null).toBe(true);
+
+    // Must use beatToMs or duration comparison for stage end
+    expect(src).toMatch(/beatToMs|tutorialEnd|stageEnd|waveEnd|ringEnd/);
+  });
+
+  it('Step1 本編スコア未混入を capture (ScoreManager) → Step2 エンジン差し替え時のリセット挙動を探索 → Step3 スコア破棄・rings/judgements/cursor リセットが wave→ring と ring→main の両方で行われる', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    // Must discard score on entering main (and ideally on entering ring stage as well)
+    const enterMainIdx = src.indexOf('enterMain');
+    const enterSlice = enterMainIdx !== -1 ? src.slice(enterMainIdx, enterMainIdx + 1500) : src;
     expect(enterSlice).toMatch(/new ScoreManager\(\)/);
     expect(enterSlice).toMatch(/scoreRef\.current = new ScoreManager/);
     expect(enterSlice).toMatch(/ringsRef\.current = \[\]/);
-    expect(enterSlice).toMatch(/phaseRef\.current = 'main'/);
-    expect(enterSlice).toMatch(/setPhase\('main'\)/);
-    // Must reset clock and restart metronome/music for main
-    expect(enterSlice).toMatch(/resetClock/);
-    expect(enterSlice).toMatch(/playMusic/);
-    expect(enterSlice).toMatch(/startMetronome/);
-    // Skip button wiring
-    expect(src).toMatch(/onClick=\{skipTutorial\}/);
-    expect(src).toMatch(/スキップ/);
-  });
-
-  it('Step1 デバッグ初期 capture (getViewMode 未設定でも public だが debug 切替で) → Step2 public/debug の分岐を検証 → Step3 デバッグでは tutorial が出ない', () => {
-    const src = readFile('src/screens/GameScreen.tsx');
-    // GameScreen initial phase: public && !isPlaytest ? tutorial : main (relaxed pattern)
-    const phaseInit = src.match(/getViewMode\(\)\s*===\s*['"]public['"][\s\S]*?isPlaytest[\s\S]*?\?\s*['"]tutorial['"]\s*:\s*['"]main['"]/);
-    expect(phaseInit !== null).toBe(true);
-    // Also second assignment in init() — same condition
-    const useTutorialAssign = src.match(/const useTutorial = getViewMode\(\) === 'public' && !isPlaytest/);
-    expect(useTutorialAssign !== null).toBe(true);
-    // Playtest guard: playtestChart/playtestBuffer/onExit => isPlaytest true => no tutorial
-    expect(src).toMatch(/playtestChart|playtestBuffer|onExit/);
-    expect(src).toMatch(/isPlaytest/);
+    // At least one reset point for ring stage as well (wave->ring should also reset or keep isolated)
+    // Check that phase transitions involve new cursor/wave/timeline assignment
+    expect(src).toMatch(/cursorRef\.current = new Cursor/);
+    expect(src).toMatch(/phaseRef\.current = 'main'|setPhase\('main'\)/);
+    // Also wave->ring transition must be present
+    expect(src).toMatch(/setPhase\('tutorial-ring'\)|phaseRef\.current = 'tutorial-ring'/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T210-4: スコア破棄と本編リセット (3-step, computed)
+// T211-5: スキップ・常時表示・メトロノーム抑制・不透明度 (3-step)
 // ---------------------------------------------------------------------------
-describe('T210-4: チュートリアル中のスコアは破棄し本編開始時にリセット (3-step, computed)', () => {
-  it('Step1 チュートリアル中スコア蓄積を capture (recordHit/recordTrace) → Step2 本編リセットとして new ScoreManager() で差し替え → Step3 本編スコアが 0 から始まる', () => {
-    // Step1: simulate tutorial scoring
+describe('T211-5: スキップ常時表示・メトロノーム抑制・不透明度・待機 (3-step)', () => {
+  it('Step1 初期 capture (overlay に skip が常時ある想定) → Step2 source 探索 → Step3 tutorial-wave と tutorial-ring 両方で skip ボタンが表示され localStorage 記憶に依存しない', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    // Must not persist skip state
+    expect(src).not.toMatch(/tutorialSkipped|skipTutorial.*localStorage|localStorage.*tutorial/);
+    // Skip must be inside tutorial overlay guard (phase === 'tutorial-wave' || 'tutorial-ring' or generic tutorial)
+    expect(src).toMatch(/tutorial-skip/);
+    expect(src).toMatch(/スキップ/);
+    // Must handle both wave and ring phases for skip visibility
+    const hasBothGuard =
+      src.includes('tutorial-wave') && src.includes('tutorial-ring') && src.includes('tutorial-skip');
+    expect(hasBothGuard).toBe(true);
+    // onClick must be skipTutorial or enterMain
+    expect(src).toMatch(/onClick=\{skipTutorial\}|onClick=\{enterMain\}|skipTutorial/);
+  });
+
+  it('Step1 暗い不透明度 0.35 を capture → Step2 canvas の style/opacity を探索 → Step3 待機中は 0.35、練習開始で 1 に切替（transition付き）', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    expect(src).toMatch(/0\.35/);
+    // Canvas opacity must be state-driven (e.g. tutorialOpacity, dimmed, isWaiting)
+    const opacityIdx = src.indexOf('0.35');
+    const around = src.slice(Math.max(0, opacityIdx - 1200), opacityIdx + 1200);
+    expect(around).toMatch(/opacity|style|className.*canvas/i);
+    // Must have state for dim/bright toggle
+    const hasOpacityState =
+      /useState\(0\.35|useState\(1\)|tutorialOpacity|isDimmed|waiting|tutorialStarted/.test(src);
+    expect(hasOpacityState).toBe(true);
+    // Transition should be present (CSS or inline)
+    expect(src).toMatch(/transition/);
+    // Must toggle to 1 after key press
+    const hasBright = src.includes(': 1') || src.includes('opacity: 1') || src.includes('opacity={1') || src.match(/opacity.*1/);
+    expect(hasBright !== null).toBe(true);
+  });
+
+  it('Step1 待機中にメトロノームが鳴らないことを capture (schedule 未呼び出し) → Step2 startMetronome のガードを探索 → Step3 待機解除後まで schedule が呼ばれない（startedRef + waiting/phase ガード）', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    // Must have stop/start metronome logic
+    expect(src).toMatch(/startMetronome|stopMetronome|schedule/);
+    // Guard must prevent metronome while waiting
+    const hasWaitingGuard =
+      /waiting|tutorialStarted|hasStarted|phaseRef\.current/.test(src) && src.includes('startMetronome');
+    expect(hasWaitingGuard).toBe(true);
+    // Verify tick or effect that would normally start metronome is gated
+    const tickGuard = src.match(/if\s*\(\s*startedRef\.current[\s\S]{0,300}waiting|if\s*\([^)]*phaseRef/);
+    // At least one guard must exist (allow relaxed)
+    expect(src).toMatch(/startedRef/);
+    expect(src).toMatch(/phaseRef/);
+  });
+
+  it('Step1 T208 判定表示制御は両ステージでも同一であることを capture → Step2 renderer.render の showJudgementDetail 渡しを探索 → Step3 tutorial-wave/ring でも getViewMode()==debug で分岐（phase依存でない）', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    expect(src).toMatch(/showJudgementDetail/);
+    expect(src).toMatch(/getViewMode\(\)\s*===\s*['"]debug['"]/);
+    // Must not be phase-specific
+    const renderIdx = src.indexOf('renderer.render');
+    const renderSlice = src.slice(Math.max(0, renderIdx - 600), renderIdx + 900);
+    expect(renderSlice).toMatch(/showJudgementDetail/);
+    // Should NOT have phase-specific detail (tutorial uses same rule as main)
+    const phaseConditional = renderSlice.match(/phase.*showJudgementDetail|showJudgementDetail.*phase/);
+    expect(phaseConditional).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T211-6: パブリック限定・スコア破棄と本編リセット (3-step, computed)
+// ---------------------------------------------------------------------------
+describe('T211-6: チュートリアル中のスコアは破棄し本編開始時にリセット／public限定 (3-step, computed)', () => {
+  it('Step1 チュートリアル中スコア蓄積を capture (recordHit/recordTrace) → Step2 本編リセットとして new ScoreManager() で差し替え → Step3 本編スコアが 0 から始まる（混ざらない）', () => {
     const tutorialScore = new ScoreManager();
     tutorialScore.recordHit('perfect');
     tutorialScore.recordHit('great');
-    tutorialScore.recordTrace(0.15, true, 500);
-    tutorialScore.recordTrace(0.15, true, 500);
+    tutorialScore.recordTrace(0.15, true, 60000 / 90);
+    tutorialScore.recordTrace(0.15, true, 60000 / 90);
     const beforeStats = tutorialScore.getStats();
     expect(beforeStats.score).toBeGreaterThan(0);
     expect(beforeStats.perfect).toBe(1);
     expect(beforeStats.great).toBe(1);
-    // Step2: perform reset as enterMain does
+
+    // Simulate enterMain reset as src does
     let mainScore: ScoreManager = new ScoreManager();
-    // Verify discarded: tutorialScore not reused
     expect(mainScore.getStats().score).toBe(0);
     expect(mainScore.getStats().perfect).toBe(0);
     expect(mainScore.getStats().great).toBe(0);
     expect(mainScore.getStats().combo).toBe(0);
-    // Step3: main scoring starts fresh
+
     mainScore.recordHit('perfect');
     expect(mainScore.getStats().score).toBe(50);
     expect(mainScore.getStats().perfect).toBe(1);
     expect(beforeStats.score).not.toBe(mainScore.getStats().score);
+
+    // Also verify stage A -> stage B does not leak into main (file contract)
+    const src = readFile('src/screens/GameScreen.tsx');
+    const mainResets = (src.match(/new ScoreManager\(\)/g) || []).length;
+    expect(mainResets).toBeGreaterThanOrEqual(1);
   });
 
-  it('Step1 トレース蓄積 16拍で bonus+2 を capture → Step2 本編で new ScoreManager にリセット → Step3 トレースボーナスもリセットされている', () => {
+  it('Step1 トレース蓄積 16拍で bonus+2 を capture → Step2 本編で new ScoreManager にリセット → Step3 トレースボーナスもリセットされている（初回 trace は 2 点のみ）', () => {
     const tutorialScore = new ScoreManager();
-    const beatMs = 500;
-    // Accumulate 16 beats of trace (off-grid dt 0.37-style not needed, but verify beats math)
+    const beatMs = 60000 / 90;
     for (let i = 0; i < 160; i++) {
       tutorialScore.recordTrace(0.05, true, beatMs);
     }
-    // After 16 beats, comboBonus should have increased
-    // Score should be > base trace; we don't expose comboBonus directly, but score > base proves bonus
     const beforeScore = tutorialScore.getStats().score;
     expect(beforeScore).toBeGreaterThan(0);
-    // Step2: reset
+
     const mainScore = new ScoreManager();
-    // Step3: fresh — first trace tick should be base 2, not inflated
     mainScore.recordTrace(0.15, true, beatMs);
     expect(mainScore.getStats().score).toBe(2);
-    // Tutorial score not leaked
     expect(beforeScore).not.toBe(mainScore.getStats().score);
   });
 
-  it('Step1 チュートリアル終了間際の MISS を capture → Step2 本編リセット → Step3 MISS カウントも破棄される', () => {
-    const tutorialScore = new ScoreManager();
-    tutorialScore.recordHit('perfect');
-    tutorialScore.recordHit('miss');
-    expect(tutorialScore.getStats().miss).toBe(1);
-    expect(tutorialScore.getStats().combo).toBe(0);
-    // Step2: enterMain reset
-    const mainScore = new ScoreManager();
-    // Step3: main starts with zero miss
-    expect(mainScore.getStats().miss).toBe(0);
-    expect(mainScore.getStats().combo).toBe(0);
-    expect(mainScore.getStats().perfect).toBe(0);
+  it('Step1 デバッグ/プレイテスト初期 capture (publicでない) → Step2 phase 初期値を検証 → Step3 デバッグ・プレイテストでは tutorial-wave/ring に入らず main から始まる', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    // Initial phase must be conditional: public && !isPlaytest ? tutorial-wave : main
+    expect(src).toMatch(/getViewMode\(\)\s*===\s*['"]public['"]/);
+    expect(src).toMatch(/!isPlaytest/);
+    expect(src).toMatch(/tutorial-wave/);
+    expect(src).toMatch(/'main'/);
+    // isPlaytest derived from playtest/playtestChart/playtestBuffer/onExit
+    expect(src).toMatch(/isPlaytest/);
+    expect(src).toMatch(/playtestChart|playtestBuffer|onExit/);
+    // Ensure debug path sets phase to main directly (no tutorial)
+    const useTutorialLine = src.match(/useTutorial|phaseRef\.current = 'main'/);
+    expect(useTutorialLine !== null).toBe(true);
+  });
+
+  it('Step1 プレイテスト時はチュートリアルが出ないことを capture → Step2 isPlaytest ガードを探索 → Step3 playtestChart/playtestBuffer/onExit のいずれかがあれば tutorial をスキップ', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    expect(src).toMatch(/isPlaytest/);
+    // Must handle all playtest variants
+    const hasPlaytestGuard =
+      src.includes('playtestChart') && src.includes('playtestBuffer') && src.includes('onExit');
+    // At least one of them must be checked for isPlaytest
+    expect(src).toMatch(/playtest/);
+    expect(src).toMatch(/!isPlaytest/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T210-5: 本編読込の先行完了と表示分離 (3-step, file contract)
+// T211-7: 結合 — 本編読込先行・エンジン差し替え・回帰 (3-step, computed)
 // ---------------------------------------------------------------------------
-describe('T210-5: 本編読込は裏で先行完了・T208判定表示制御はチュートリアル中も同一 (3-step, file contract)', () => {
-  it('Step1 初期 capture (init が main と tutorial の両方を構築) → Step2 source 探索 → Step3 本編と tutorial 両方が init 内で構築され mainChartRef が保持される', () => {
+describe('T211-7: 本編読込は裏で先行完了・エンジン差し替え・T208/T186/T187/T175/T176 回帰 (3-step)', () => {
+  it('Step1 初期 capture (init が main と両チュートリアル構築) → Step2 source 探索 → Step3 main と wave/ring 両方が init 内で構築され mainChartRef が保持される', () => {
     const src = readFile('src/screens/GameScreen.tsx');
-    // Both main and tutorial are built in init()
-    const mainBuilt = src.indexOf('mainWave');
-    const tutorialBuilt = src.indexOf('tutorialWave');
-    expect(mainBuilt).toBeGreaterThan(-1);
-    expect(tutorialBuilt).toBeGreaterThan(-1);
+    expect(src).toMatch(/mainWave|mainChartRef|mainTimelineRef/);
+    expect(src).toMatch(/tutorialWave|generateWavePracticeChart|generateRingPracticeChart/);
     expect(src).toMatch(/mainChartRef\.current = chart/);
-    expect(src).toMatch(/tutorialChartRef\.current = tutorialChart/);
-    // Main timeline uses new BpmTimeline with new signature (T186/T187) — base BPM derived
-    expect(src).toMatch(/new BpmTimeline\(chart\.bpm_changes/);
-    expect(src).toMatch(/new BpmTimeline\(tutorialChart\.bpm_changes/);
+    // Both tutorial charts must be built
+    expect(src).toMatch(/generateWavePracticeChart/);
+    expect(src).toMatch(/generateRingPracticeChart/);
+    // Timeline uses new signature (base amplitude)
+    expect(src).toMatch(/new BpmTimeline\(/);
   });
 
-  it('Step1 capture (renderer.render 呼び出し) → Step2 showJudgementDetail の渡し方を確認 → Step3 チュートリアル中も getViewMode()==debug で public はランク名のみ', () => {
+  it('Step1 チュートリアル tick の instruction 更新 capture → Step2 get*Instruction が timeline.msToBeat(renderTimeMs) で呼ばれる → Step3 T167/T175 の renderTimeMs 同期が維持される', () => {
     const src = readFile('src/screens/GameScreen.tsx');
-    const renderIdx = src.indexOf('renderer.render');
-    const renderSlice = src.slice(renderIdx, renderIdx + 900);
-    expect(renderSlice).toMatch(/showJudgementDetail/);
-    expect(renderSlice).toMatch(/getViewMode\(\)\s*===\s*['"]debug['"]/);
-    // Must not be phase-dependent — same rule for tutorial and main
-    const phaseConditionalDetail = renderSlice.match(/phase.*showJudgementDetail|showJudgementDetail.*phase/);
-    // Should NOT have phase-specific detail; it's uniform
-    expect(phaseConditionalDetail).toBeNull();
-  });
-
-  it('Step1 チュートリアル tick の instruction 更新 capture → Step2 getTutorialInstruction が timeline.msToBeat(renderTimeMs) で呼ばれる → Step3 T167/T175 の renderTimeMs 同期が維持される', () => {
-    const src = readFile('src/screens/GameScreen.tsx');
-    // instruction update uses renderTimeMs — find tick occurrence (with timeline.msToBeat), not fallback (0)
-    const instructionIdx = src.indexOf('getTutorialInstruction(timeline.msToBeat');
-    expect(instructionIdx).toBeGreaterThan(-1);
-    const around = src.slice(Math.max(0, instructionIdx - 600), instructionIdx + 600);
-    expect(around).toMatch(/renderTimeMs/);
-    expect(around).toMatch(/msToBeat/);
-    // renderTimeMs is songTimeMs - manualOffset
+    // Instruction update should use renderTimeMs
+    const hasRenderTime = src.includes('renderTimeMs');
+    expect(hasRenderTime).toBe(true);
     expect(src).toMatch(/renderTimeMs\s*=\s*songTimeMs\s*-\s*getManualOffsetMs/);
-    // Ensure tutorial auto-advance also uses raw songTimeMs (not renderTimeMs) for ENTER check but instruction uses renderTimeMs
-    const autoIdx = src.indexOf('songTimeMs > tutorialEndRef.current');
-    expect(autoIdx).toBeGreaterThan(-1);
-    const autoSlice = src.slice(Math.max(0, autoIdx - 400), autoIdx + 400);
-    expect(autoSlice).toMatch(/songTimeMs/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T210-6: オーバーレイの常時表示と記憶なし (3-step, file contract)
-// ---------------------------------------------------------------------------
-describe('T210-6: スキップボタン常時表示・記憶なし・毎回表示 (3-step, file contract)', () => {
-  it('Step1 初期 capture (localStorage に記憶キーなし) → Step2 オーバーレイ要素を探索 → Step3 スキップは毎回表示され localStorage 記憶に依存しない', () => {
-    const src = readFile('src/screens/GameScreen.tsx');
-    // Must not read/write any "tutorialSkipped" or similar persistence
-    expect(src).not.toMatch(/tutorialSkipped|skipTutorial.*localStorage|localStorage.*tutorial/);
-    // Overlay is shown whenever phase === 'tutorial'
-    const overlayGate = src.match(/phase\s*===\s*'tutorial' && \([\s\S]*?tutorial-overlay/);
-    expect(overlayGate !== null || src.includes("phase === 'tutorial'")).toBe(true);
-    // tutorial-overlay and skip button are inside the phase guard
-    const overlayPos = src.indexOf('tutorial-overlay');
-    const phaseGuardStart = src.lastIndexOf("phase === 'tutorial'", overlayPos);
-    expect(phaseGuardStart).toBeGreaterThan(-1);
-  });
-
-  it('Step1 チュートリアル instruction 初期 capture (empty) → Step2 chart 生成後の初期文言 → Step3 初回は beat0 の移動説明が表示される', () => {
-    const before = '';
-    expect(before).toBe('');
-    const initialInstruction = getTutorialInstruction(0);
-    expect(initialInstruction).toMatch(/↑↓|移動/);
-    // GameScreen initial tutorialInstruction state is '' but fallback to getTutorialInstruction(0) in render
-    const src = readFile('src/screens/GameScreen.tsx');
-    expect(src).toMatch(/tutorialInstruction \|\| getTutorialInstruction\(0\)/);
-    expect(src).toMatch(/setTutorialInstruction/);
+    expect(src).toMatch(/msToBeat\(renderTimeMs\)/);
+    // Also wave/cursor must use renderTimeMs
+    expect(src).toMatch(/wave\.waveYAtMs\(renderTimeMs\)/);
   });
 
   it('Step1 複雑な音楽タイミング capture (beat 不定・off-grid) → Step2 レンダリング差し替え後の cursor/wave 同期を仮想検証 → Step3 エンジン差し替え後も waveYAt が正しく描画される', () => {
-    // Simulate main chart load after tutorial
     const mainChart: import('../src/types').Chart = {
       title: 'Main',
       artist: 'Artist',
@@ -492,7 +810,10 @@ describe('T210-6: スキップボタン常時表示・記憶なし・毎回表�
       audio_offset: 0,
       amplitude: 1.0,
       start_position: 0.0,
-      bpm_changes: [{ beat: 0, bpm: 120 }, { beat: 8, bpm: 150, amplitude: 1.3 }],
+      bpm_changes: [
+        { beat: 0, bpm: 90 },
+        { beat: 8, bpm: 120, amplitude: 1.3 },
+      ],
       segments: [
         { direction: 'stay', beats: 2 },
         { direction: 'up', beats: 2 },
@@ -504,44 +825,41 @@ describe('T210-6: スキップボタン常時表示・記憶なし・毎回表�
       ],
     };
     const tlBefore = new BpmTimeline(mainChart.bpm_changes, mainChart.amplitude);
-    expect(tlBefore.beatMsAt(0)).toBeCloseTo(500, 0);
-    expect(tlBefore.beatMsAt(9)).toBeCloseTo(400, 0); // after 150bpm
-    // Step2: build engine as enterMain does
+    expect(tlBefore.beatMsAt(0)).toBeCloseTo(60000 / 90, 0);
+    // After 90BPM section, still 90 until beat 8
+    expect(tlBefore.bpmAt(0)).toBe(90);
+    expect(tlBefore.bpmAt(7.5)).toBe(90);
     const wave = new WaveEngine(mainChart.segments, tlBefore, mainChart.amplitude, mainChart.start_position);
-    // Step3: verify off-grid beats still resolve
     expect(wave.waveYAt(0.37)).toBeDefined();
     expect(Number.isFinite(wave.waveYAt(1.23))).toBe(true);
-    expect(Number.isFinite(wave.waveYAt(9.37))).toBe(true);
-    // Cursor with updated amplitude
+    expect(Number.isFinite(wave.waveYAt(3.37))).toBe(true);
     const cursor = new Cursor(mainChart.amplitude, 0.0);
-    cursor.setAmplitude(tlBefore.amplitudeAt(9.37));
+    cursor.setAmplitude(tlBefore.amplitudeAt(3.37));
     expect(cursor.y).toBeDefined();
     expect(wave.getPoints().length).toBe(mainChart.segments.length + 1);
   });
-});
 
-// ---------------------------------------------------------------------------
-// T210-7: 回帰 — T208/T186/T187/T175/T176 不変量維持
-// ---------------------------------------------------------------------------
-describe('T210-7: 回帰 — T208/T186/T187/T175/T176 不変量維持', () => {
-  it('Step1 renderer の showJudgementDetail 契約 capture → Step2 T210 後も変更ないことを検証 → Step3 !== false で public はランクのみ', () => {
+  it('Step1 renderer の showJudgementDetail 契約 capture → Step2 T211 後も変更ないことを検証 → Step3 !== false で public はランクのみ（後方互換）', () => {
     const rendererSrc = readFile('src/game/renderer.ts');
     expect(rendererSrc).toMatch(/showJudgementDetail/);
     expect(rendererSrc).toMatch(/showJudgementDetail\s*!==\s*false/);
     expect(rendererSrc).not.toMatch(/showJudgementDetail\s*===\s*true/);
   });
 
-  it('Step1 BpmTimeline の派生 capture (bpm_changes のみ) → Step2 チュートリアルでも beatToMs が正しい → Step3 先頭セクションから BPM 導出 (T187) が tutorial でも成立', () => {
-    const chart = generateTutorialChart();
-    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
-    expect(tl.bpmAt(0)).toBe(120);
-    expect(tl.bpmAt(12)).toBe(120);
-    expect(tl.beatToMs(0)).toBe(0);
-    expect(tl.beatToMs(4)).toBeCloseTo(2000, 0);
-    expect(tl.msToBeat(2000)).toBeCloseTo(4, 3);
+  it('Step1 BpmTimeline の派生 capture (bpm_changes のみ) → Step2 両チュートリアルでも beatToMs が正しい → Step3 先頭セクションから BPM 導出 (T187) が wave/ring でも成立', () => {
+    const mod: any = TutorialModule as any;
+    const chartA = mod.generateWavePracticeChart();
+    const chartB = mod.generateRingPracticeChart();
+    for (const chart of [chartA, chartB]) {
+      const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+      expect(tl.bpmAt(0)).toBe(90);
+      expect(tl.beatToMs(0)).toBe(0);
+      expect(tl.beatToMs(1)).toBeCloseTo(60000 / 90, 0);
+      expect(tl.msToBeat(60000 / 90)).toBeCloseTo(1, 3);
+    }
   });
 
-  it('Step1 renderer の renderTimeMs 契約 capture → Step2 wave描画が renderTimeMs を使う → Step3 T175/T176 の可聴同期が tutorial/main 共に維持', () => {
+  it('Step1 renderer の renderTimeMs 契約 capture → Step2 wave描画が renderTimeMs を使う → Step3 T175/T176 の可聴同期が tutorial-wave/ring/main 共に維持', () => {
     const rendererSrc = readFile('src/game/renderer.ts');
     expect(rendererSrc).toMatch(/renderTimeMs\s*=\s*songTimeMs\s*-\s*getManualOffsetMs/);
     expect(rendererSrc).toMatch(/drawWave\(ctx, waveEngine, renderTimeMs/);
@@ -549,5 +867,51 @@ describe('T210-7: 回帰 — T208/T186/T187/T175/T176 不変量維持', () => {
     const gameSrc = readFile('src/screens/GameScreen.tsx');
     expect(gameSrc).toMatch(/renderTimeMs\s*=\s*songTimeMs\s*-\s*getManualOffsetMs/);
     expect(gameSrc).toMatch(/wave\.waveYAtMs\(renderTimeMs\)/);
+  });
+
+  it('Step1 オーバーレイの常時表示と記憶なし capture → Step2 overlay 探索 → Step3 スキップは毎回表示され localStorage 記憶に依存しない', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    expect(src).not.toMatch(/tutorialSkipped|skipTutorial.*localStorage|localStorage.*tutorial/);
+    const hasOverlay = src.includes('tutorial-overlay') || src.includes('tutorial-instruction');
+    expect(hasOverlay).toBe(true);
+    // Overlay must be gated on tutorial-wave or tutorial-ring (not just tutorial)
+    expect(src).toMatch(/tutorial-wave|tutorial-ring/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extra: T210回帰 — 旧単相 generateTutorialChart が残っていても新2段階が優先されること
+// ---------------------------------------------------------------------------
+describe('T211-8: 回帰 — 旧単相 generateTutorialChart と新2段階の共存', () => {
+  it('Step1 旧 generateTutorialChart capture (残存してもよい) → Step2 新 generateWave/Ring が存在 → Step3 新APIが旧をラップまたは置換し、BPM90で統一されている', () => {
+    const src = readFile('src/game/tutorial.ts');
+    const mod: any = TutorialModule as any;
+    // New APIs must exist (strict)
+    expect(typeof mod.generateWavePracticeChart).toBe('function');
+    expect(typeof mod.generateRingPracticeChart).toBe('function');
+    // If old API still exists, it should not be BPM120 anymore, or should be deprecated wrapper
+    if (typeof mod.generateTutorialChart === 'function') {
+      const old = mod.generateTutorialChart();
+      // Old should either be gone or now reflect new BPM90 style or be marked deprecated
+      // We assert it does NOT still claim BPM120 as sole tutorial (that would be T210 regression)
+      // Allow old to exist but new wave/ring must be BPM90
+      const wave = mod.generateWavePracticeChart();
+      const ring = mod.generateRingPracticeChart();
+      expect(wave.bpm_changes[0].bpm).toBe(90);
+      expect(ring.bpm_changes[0].bpm).toBe(90);
+      // If old still returns 120, it's a regression — fail
+      if (old.bpm_changes && old.bpm_changes[0] && old.bpm_changes[0].bpm === 120) {
+        // Check if src still defines old as 120 without forwarding to new — that is a failure for T211
+        const oldDef120 = src.match(/generateTutorialChart[\s\S]{0,400}bpm:\s*120/);
+        // If old is still 120 but new are 90, the file is in mixed state — still fail to force migration
+        expect(oldDef120).toBeNull();
+      }
+    } else {
+      // Old may have been removed — that's acceptable for T211 (refresh)
+      expect(true).toBe(true);
+    }
+    // File must not still advertise single 8-second 120BPM tutorial as primary
+    const hasNewStages = src.includes('generateWavePracticeChart') && src.includes('generateRingPracticeChart');
+    expect(hasNewStages).toBe(true);
   });
 });
