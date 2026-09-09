@@ -1937,7 +1937,7 @@
         "qa": "ses_f7b92a8feffe6ebKPdNr1hLNOi",
         "coder": "ses_f7b8fc613ffe6mwJsoZxUhURee"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
