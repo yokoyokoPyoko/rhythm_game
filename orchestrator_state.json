@@ -1991,7 +1991,7 @@
     },
     "T217": {
       "attempts": 1,
-      "status": "running",
+      "status": "passed",
       "started": 1789000680.2360137,
       "cycles": 1,
       "sessions": {
@@ -1999,7 +1999,13 @@
         "coder": "ses_f773db266ffem9P9yM7sSEt1aU",
         "reviewer": "ses_f773a9d3affedQhh5UT9BR5klz"
       },
-      "gate_b_golden": true
+      "gate_b_golden": true,
+      "finished": 1789001168.2570186
+    },
+    "T218": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1789001698.9664319
     }
   },
   "consecutive_no_action": 0
