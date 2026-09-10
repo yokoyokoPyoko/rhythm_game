@@ -3,7 +3,7 @@
  * Vitest (TypeScript, node environment) pure unit — no browser / no DOM.
  * Spec:
  *  - 整数拍ごとに1px縦線、全高、右→左へスクロール（リングと同一式）
- *  - 色 rgba(255,255,255,0.06)、線幅1、主張しない
+ *  - 色: 1拍線 rgba(255,255,255,0.10)、小節線(b%4===0) rgba(255,255,255,0.18)、線幅1、主張しない
  *  - beatToMsで位置算出 → BPM変更で間隔自動追従、時変zoomはリングと同一近似（scrollSpeed引数）
  *  - 描画順: 背景の直後、判定線・波形・リングより背面
  *  - CalibrationModalも同一Rendererで追従
@@ -106,9 +106,8 @@ function beatX(beat: number, renderTimeMs: number, scrollSpeed: number, tl: BpmT
 function extractBeatLines(strokes: StrokeRecord[]): { x: number; strokeStyle: string; lineWidth: number }[] {
   const out: { x: number; strokeStyle: string; lineWidth: number }[] = [];
   for (const s of strokes) {
-    // beat lines: thin white 0.06, lineWidth 1, vertical full height
-    // allow color string exact match first; fallback to rgba containing 0.06
-    const isBeatColor = s.strokeStyle === 'rgba(255,255,255,0.06)' || s.strokeStyle === 'rgba(255,255,255, 0.06)' || /rgba\(255,\s*255,\s*255,\s*0\.06\)/.test(s.strokeStyle);
+    // beat lines: thin white (0.10 normal / 0.18 bar at b%4===0), lineWidth 1, vertical full height
+    const isBeatColor = s.strokeStyle === 'rgba(255,255,255,0.10)' || s.strokeStyle === 'rgba(255,255,255,0.18)' || /rgba\(255,\s*255,\s*255,\s*0\.1[08]\)/.test(s.strokeStyle);
     if (!isBeatColor) continue;
     if (s.lineWidth !== 1) continue;
     // path should be moveTo(x,0) -> lineTo(x,600) (or close)
@@ -202,10 +201,12 @@ describe('T217-0: File contract — drawBeatLines existence and call order (3-st
     expect(beatIdx - bgIdx).toBeLessThan(judgeIdx - bgIdx);
   });
 
-  it('Step1 style capture (no thin white) → Step2 source search → Step3 strokeStyle rgba(255,255,255,0.06) and lineWidth 1 and b<0 guard and count guard exist', () => {
+  it('Step1 style capture (no dual thin white) → Step2 source search → Step3 strokeStyle rgba(255,255,255,0.10/0.18) and lineWidth 1 and b<0 guard and count guard exist', () => {
     const src = readFile('src/game/renderer.ts');
-    // style
-    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.06\)/);
+    // style: normal beat 0.10, bar beat 0.18, switched per beat by b%4===0
+    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.1(0)?\)/);
+    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.18\)/);
+    expect(src).toMatch(/b\s*%\s*4\s*===\s*0/);
     expect(src).toMatch(/lineWidth\s*=\s*1/);
     // guards
     expect(src).toMatch(/b\s*<\s*0/);
@@ -260,7 +261,7 @@ describe('T217-1: Beat grid renders integer beats at correct X with correct styl
       const b = expectedBeats[i];
       const expectedX = beatX(b, renderTimeMs, scrollSpeed, tl);
       expect(beatLines[i].x).toBeCloseTo(expectedX, 0);
-      expect(beatLines[i].strokeStyle).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.06\)/);
+      expect(beatLines[i].strokeStyle).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.1[08]\)/);
       expect(beatLines[i].lineWidth).toBe(1);
     }
 
@@ -698,7 +699,7 @@ describe('T217-4: Zoom scrollSpeed, guard, and style verification (3-step)', () 
     expect(lines.length).toBeGreaterThan(0);
   });
 
-  it('Step1 style before (no thin) → Step2 render → Step3 all beat lines have rgba 0.06 lineWidth1 full-height vertical', () => {
+  it('Step1 style before (no thin) → Step2 render → Step3 all beat lines have rgba 0.10/0.18 lineWidth1 full-height vertical', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -718,11 +719,11 @@ describe('T217-4: Zoom scrollSpeed, guard, and style verification (3-step)', () 
     const lines = extractBeatLines(strokes);
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
-      expect(line.strokeStyle).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.06\)/);
+      expect(line.strokeStyle).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.1[08]\)/);
       expect(line.lineWidth).toBe(1);
     }
     // Verify underlying strokes are vertical full height
-    const beatStrokes = strokes.filter((s) => /rgba\(255,\s*255,\s*255,\s*0\.06\)/.test(s.strokeStyle) && s.lineWidth === 1);
+    const beatStrokes = strokes.filter((s) => /rgba\(255,\s*255,\s*255,\s*0\.1[08]\)/.test(s.strokeStyle) && s.lineWidth === 1);
     for (const s of beatStrokes) {
       expect(s.path.length).toBe(2);
       expect(s.path[0].x).toBeCloseTo(s.path[1].x, 0);
@@ -800,7 +801,7 @@ describe('T217-5: Draw order — beat lines immediately after background, before
     });
     (ctx as any).stroke = vi.fn(() => {
       // classify by style at stroke time
-      if (/rgba\(255,\s*255,\s*255,\s*0\.06\)/.test(currentStyle)) strokeOrder.push('beat');
+      if (/rgba\(255,\s*255,\s*255,\s*0\.1[08]\)/.test(currentStyle)) strokeOrder.push('beat');
       else if (currentStyle === 'rgba(255,255,255,0.08)' || currentStyle === 'rgba(255,255,255,0.08)') strokeOrder.push('judge');
       else if (currentStyle === '#6366f1') strokeOrder.push('wave');
       else strokeOrder.push(`other:${currentStyle}`);
@@ -827,7 +828,7 @@ describe('T217-5: Draw order — beat lines immediately after background, before
     const indices: Record<string, number> = {};
     for (let i = 0; i < strokes2.length; i++) {
       const s = strokes2[i];
-      if (/rgba\(255,\s*255,\s*255,\s*0\.06\)/.test(s.strokeStyle) && s.lineWidth === 1 && indices['beat'] === undefined) indices['beat'] = i;
+      if (/rgba\(255,\s*255,\s*255,\s*0\.1[08]\)/.test(s.strokeStyle) && s.lineWidth === 1 && indices['beat'] === undefined) indices['beat'] = i;
       if (s.strokeStyle === 'rgba(255,255,255,0.08)' && indices['judge'] === undefined) indices['judge'] = i;
       if (s.strokeStyle === '#6366f1' && indices['wave'] === undefined) indices['wave'] = i;
       // rings use #ededed or #4ade80 etc with radius arc

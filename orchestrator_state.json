@@ -2003,9 +2003,15 @@
       "finished": 1789001168.2570186
     },
     "T218": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1789001698.9664319
+      "started": 1789001698.9664319,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f77305310ffe6FznpbCmUg14A2",
+        "coder": "ses_f772ef0b5ffeW579l6IC6CVlsG"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0
