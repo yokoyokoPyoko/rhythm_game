@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { BpmTimeline } from '../../audio/bpmTimeline'
 import { quantizeBeat } from '../../chart/quantize'
 import { calculateVertexDrag, calculateEdgeDrag, calculateMultiDrag, calculateVertexMultiDrag } from '../../game/editorDrag'
@@ -132,6 +132,13 @@ export default function WavePreview({
   const [ringDragOffset, setRingDragOffset] = useState(0)
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
+
+  // T220: pointer tracking — a single active pointer drives mouse-style drags
+  // (vertex/edge/ring/pan/range-select); a second simultaneous pointer switches
+  // to pinch zoom. pointersRef tracks every live pointer for distance math.
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>())
+  const activePointerIdRef = useRef<number | null>(null)
+  const pinchRef = useRef<{ idA: number; idB: number; lastDist: number } | null>(null)
 
   // T150: vertex/edge drags render a local preview only. mousemove updates
   // dragPreview (no onSegmentsChange); mouseup commits once. This avoids the
@@ -582,9 +589,40 @@ export default function WavePreview({
   }, [renderCanvas])
 
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const canvas = canvasRef.current
       if (!canvas) return
+      // T220: keep pointer positions in sync so 2-finger pinch can compute distances.
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      }
+      // T220: pinch zoom with two simultaneous pointers — reuses the wheel zoom
+      // formula scaled by the finger-distance ratio, anchored at the midpoint.
+      if (pinchRef.current) {
+        if (e.pointerId !== pinchRef.current.idA && e.pointerId !== pinchRef.current.idB) return
+        const a = pointersRef.current.get(pinchRef.current.idA)
+        const b = pointersRef.current.get(pinchRef.current.idB)
+        if (a && b) {
+          const dist = Math.hypot(a.x - b.x, a.y - b.y)
+          if (dist > 0 && pinchRef.current.lastDist > 0) {
+            const rect = canvas.getBoundingClientRect()
+            const midX = (a.x + b.x) / 2 - rect.left
+            const cx = midX / rect.width
+            const g = geoRef.current
+            const ratio = Math.max(0.5, Math.min(2, dist / pinchRef.current.lastDist))
+            const newBeats = Math.max(1, Math.min(200, g.viewBeats * ratio))
+            const anchorBeat = g.viewStart + cx * g.viewBeats
+            onViewChangeRef.current?.({
+              startBeat: Math.max(0, anchorBeat - cx * newBeats),
+              beats: newBeats,
+            })
+            pinchRef.current.lastDist = dist
+          }
+        }
+        return
+      }
+      // Single-pointer drag: ignore moves from pointers other than the active one.
+      if (activePointerIdRef.current !== null && e.pointerId !== activePointerIdRef.current) return
       const rect = canvas.getBoundingClientRect()
       // T156: rubber band selection (right-drag) — draw rect only, no state change
       if (rubberRef.current) {
@@ -748,7 +786,20 @@ export default function WavePreview({
         })
       }
     }
-    const onUp = (e: MouseEvent) => {
+    const onUp = (e: PointerEvent) => {
+      pointersRef.current.delete(e.pointerId)
+      // T220: releasing one pinch finger ends zoom; the surviving finger does not
+      // auto-resume a drag.
+      if (pinchRef.current && (e.pointerId === pinchRef.current.idA || e.pointerId === pinchRef.current.idB)) {
+        pinchRef.current = null
+        activePointerIdRef.current = null
+        setRubberRect(null)
+        return
+      }
+      // Ignore releases from pointers that are not driving the current drag, and
+      // stop tracking the active pointer (also handles pointercancel).
+      if (activePointerIdRef.current !== null && e.pointerId !== activePointerIdRef.current) return
+      activePointerIdRef.current = null
       const canvas = canvasRef.current
       const rect = canvas?.getBoundingClientRect()
       // T156: rubber band selection commit on right-button mouseup.
@@ -836,11 +887,13 @@ export default function WavePreview({
 
       panRef.current = null
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
   }, [onMoveRing, onViewChange, editMode, segments, bpmChanges, amplitude, startPosition, onSegmentsChange, safeSnap, selectedRings, selectedRing, ringDragOffset, multiDragSegments, onMultiMoveRings, onMultiMoveSegments, onSelectRing, onSelectRings, onSelectSegment, onSelectSegments, onSelectVertices, selectedVertices, rings, findItemsInRect])
 
@@ -952,9 +1005,35 @@ export default function WavePreview({
     return -1
   }
 
-  const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+  const handleMouseDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    // T220: a second simultaneous pointer starts pinch zoom (touch). Cancel any
+    // in-flight single-pointer drag so the two gestures never fight.
+    if (pointersRef.current.size >= 2) {
+      activePointerIdRef.current = null
+      vertexDragRef.current = null
+      vertexCreateRef.current = null
+      edgeDragRef.current = null
+      dragRef.current = null
+      panRef.current = null
+      rubberRef.current = null
+      multiDragRef.current = null
+      dragPreviewRef.current = null
+      setDragPreview(null)
+      setMultiDragSegments(null)
+      setRingDragOffset(0)
+      const ptsArr = Array.from(pointersRef.current.entries())
+      if (ptsArr.length >= 2) {
+        const [idA, pa] = ptsArr[0]
+        const [idB, pb] = ptsArr[ptsArr.length - 1]
+        pinchRef.current = { idA, idB, lastDist: Math.max(1, Math.hypot(pa.x - pb.x, pa.y - pb.y)) }
+      }
+      e.preventDefault()
+      return
+    }
+    activePointerIdRef.current = e.pointerId
     const rect = canvas.getBoundingClientRect()
     const clickY = e.clientY - rect.top
     const isRight = e.button === 2
@@ -1271,11 +1350,12 @@ export default function WavePreview({
         className="wave-preview"
         data-testid="wave-preview-canvas"
         data-canvas-testid="wave-canvas"
-        onMouseDown={handleMouseDown}
+        onPointerDown={handleMouseDown}
+        onPointerMove={handleMouseMove}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
-        onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
+        style={{ touchAction: 'none' }}
       />
       <p className="editor-hint" data-testid="wave-preview-hint">
         {editMode === 'ring'

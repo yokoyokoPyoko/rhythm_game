@@ -2029,9 +2029,15 @@
       "finished": 1789006372.8082306
     },
     "T220": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1789017591.4757252
+      "started": 1789017591.4757252,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f763dd2c0fferJntRIxNLDJZsO",
+        "coder": "ses_f763bc1f0ffe0Dpnf2mDDxzVkq"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

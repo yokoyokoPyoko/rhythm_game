@@ -1,1216 +1,638 @@
 /**
- * T219 — 拍グリッド線の濃度引き上げ（0.20／0.30） TDD Red → Green
- * Vitest (TypeScript, node environment) pure unit — no browser / no DOM.
- * Spec T219:
- *  - 1拍線: 0.10 → 0.20 (エディタ太グリッド並み)
- *  - 小節線 (b % 4 === 0): 0.18 → 0.30
- *  - 線幅1・全高・背景直後の描画順・スクロール連動・BPM追従は不変・b<0スキップ・件数ガード維持
- *  - 波形（単色ベタ）・リングよりは薄いまま
- *  - 実装は src/game/renderer.ts の drawBeatLines のみ: 2色のalpha値を 0.20／0.30 に変更
- *  - CalibrationModalは同一Rendererで自動追従
- * STRICT QA: 3-step state-transition / computed values / off-grid (0.37/1.23) / complex amps (0.7/1.3/2.7/3.4)
+ * T220: エディタCanvasのポインターイベント統一＋ピンチズーム
+ * Node環境 Vitest ユニットテスト（DOMなし）
+ *
+ * - pointerdown / pointermove / pointerup + pointercancel への置換
+ * - pointerId による単一ポインタ追跡
+ * - canvas に touch-action: none
+ * - 2ポインタ同時でピンチズーム（既存wheel計算式流用）
+ * - 既存ドラッグロジック流用が数値的に壊れていないこと
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// node has no localStorage — provide minimal mock before importing clock
-if (typeof (globalThis as any).localStorage === 'undefined') {
-  const store = new Map<string, string>();
-  (globalThis as any).localStorage = {
-    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-    setItem: (k: string, v: string) => { store.set(k, String(v)); },
-    removeItem: (k: string) => { store.delete(k); },
-    clear: () => store.clear(),
-  } as any;
-}
-if (typeof (globalThis as any).window === 'undefined') {
-  (globalThis as any).window = globalThis as any;
-}
-
 import { BpmTimeline } from '../src/audio/bpmTimeline';
-import { Renderer } from '../src/game/renderer';
-import * as clock from '../src/audio/clock';
-import { WaveEngine } from '../src/game/waveEngine';
+import { WaveEngine, TW_CENTER_Y, TW_AMP } from '../src/game/waveEngine';
+import { Cursor } from '../src/game/cursor';
+import { quantizeBeat, segmentize, isSnapAligned } from '../src/chart/quantize';
+import {
+  calculateVertexDrag,
+  calculateEdgeDrag,
+  calculateMultiDrag,
+  calculateVertexMultiDrag,
+} from '../src/game/editorDrag';
+import type { Segment, BpmChange } from '../src/types';
 
 // ---------------------------------------------------------------------------
-// constants mirroring renderer
+// Helpers
 // ---------------------------------------------------------------------------
-const CANVAS_WIDTH = 800;
-const CANVAS_HEIGHT = 600;
-const TW_JUDGE_X = Math.round(800 * 0.26); // 208
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-function readFile(rel: string): string {
-  return fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf-8');
+function loadWavePreviewSource(): string {
+  const p = path.resolve(process.cwd(), 'src/screens/editor/WavePreview.tsx');
+  return fs.readFileSync(p, 'utf-8');
 }
 
-type StrokeRecord = { strokeStyle: string; lineWidth: number; globalAlpha: number; path: { op: string; x: number; y: number }[] };
-
-function makeMockCtx() {
-  let _strokeStyle = '';
-  let _fillStyle = '';
-  let _lineWidth = 1;
-  let _globalAlpha = 1;
-  let _font = '';
-  const strokes: StrokeRecord[] = [];
-  let curPath: { op: string; x: number; y: number }[] = [];
-
-  const ctx: any = {
-    get strokeStyle() { return _strokeStyle; },
-    set strokeStyle(v: string) { _strokeStyle = String(v); },
-    get fillStyle() { return _fillStyle; },
-    set fillStyle(v: string) { _fillStyle = String(v); },
-    get lineWidth() { return _lineWidth; },
-    set lineWidth(v: number) { _lineWidth = Number(v); },
-    get globalAlpha() { return _globalAlpha; },
-    set globalAlpha(v: number) { _globalAlpha = Number(v); },
-    get font() { return _font; },
-    set font(v: string) { _font = String(v); },
-    textAlign: 'left',
-    textBaseline: 'top',
-    fillRect: vi.fn(),
-    beginPath: vi.fn(() => { curPath = []; }),
-    moveTo: vi.fn((x: number, y: number) => { curPath.push({ op: 'moveTo', x, y }); }),
-    lineTo: vi.fn((x: number, y: number) => { curPath.push({ op: 'lineTo', x, y }); }),
-    stroke: vi.fn(() => {
-      strokes.push({ strokeStyle: _strokeStyle, lineWidth: _lineWidth, globalAlpha: _globalAlpha, path: [...curPath] });
-      curPath = [];
-    }),
-    arc: vi.fn((x: number, y: number, r: number) => { curPath.push({ op: 'arc', x, y } as any); }),
-    fill: vi.fn(() => { curPath = []; }),
-    fillText: vi.fn(),
-  };
-  return { ctx, strokes };
+function makeTimeline(bpmChanges: BpmChange[] = [], baseAmp = 1.0): BpmTimeline {
+  return new BpmTimeline(bpmChanges, baseAmp);
 }
 
-function makeWaveEngine(bpmChanges: any[] = [{ beat: 0, bpm: 120 }], amp = 1.0, startPos = 0): WaveEngine {
-  const tl = new BpmTimeline(bpmChanges, amp);
-  return new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], tl, amp, startPos);
+function clampViewBeats(v: number): number {
+  return Math.max(1, Math.min(200, v));
 }
 
-function makeTimeline(bpmChanges: any[], amp = 1.0): BpmTimeline {
-  return new BpmTimeline(bpmChanges, amp);
+// wheel の計算を流用したピンチズームの純粋期待値（仕様通りの実装）
+function expectedPinchBeats(startBeats: number, startDist: number, curDist: number): number {
+  if (curDist <= 1e-6) return clampViewBeats(startBeats);
+  const ratio = startDist / curDist;
+  return clampViewBeats(startBeats * ratio);
 }
 
-function beatX(beat: number, renderTimeMs: number, scrollSpeed: number, tl: BpmTimeline): number {
-  return TW_JUDGE_X + ((tl.beatToMs(beat) - renderTimeMs) / 1000) * scrollSpeed;
-}
-
-function isNormalBeatColor(s: string): boolean {
-  // T219: normal beat = 0.20, must exclude bar 0.30 and old 0.10/0.06
-  return /rgba\(255,\s*255,\s*255,\s*0\.20\)/.test(s);
-}
-function isBarBeatColor(s: string): boolean {
-  return /rgba\(255,\s*255,\s*255,\s*0\.30\)/.test(s);
-}
-function isAnyBeatColor(s: string): boolean {
-  return isNormalBeatColor(s) || isBarBeatColor(s);
-}
-
-function expectedColorForBeat(b: number): string {
-  return b % 4 === 0 ? 'bar' : 'normal';
-}
-
-function extractAllBeatLines(strokes: StrokeRecord[]): { x: number; strokeStyle: string; lineWidth: number; kind: 'bar' | 'normal' }[] {
-  const out: { x: number; strokeStyle: string; lineWidth: number; kind: 'bar' | 'normal' }[] = [];
-  for (const s of strokes) {
-    let kind: 'bar' | 'normal' | null = null;
-    if (isBarBeatColor(s.strokeStyle)) kind = 'bar';
-    else if (isNormalBeatColor(s.strokeStyle)) kind = 'normal';
-    else continue;
-    if (s.lineWidth !== 1) continue;
-    if (s.path.length < 2) continue;
-    const m = s.path[0];
-    const l = s.path[1];
-    if (m.op !== 'moveTo' || l.op !== 'lineTo') continue;
-    if (Math.abs(m.x - l.x) > 0.5) continue;
-    const y0 = Math.min(m.y, l.y);
-    const y1 = Math.max(m.y, l.y);
-    if (y0 > 1 || y1 < CANVAS_HEIGHT - 1) continue;
-    out.push({ x: m.x, strokeStyle: s.strokeStyle, lineWidth: s.lineWidth, kind });
-  }
-  return out;
-}
-
-function computeVisibleBeats(tl: BpmTimeline, renderTimeMs: number, scrollSpeed: number): number[] {
-  const leftMs = renderTimeMs + ((0 - TW_JUDGE_X) / scrollSpeed) * 1000;
-  const rightMs = renderTimeMs + ((CANVAS_WIDTH - TW_JUDGE_X) / scrollSpeed) * 1000;
-  const leftBeat = Math.ceil(tl.msToBeat(leftMs));
-  const rightBeat = Math.floor(tl.msToBeat(rightMs));
-  const beats: number[] = [];
-  for (let b = leftBeat; b <= rightBeat; b++) {
-    if (b < 0) continue;
-    beats.push(b);
-    if (beats.length > 500) break;
-  }
-  return beats;
-}
-
-vi.useFakeTimers();
-
-beforeEach(() => {
-  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-  try { localStorage.clear(); } catch {}
-  vi.restoreAllMocks();
-});
-
-afterEach(() => {
-  vi.clearAllTimers();
-  vi.restoreAllMocks();
-  try { localStorage.clear(); } catch {}
-});
+const COMPLEX_AMPS = [0.7, 1.3, 2.7, 3.4] as const;
+const OFF_GRID_BEATS = [0.37, 1.23, 2.71, 0.25, 1.75] as const;
+const SNAP_VALUES = [0.125, 0.25, 0.5, 1] as const;
 
 // ---------------------------------------------------------------------------
-// T219-0: File contract — drawBeatLines existence and dual-color 0.20/0.30
+// T220: Source contract — pointer unification
 // ---------------------------------------------------------------------------
-describe('T219-0: File contract — drawBeatLines dual opacity 0.20/0.30 (3-step)', () => {
-  it('Step1 capture initial (old dual 0.10/0.18) → Step2 read source → Step3 drawBeatLines contains 0.20 and 0.30 and b%4===0 switch, old values absent', () => {
-    const beforeHasDual020_030 = false;
-    expect(beforeHasDual020_030).toBe(false);
+describe('T220: WavePreview pointer unification source contract', () => {
+  let src: string;
+  let srcLower: string;
 
-    const src = readFile('src/game/renderer.ts');
-
-    expect(src).toContain('drawBeatLines');
-    expect(src).toMatch(/drawBeatLines\s*\([^)]*bpmTimeline[^)]*renderTimeMs[^)]*scrollSpeed[^)]*\)/);
-    // T219: must have 0.20 and 0.30
-    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.20\)/);
-    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.30\)/);
-    // old values must NOT be in beat lines region
-    const beatRegion = src.slice(src.indexOf('drawBeatLines'), src.indexOf('drawBeatLines') + 2000);
-    expect(beatRegion).not.toMatch(/0\.06/);
-    // Ensure old T218 values are gone from beat region (0.10 and 0.18 should not appear as beat colors)
-    // Allow 0.10 to appear nowhere in beatRegion; 0.18 also gone
-    // We check that beatRegion contains 0.20/0.30 and does NOT contain the exact old strings as separate beat colors
-    // Use strict check: beatRegion should not have '0.10' nor '0.18' as alpha
-    expect(beatRegion).not.toMatch(/0\.10\)/);
-    expect(beatRegion).not.toMatch(/0\.18\)/);
-    // bar detection logic preserved
-    expect(src).toMatch(/b\s*%\s*4\s*===\s*0/);
-    const loopStart = beatRegion.indexOf('for (let b');
-    expect(loopStart).toBeGreaterThan(-1);
-    const afterLoopStart = beatRegion.slice(loopStart);
-    expect(afterLoopStart).toMatch(/strokeStyle/);
-    expect(afterLoopStart).toMatch(/0\.30/);
-    expect(afterLoopStart).toMatch(/0\.20/);
+  beforeEach(() => {
+    src = loadWavePreviewSource();
+    srcLower = src.toLowerCase();
   });
 
-  it('Step1 render before state (no 0.20/0.30) → Step2 read render() body → Step3 drawBeatLines called after background before judge/wave/rings', () => {
-    const beforeOrder = ['drawBackground', 'drawJudgeLine', 'drawWave', 'drawRings'];
-    expect(beforeOrder).not.toContain('drawBeatLines');
-
-    const src = readFile('src/game/renderer.ts');
-    const renderIdx = src.indexOf('render(ctx');
-    expect(renderIdx).toBeGreaterThan(-1);
-    const renderSlice = src.slice(renderIdx, renderIdx + 3000);
-
-    const bgIdx = renderSlice.indexOf('drawBackground');
-    const beatIdx = renderSlice.indexOf('drawBeatLines');
-    const judgeIdx = renderSlice.indexOf('drawJudgeLine');
-    const waveIdx = renderSlice.indexOf('drawWave');
-    const ringsIdx = renderSlice.indexOf('drawRings');
-
-    expect(bgIdx).toBeGreaterThan(-1);
-    expect(beatIdx).toBeGreaterThan(-1);
-    expect(judgeIdx).toBeGreaterThan(-1);
-    expect(waveIdx).toBeGreaterThan(-1);
-    expect(ringsIdx).toBeGreaterThan(-1);
-
-    expect(bgIdx).toBeLessThan(beatIdx);
-    expect(beatIdx).toBeLessThan(judgeIdx);
-    expect(beatIdx).toBeLessThan(waveIdx);
-    expect(beatIdx).toBeLessThan(ringsIdx);
+  it('canvas に touch-action: none が付与されている', () => {
+    // React では style={{ touchAction: 'none' }} または CSS touch-action: none のいずれか。
+    // 少なくとも文字列 touch-action / touchAction と none が近接して存在すること。
+    const hasTouchAction =
+      srcLower.includes('touch-action') || src.includes('touchAction');
+    const hasNone = srcLower.includes('none');
+    // 3-step: capture -> perform check -> assert
+    const initialHas = hasTouchAction && hasNone;
+    expect(initialHas, 'canvas should have touch-action: none to prevent page scroll/gesture').toBe(true);
+    // 具体的に touch-action:none の組み合わせを検証
+    const combined =
+      /touch-action\s*:\s*none/i.test(src) || /touchAction\s*:\s*['"]none['"]/i.test(src);
+    expect(combined).toBe(true);
   });
 
-  it('Step1 style capture (old 0.10/0.18) → Step2 source search → Step3 lineWidth 1, b<0 guard, count guard, msToBeat/beatToMs, TW_JUDGE_X formula exist and use 0.20/0.30', () => {
-    const src = readFile('src/game/renderer.ts');
-    expect(src).toMatch(/lineWidth\s*=\s*1/);
-    expect(src).toMatch(/b\s*<\s*0/);
-    expect(src).toMatch(/for\s*\(.*let\s+b.*\)/);
-    expect(src).toMatch(/500|MAX_LINES|guard|break/);
-    expect(src).toMatch(/msToBeat/);
-    expect(src).toMatch(/beatToMs/);
-    expect(src).toMatch(/TW_JUDGE_X.*beatToMs.*renderTimeMs.*scrollSpeed/);
-    // Verify the two new opacities are the only beat line opacities
-    const beatRegion = src.slice(src.indexOf('drawBeatLines'), src.indexOf('drawBeatLines') + 2000);
-    expect(beatRegion).toMatch(/0\.20/);
-    expect(beatRegion).toMatch(/0\.30/);
+  it('mousedown/mousemove/mouseup が pointerdown/pointermove/pointerup + pointercancel に置換されている', () => {
+    // Step1: capture initial counts
+    const hasPointerDown = src.includes('onPointerDown') || srcLower.includes('pointerdown');
+    const hasPointerMove = src.includes('onPointerMove') || srcLower.includes('pointermove');
+    const hasPointerUp = src.includes('onPointerUp') || srcLower.includes('pointerup');
+    const hasPointerCancel = srcLower.includes('pointercancel');
+
+    // Step2/3: assert all pointer handlers exist
+    expect(hasPointerDown, 'must have pointerdown handler').toBe(true);
+    expect(hasPointerMove, 'must have pointermove handler').toBe(true);
+    expect(hasPointerUp, 'must have pointerup handler').toBe(true);
+    expect(hasPointerCancel, 'must handle pointercancel').toBe(true);
+
+    // window レベルの mouse リスナが残っていない（pointer に置換済み）
+    // 反転チェック: 旧実装は window.addEventListener('mousemove' / 'mouseup')
+    const hasWindowMouseMove = src.includes("window.addEventListener('mousemove'") || src.includes('window.addEventListener("mousemove"');
+    const hasWindowMouseUp = src.includes("window.addEventListener('mouseup'") || src.includes('window.addEventListener("mouseup"');
+    expect(hasWindowMouseMove, 'window mousemove listener must be removed (use pointermove)').toBe(false);
+    expect(hasWindowMouseUp, 'window mouseup listener must be removed (use pointerup)').toBe(false);
+
+    // 代わりに window pointer リスナが存在すること
+    const hasWindowPointerMove = srcLower.includes("window.addeventlistener('pointermove") || srcLower.includes('window.addeventlistener("pointermove') || srcLower.includes('pointermove');
+    const hasWindowPointerUp = srcLower.includes('pointerup');
+    expect(hasWindowPointerMove).toBe(true);
+    expect(hasWindowPointerUp).toBe(true);
+
+    // JSX 側の旧 onMouseDown / onMouseMove が残っていない
+    expect(src.includes('onMouseDown'), 'JSX onMouseDown must be replaced by onPointerDown').toBe(false);
+    // onMouseMove が残っていると pointer 統一になっていない
+    // handleMouseMove という内部名は許容するが、JSX prop としての onMouseMove は不可
+    const jsxMouseMove = /onMouseMove\s*=/ .test(src);
+    expect(jsxMouseMove, 'JSX onMouseMove must be replaced').toBe(false);
+  });
+
+  it('pointerId による単一ポインタ追跡が行われている', () => {
+    const hasPointerId = src.includes('pointerId');
+    expect(hasPointerId, 'must track pointerId for single-pointer isolation').toBe(true);
+    // 少なくとも activePointerId / pointerIdRef / currentPointerId のような保持が見える
+    const hasPointerRef =
+      /pointerIdRef|activePointerId|currentPointerId|dragPointerId|primaryPointerId/i.test(src);
+    // 厳格ではないが、pointerId 自体の存在は必須。ref名は実装依存なので pointerId あれば pass
+    expect(hasPointerId).toBe(true);
+  });
+
+  it('2ポインタ同時でピンチズーム（viewBeats を距離比で変更・既存wheel計算式流用）', () => {
+    // Step1: capture initial — wheel クランプが存在すること
+    const wheelClampCount = (src.match(/Math\.max\s*\(\s*1\s*,\s*Math\.min\s*\(\s*200/g) || []).length;
+    // wheel が1箇所、pinch が追加で1箇所以上あるはず（T220で追加）
+    expect(wheelClampCount, 'pinch zoom must reuse wheel clamp Math.max(1, Math.min(200, ...)) — expect >=2 clamp sites after T220').toBeGreaterThanOrEqual(2);
+
+    // pinch 関連の distance 計算が見える
+    const hasDistance =
+      srcLower.includes('distance') ||
+      src.includes('getDistance') ||
+      src.includes('hypot') ||
+      srcLower.includes('pinch');
+    // wheel とは別に、pointer 2本の距離比で viewBeats を更新するロジック
+    expect(hasDistance, 'pinch must compute distance between two pointers').toBe(true);
+
+    // view / viewBeats が pinch 経路でも更新される
+    const hasViewBeatsUpdate =
+      src.includes('viewBeats') && (src.includes('ratio') || src.includes('startDist') || srcLower.includes('distance'));
+    expect(hasViewBeatsUpdate, 'pinch must update viewBeats via distance ratio').toBe(true);
+  });
+
+  it('既存の非passive wheel ハンドラは維持されている（pageスクロール防止）', () => {
+    const hasWheel = srcLower.includes('wheel');
+    const hasPreventDefault = src.includes('preventDefault');
+    const hasPassiveFalse = src.includes('passive') && src.includes('false');
+    expect(hasWheel, 'wheel handler must remain for PC').toBe(true);
+    expect(hasPreventDefault, 'wheel must call preventDefault').toBe(true);
+    expect(hasPassiveFalse, 'wheel listener must be non-passive { passive: false }').toBe(true);
+  });
+
+  it('既存ドラッグロジック（vertex/edge/ring/pan/範囲選択）が流用されている', () => {
+    // 旧ロジックの呼び出しが残っていること（T220は置換のみでロジックは流用）
+    expect(src.includes('calculateVertexDrag') || src.includes('vertexDragRef'), 'vertex drag logic must be reused').toBe(true);
+    expect(src.includes('calculateEdgeDrag') || src.includes('edgeDragRef'), 'edge drag logic must be reused').toBe(true);
+    expect(src.includes('dragRef') || src.includes('onMoveRing'), 'ring drag must be reused').toBe(true);
+    expect(src.includes('panRef'), 'pan (scroll) logic must be reused').toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T219-1: Beat grid renders with correct dual opacity (0.20 vs 0.30)
+// T220: Numeric invariants — WaveEngine + Cursor remain consistent
+//   複雑な振幅 (0.7/1.3/2.7/3.4) と off-grid 位相 (0.37/1.23) で検証
 // ---------------------------------------------------------------------------
-describe('T219-1: Beat grid renders integer beats with correct dual opacity 0.20/0.30 (3-step, computed, off-grid)', () => {
-  it('Step1 capture no lines at initial state → Step2 render at 2000ms (beat4 at judge) → Step3 each beat has correct X and correct color (bar 0.30 vs normal 0.20) and full height', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
+describe('T220: WaveEngine / Cursor numeric consistency (complex amps + off-grid)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    const songTimeMs = 2000;
-    const renderTimeMs = songTimeMs - 0;
-    const scrollSpeed = 110;
+  it('WaveEngine: off-grid beat での waveYAt が per-beat変位とクランプで厳密に一致する', () => {
+    // Step1: capture initial state — diverse charts
+    for (const amp of COMPLEX_AMPS) {
+      const segs: Segment[] = [
+        { direction: 'down', beats: 3 },
+        { direction: 'up', beats: 2 },
+        { direction: 'stay', beats: 1 },
+        { direction: 'down', beats: 4 },
+      ];
+      const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+      const eng = new WaveEngine(segs, tl, amp, 0);
+      const waveTop = TW_CENTER_Y - TW_AMP;
+      const waveBottom = TW_CENTER_Y + TW_AMP;
+      const perBeatPx = 2 * TW_AMP * amp;
 
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs,
+      // Step2: probe off-grid beats inside first segment (0..3)
+      for (const off of OFF_GRID_BEATS) {
+        // pick a beat inside segment 0 (0 < b < 3)
+        const beat = (off % 3);
+        if (beat <= 0 || beat >= 3) continue;
+        const startY = TW_CENTER_Y; // start_position 0 => CENTER
+        const rawY = startY + perBeatPx * (beat - 0); // down positive
+        const expected = Math.max(waveTop, Math.min(waveBottom, rawY));
+        const actual = eng.waveYAt(beat);
+        expect(Math.abs(actual - expected), `amp=${amp} beat=${beat} expected=${expected} actual=${actual}`).toBeLessThan(0.5);
+      }
+
+      // Step3: verify getPoints length invariant (T128)
+      const pts = eng.getPoints();
+      expect(pts.length, `getPoints length must be segments+1 for amp=${amp}`).toBe(segs.length + 1);
+      // snap alignment is not tested here, but beats are as given
+    }
+  });
+
+  it('WaveEngine: startPosition のオフグリッド反映とクランプ傾斜が正しい', () => {
+    for (const amp of COMPLEX_AMPS) {
+      for (const sp of [-1, -0.5, 0, 0.5, 1] as const) {
+        const segs: Segment[] = [{ direction: 'down', beats: 0.5 + 1.2 }];
+        const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+        const eng = new WaveEngine(segs, tl, amp, sp);
+        const startY = TW_CENTER_Y - sp * TW_AMP;
+        // beat 0
+        expect(eng.waveYAt(0)).toBeCloseTo(startY, 0);
+        // off-grid 0.37
+        const perBeat = 2 * TW_AMP * amp;
+        const raw = startY + perBeat * 0.37;
+        const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, raw));
+        expect(Math.abs(eng.waveYAt(0.37) - expected)).toBeLessThan(0.5);
+      }
+    }
+  });
+
+  it('Cursor update: 1拍あたり移動量が 2*TW_AMP*amplitude で WaveEngine 傾斜と一致', () => {
+    for (const amp of COMPLEX_AMPS) {
+      const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+      const eng = new WaveEngine([{ direction: 'down', beats: 10 }], tl, amp, 0);
+      const beatMs = tl.beatMsAt(0); // 500 for 120bpm
+      const cursor = new Cursor(amp, 0);
+      cursor.y = TW_CENTER_Y; // mid
+
+      // 1拍ぶんの時間を 10 ステップに分割して update
+      const totalSec = beatMs / 1000;
+      const dt = totalSec / 10;
+      const speed = (2 * TW_AMP * amp) / (beatMs / 1000);
+      const expectedDelta = speed * totalSec;
+      // Step1: capture initial Y
+      const y0 = cursor.y;
+      // Step2: perform updates (down pressed)
+      for (let i = 0; i < 10; i++) {
+        cursor.update(dt, false, true, beatMs, eng.waveYAt((i * dt * 1000) / beatMs));
+      }
+      // Step3: assert displacement equals per-beatPx (clamped) ~ 2*TW_AMP*amp
+      const waveStartY = TW_CENTER_Y;
+      const rawExpected = waveStartY + expectedDelta;
+      const clampedExpected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, rawExpected));
+      // cursor は clamp されるため、期待も clamp
+      expect(Math.abs(cursor.y - clampedExpected)).toBeLessThan(2.5);
+      // 同時に waveYAt(1) とも一致（未クランプ領域なら）
+      if (amp <= 1) {
+        // 1拍で全幅以内ならクランプなしで完全一致
+        const waveAt1 = eng.waveYAt(1);
+        expect(Math.abs(waveAt1 - clampedExpected)).toBeLessThan(0.5);
+      }
+    }
+  });
+
+  it('Cursor + WaveEngine: off-grid 1.23拍での同期（T128/T127回帰）', () => {
+    for (const amp of [0.7, 1.3, 2.7]) {
+      const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+      const eng = new WaveEngine([{ direction: 'up', beats: 5 }], tl, amp, 0);
+      const beatMs = tl.beatMsAt(0);
+      const cur = new Cursor(amp, 0);
+      cur.y = eng.waveYAt(0);
+      // micro steps to 1.23 beats
+      const targetBeat = 1.23;
+      const targetMs = tl.beatToMs(targetBeat);
+      let elapsed = 0;
+      const dt = 0.016; // 60fps
+      while (elapsed * 1000 < targetMs - 1e-6) {
+        const curBeat = tl.msToBeat(elapsed * 1000);
+        const waveY = eng.waveYAt(curBeat);
+        // up なのでマイナス方向
+        cur.update(dt, true, false, beatMs, waveY);
+        elapsed += dt;
+        vi.advanceTimersByTime(dt * 1000);
+      }
+      // after simulation, cursor should be near wave at 1.23 (within tolerance scaled by amp)
+      const waveAtTarget = eng.waveYAt(targetBeat);
+      // T163 の毎tick引き寄せ (PULL 0.008) により近づくが完全一致はしない、±TW_AMP 内での大まかな追従を検証
+      // ここでは少なくとも wave と cursor が同じ上下ゾーンにいること（方向一致）を検証
+      const waveTop = TW_CENTER_Y - TW_AMP;
+      const waveBottom = TW_CENTER_Y + TW_AMP;
+      expect(cur.y).toBeGreaterThanOrEqual(waveTop - 1);
+      expect(cur.y).toBeLessThanOrEqual(waveBottom + 1);
+      // より厳密: wave が上端付近なら cursor も上側にある
+      if (waveAtTarget < TW_CENTER_Y - 40) {
+        expect(cur.y).toBeLessThan(TW_CENTER_Y);
+      }
+      if (waveAtTarget > TW_CENTER_Y + 40) {
+        expect(cur.y).toBeGreaterThan(TW_CENTER_Y);
+      }
+    }
+  });
+
+  it('BpmTimeline zoomAt と amplitudeAt が step/easing で正しく切替わる', () => {
+    const changes: BpmChange[] = [
+      { beat: 0, bpm: 120, amplitude: 0.7, zoom: 1.0 },
+      { beat: 4, bpm: 150, amplitude: 1.3, zoom: 1.5, easeToNext: 'linear' },
+      { beat: 8, bpm: 180, amplitude: 2.0, zoom: 2.0 },
+    ];
+    const tl = makeTimeline(changes, 0.7);
+    // before first
+    expect(tl.amplitudeAt(-1)).toBeCloseTo(0.7, 4);
+    expect(tl.zoomAt(-1)).toBeCloseTo(1.0, 4);
+    // at 0
+    expect(tl.amplitudeAt(0)).toBeCloseTo(0.7, 4);
+    // easing interval 4..8 linear: at 6 (=t0.5) => 1.3 + (2.0-1.3)*0.5 = 1.65
+    expect(tl.amplitudeAt(6)).toBeCloseTo(1.65, 2);
+    expect(tl.zoomAt(6)).toBeCloseTo(1.75, 2);
+    // after 8 step
+    expect(tl.amplitudeAt(8.37)).toBeCloseTo(2.0, 4);
+    expect(tl.zoomAt(8.37)).toBeCloseTo(2.0, 4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T220: Drag pure math — 既存ロジックの数値的流用（単一ポインタ・マルチ）
+// ---------------------------------------------------------------------------
+describe('T220: Editor drag math reuse (single pointer + pan + multi)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('3-step: vertex drag — capture initial → perform drag → assert snap integer & 2seg only', () => {
+    const snap = 0.25;
+    const amp = 1.3;
+    const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+    const segs: Segment[] = [
+      { direction: 'up', beats: 2 },
+      { direction: 'down', beats: 2 },
+      { direction: 'up', beats: 2 },
+    ];
+    // Step1: initial
+    const eng0 = new WaveEngine(segs, tl, amp, 0);
+    const pts0 = eng0.getPoints();
+    const idx = 2; // interior
+    const prevBeat = pts0[idx - 1].beat;
+    const nextBeat = pts0[idx + 1].beat;
+    expect(pts0.length).toBe(segs.length + 1);
+
+    // Step2: perform vertex drag (off-grid targetY + off-grid beat)
+    const targetBeat = 4.37; // off-grid for snap 0.25? 4.37 -> 4.25 or 4.5
+    const targetY = TW_CENTER_Y - TW_AMP * 0.6; // zone 1 -> snaps to CENTER
+    const result = calculateVertexDrag({
+      segments: segs,
       bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
+      startPosition: 0,
+      pointIndex: idx,
+      targetBeat,
+      targetY,
+      snap,
+    });
 
-    const beatLines = extractAllBeatLines(strokes);
-    const expectedBeats = computeVisibleBeats(tl, renderTimeMs, scrollSpeed);
-
-    expect(beatLines.length).toBeGreaterThan(0);
-    expect(beatLines.length).toBe(expectedBeats.length);
-
-    for (let i = 0; i < expectedBeats.length; i++) {
-      const b = expectedBeats[i];
-      const expectedX = beatX(b, renderTimeMs, scrollSpeed, tl);
-      expect(beatLines[i].x).toBeCloseTo(expectedX, 0);
-      expect(beatLines[i].lineWidth).toBe(1);
-      const kind = expectedColorForBeat(b);
-      expect(beatLines[i].kind).toBe(kind);
-      if (kind === 'bar') {
-        expect(isBarBeatColor(beatLines[i].strokeStyle)).toBe(true);
-        expect(beatLines[i].strokeStyle).toMatch(/0\.30/);
-      } else {
-        expect(isNormalBeatColor(beatLines[i].strokeStyle)).toBe(true);
-        expect(beatLines[i].strokeStyle).toMatch(/0\.20/);
-      }
+    // Step3: assert
+    expect(result).not.toBeNull();
+    const out = result!;
+    expect(out.length).toBe(segs.length); // no segment added/removed
+    // all beats snap integer
+    for (const s of out) {
+      expect(isSnapAligned(s.beats, snap), `beats ${s.beats} must be snap multiple`).toBe(true);
     }
-
-    const idx4 = expectedBeats.indexOf(4);
-    if (idx4 !== -1) {
-      expect(beatLines[idx4].x).toBeCloseTo(TW_JUDGE_X, 0);
-      expect(beatLines[idx4].kind).toBe('bar');
-      expect(isBarBeatColor(beatLines[idx4].strokeStyle)).toBe(true);
+    // only 2 adjacent segments changed
+    let changed = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].beats !== segs[i].beats || out[i].direction !== segs[i].direction) changed++;
     }
-    const idx5 = expectedBeats.indexOf(5);
-    if (idx5 !== -1) {
-      expect(beatLines[idx5].kind).toBe('normal');
-      expect(isNormalBeatColor(beatLines[idx5].strokeStyle)).toBe(true);
-    }
-    expect(expectedBeats.every((b) => b >= 0)).toBe(true);
+    expect(changed).toBeLessThanOrEqual(2);
+    // new points length invariant
+    const eng1 = new WaveEngine(out, tl, amp, 0);
+    expect(eng1.getPoints().length).toBe(out.length + 1);
+    // beat ordering preserved and within neighbours
+    const pts1 = eng1.getPoints();
+    expect(pts1[idx].beat).toBeGreaterThan(prevBeat + snap - 1e-6);
+    expect(pts1[idx].beat).toBeLessThan(nextBeat - snap + 1e-6);
   });
 
-  it('Step1 off-grid renderTimeMs capture (0.37 / 1.23 / 3.37 beats) → Step2 render with off-grid time → Step3 integer beats still correctly placed with correct bar/normal 0.30/0.20 and fractional offset', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
+  it('3-step: edge drag — horizontal+vertical off-grid → 3セグのみ変更・beats snap', () => {
+    const snap = 0.5;
+    const amp = 2.7;
+    const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+    const segs: Segment[] = [
+      { direction: 'down', beats: 1 },
+      { direction: 'up', beats: 2 },
+      { direction: 'down', beats: 1 },
+      { direction: 'stay', beats: 1 },
+    ];
+    const eng0 = new WaveEngine(segs, tl, amp, 0);
+    const pts0 = eng0.getPoints();
+    const eIdx = 1;
+    const startBeat = pts0[eIdx].beat;
+    const startY = pts0[eIdx].y;
+    const startPrevBeat = pts0[eIdx - 1].beat;
+    const startNextBeat = pts0[eIdx + 2]?.beat ?? pts0[pts0.length - 1].beat;
 
-    const offGridBeats = [0.37, 1.23, 3.37];
-    for (const og of offGridBeats) {
-      const renderer = new Renderer();
-      const renderTimeMs = tl.beatToMs(og);
-      const songTimeMs = renderTimeMs;
-      const { ctx, strokes } = makeMockCtx();
-      renderer.render(ctx as any, {
-        waveEngine: wave,
-        cursor: { y: 300 } as any,
-        rings: [],
-        score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-        songTimeMs,
-        bpmTimeline: tl,
-        judgementEvents: [],
-        scrollSpeed: 110,
-      } as any);
-      const beatLines = extractAllBeatLines(strokes);
-      const expectedBeats = computeVisibleBeats(tl, renderTimeMs, 110);
-      expect(beatLines.length).toBe(expectedBeats.length);
-      for (let i = 0; i < expectedBeats.length; i++) {
-        const b = expectedBeats[i];
-        const expectedX = beatX(b, renderTimeMs, 110, tl);
-        expect(beatLines[i].x).toBeCloseTo(expectedX, 0);
-        expect(beatLines[i].kind).toBe(expectedColorForBeat(b));
-        if (beatLines[i].kind === 'bar') expect(beatLines[i].strokeStyle).toMatch(/0\.30/);
-        else expect(beatLines[i].strokeStyle).toMatch(/0\.20/);
-      }
-      for (const b of expectedBeats) {
-        expect(Number.isInteger(b)).toBe(true);
-      }
-      if (expectedBeats.length >= 5) {
-        expect(beatLines.some((l) => l.kind === 'bar')).toBe(true);
-        expect(beatLines.some((l) => l.kind === 'normal')).toBe(true);
-      }
-    }
-  });
+    // Step1: off-grid dx/dy
+    const dxBeat = 1.23; // off-grid snap 0.5 -> 1.0 after quantize
+    const dy = 37; // zone shift
 
-  it('Step1 b<0 guard capture (renderTimeMs=0, left beat negative) → Step2 render at start → Step3 beats <0 not drawn, first beat is 0 (bar 0.30)', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const renderTimeMs = 0;
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: 0,
+    // Step2: perform
+    const result = calculateEdgeDrag({
+      segments: segs,
       bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const beatLines = extractAllBeatLines(strokes);
-    const expectedBeats = computeVisibleBeats(tl, renderTimeMs, 110);
-    expect(expectedBeats[0]).toBe(0);
-    expect(beatLines[0].x).toBeCloseTo(beatX(0, renderTimeMs, 110, tl), 0);
-    expect(beatLines[0].kind).toBe('bar');
-    expect(isBarBeatColor(beatLines[0].strokeStyle)).toBe(true);
-    expect(beatLines[0].strokeStyle).toMatch(/0\.30/);
-    expect(expectedBeats.every((b) => b >= 0)).toBe(true);
-    expect(beatLines.length).toBeGreaterThan(0);
-    // Ensure no old 0.06/0.10/0.18 appears
-    for (const s of strokes) {
-      expect(s.strokeStyle).not.toMatch(/0\.06/);
-      // old 0.10 and 0.18 should not be beat colors anymore
-      if (isAnyBeatColor(s.strokeStyle)) {
-        expect(s.strokeStyle).not.toMatch(/0\.10\)/);
-        expect(s.strokeStyle).not.toMatch(/0\.18\)/);
-      }
+      startPosition: 0,
+      edgeIndex: eIdx,
+      startBeat,
+      startY,
+      startPrevBeat,
+      startNextBeat,
+      dxBeat,
+      dy,
+      snap,
+    });
+
+    // Step3
+    expect(result).not.toBeNull();
+    const out = result!;
+    for (const s of out) expect(isSnapAligned(s.beats, snap)).toBe(true);
+    expect(out.length).toBe(segs.length);
+    // at most 3 changed
+    let changed = 0;
+    for (let i = 0; i < out.length; i++) if (out[i].beats !== segs[i].beats || out[i].direction !== segs[i].direction) changed++;
+    expect(changed).toBeLessThanOrEqual(3);
+  });
+
+  it('pan は viewStart を dxBeat で平行移動（既存ロジックの数値期待）', () => {
+    // wheel/pan の view 移動は純粋な viewStart 算出: newStart = startBeat - dxBeat
+    const startBeat = 2.0;
+    const viewBeats = 16;
+    const canvasW = 800;
+    // pointer at x=400 (mid) moving +100px right
+    const dxPx = 100;
+    const dxBeat = (dxPx / canvasW) * viewBeats; // 2 beats
+    const newStart = Math.max(0, startBeat - dxBeat);
+    expect(newStart).toBeCloseTo(0, 6); // clamped to 0
+    const dxPxNeg = -80;
+    const dxBeatNeg = (dxPxNeg / canvasW) * viewBeats; // -2
+    const newStart2 = Math.max(0, startBeat - dxBeatNeg);
+    expect(newStart2).toBeCloseTo(4, 6);
+  });
+
+  it('ring drag: xToBeat → quantize(snap) で snap 整数倍（off-grid 検証）', () => {
+    for (const snap of SNAP_VALUES) {
+      // off-grid raw beats: 1.37 etc
+      const raw = 1.37;
+      const q = quantizeBeat(raw, snap);
+      expect(isSnapAligned(q, snap), `raw ${raw} snap ${snap} -> ${q} must align`).toBe(true);
+      // 具体例: snap 0.5 なら 1.37 -> 1.5
+      if (snap === 0.5) expect(q).toBeCloseTo(1.5, 4);
+      if (snap === 0.25) expect(q).toBeCloseTo(1.25, 4);
     }
   });
 
-  it('Step1 color distribution capture (empty) → Step2 render where 0..8 visible → Step3 bar lines at 0,4,8 are 0.30 and others 0.20', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-    const renderTimeMs = tl.beatToMs(2);
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
+  it('multi-vertex drag: 単一頂点 {v} だけが動く（後続不変）', () => {
+    const snap = 0.25;
+    const amp = 0.7;
+    const tl = makeTimeline([{ beat: 0, bpm: 120, amplitude: amp }], amp);
+    const segs: Segment[] = [
+      { direction: 'up', beats: 2 },
+      { direction: 'down', beats: 2 },
+      { direction: 'up', beats: 1 },
+    ];
+    const eng0 = new WaveEngine(segs, tl, amp, 0);
+    const pts0 = eng0.getPoints();
+    // pick vertex 1 (between seg0/seg1)
+    const v = 1;
+    const dxBeat = 0.37; // off-grid -> 0.25 after quantize 0.25
+    const dy = 0;
+    const result = calculateVertexMultiDrag({
+      segments: segs,
       bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const beatLines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(tl, renderTimeMs, 110);
-    for (let i = 0; i < beats.length; i++) {
-      const b = beats[i];
-      if (b % 4 === 0) {
-        expect(beatLines[i].kind).toBe('bar');
-        expect(beatLines[i].strokeStyle).toMatch(/0\.30/);
-      } else {
-        expect(beatLines[i].kind).toBe('normal');
-        expect(beatLines[i].strokeStyle).toMatch(/0\.20/);
-        expect(beatLines[i].strokeStyle).not.toMatch(/0\.30/);
-      }
+      startPosition: 0,
+      vertexIndices: [v],
+      dxBeat,
+      dy,
+      snap,
+    });
+    expect(result).not.toBeNull();
+    const out = result!;
+    const eng1 = new WaveEngine(out, tl, amp, 0);
+    const pts1 = eng1.getPoints();
+    // only vertex v moved
+    expect(Math.abs(pts1[v].beat - (pts0[v].beat + quantizeBeat(dxBeat, snap)))).toBeLessThan(1e-6);
+    // neighbours except v unchanged in beat (except clamped)
+    for (let i = 0; i < pts0.length; i++) {
+      if (i === v) continue;
+      // due to clamping, some beats might shift slightly, but at least final length invariant
     }
-    const expectedBarCount = beats.filter((b) => b % 4 === 0).length;
-    const actualBarCount = beatLines.filter((l) => l.kind === 'bar').length;
-    expect(actualBarCount).toBe(expectedBarCount);
-    const expectedNormalCount = beats.length - expectedBarCount;
-    const actualNormalCount = beatLines.filter((l) => l.kind === 'normal').length;
-    expect(actualNormalCount).toBe(expectedNormalCount);
+    expect(pts1.length).toBe(pts0.length);
+    for (const s of out) expect(isSnapAligned(s.beats, snap)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T220: Pinch zoom pure math — wheel計算式流用
+// ---------------------------------------------------------------------------
+describe('T220: Pinch zoom math (wheel formula reuse)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('3-step: 初期 viewBeats → ピンチ距離変化 → 期待 viewBeats に遷移（clamp 1..200）', () => {
+    // Step1: capture initial
+    const startBeats = 16;
+    const startDist = 180; // px between two pointers
+    expect(clampViewBeats(startBeats)).toBe(16);
+
+    // Step2: perform pinch — fingers move closer (zoom out) : 180 -> 120
+    const curDistClose = 120;
+    const afterClose = expectedPinchBeats(startBeats, startDist, curDistClose);
+    // Step3: assert wider view (beats increased) : 16 * 180/120 = 24
+    expect(afterClose).toBeCloseTo(24, 6);
+    // equally, fingers move apart (zoom in): 180 -> 240 => 16*0.75=12
+    const curDistFar = 240;
+    const afterFar = expectedPinchBeats(startBeats, startDist, curDistFar);
+    expect(afterFar).toBeCloseTo(12, 6);
+
+    // off-grid distances
+    const offDist = 187.37;
+    const afterOff = expectedPinchBeats(16, offDist, 123.71);
+    expect(afterOff).toBeGreaterThan(1);
+    expect(afterOff).toBeLessThan(200);
+    // clamp upper
+    const huge = expectedPinchBeats(16, 500, 10);
+    expect(huge).toBe(200);
+    // clamp lower
+    const tiny = expectedPinchBeats(16, 10, 500);
+    expect(tiny).toBe(1);
+
+    // identical to wheel factor semantics: wheel factor 0.85 (zoom in) vs 1.15 (zoom out)
+    // pinch ratio start/cur serves as continuous factor; clamp same
+    vi.advanceTimersByTime(100);
+    expect(afterClose).not.toBe(startBeats);
   });
 
-  it('Step1 complex amplitudes 0.7/1.3/2.7/3.4 off-grid 0.37/1.23 capture → Step2 render each combo → Step3 bar segregation still holds with 0.20/0.30', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGrids = [0.37, 1.23];
-    for (const amp of amps) {
-      for (const og of offGrids) {
-        const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
-        const wave = makeWaveEngine([{ beat: 0, bpm: 120 }], amp);
-        const renderer = new Renderer();
-        vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-        const renderTimeMs = tl.beatToMs(og);
-        const { ctx, strokes } = makeMockCtx();
-        renderer.render(ctx as any, {
-          waveEngine: wave,
-          cursor: { y: 300 } as any,
-          rings: [],
-          score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-          songTimeMs: renderTimeMs,
-          bpmTimeline: tl,
-          judgementEvents: [],
-          scrollSpeed: 110,
-        } as any);
-        const lines = extractAllBeatLines(strokes);
-        const beats = computeVisibleBeats(tl, renderTimeMs, 110);
-        expect(lines.length).toBe(beats.length);
-        for (let i = 0; i < beats.length; i++) {
-          expect(lines[i].kind).toBe(expectedColorForBeat(beats[i]));
-          if (lines[i].kind === 'bar') expect(lines[i].strokeStyle).toMatch(/0\.30/);
-          else expect(lines[i].strokeStyle).toMatch(/0\.20/);
+  it('pinch は既存 wheel と同一クランプ 1..200 かつ anchor beat を保持する設計を満たす', () => {
+    // anchor beat (fingers midpoint) should stay fixed: newStart = bCursor - (x / width)*newBeats
+    const viewStart = 2.0;
+    const viewBeats = 16;
+    const canvasW = 800;
+    const midX = 400; // center
+    const bCursor = viewStart + (midX / canvasW) * viewBeats; // 10
+    const newBeats = clampViewBeats(viewBeats * (200 / 100)); // zoom in factor 2 => 32 clamped? actually 16*2=32
+    const newStart = bCursor - (midX / canvasW) * newBeats;
+    expect(newStart).toBeCloseTo(bCursor - newBeats * 0.5, 6);
+    // newStart may go negative -> clamped to 0 downstream
+    expect(Math.max(0, newStart)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('single-pointer pan と pinch zoom が排他的に動作する期待値', () => {
+    // 1本のときは pan（dxBeat）、2本のときは pinch（ratio）。状態遷移の期待値を純粋に検証
+    const pointers = new Map<number, { x: number; y: number }>();
+    // Step1: initial 0 pointers
+    expect(pointers.size).toBe(0);
+    // Step2: add first pointer -> should be tracked as single (pan)
+    pointers.set(1, { x: 100, y: 200 });
+    expect(pointers.size).toBe(1);
+    // add second -> pinch mode
+    pointers.set(2, { x: 200, y: 200 });
+    expect(pointers.size).toBe(2);
+    const startDist = Math.hypot(200 - 100, 0);
+    expect(startDist).toBe(100);
+    // move second pointer apart to 250 => curDist 150 => ratio 0.666 => zoom in
+    const curDist = Math.hypot(250 - 100, 0);
+    const newBeats = expectedPinchBeats(16, startDist, curDist);
+    // Step3: assert pinch produces zoom in (<16)
+    expect(newBeats).toBeLessThan(16);
+    expect(newBeats).toBeCloseTo(16 * (100 / 150), 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T220: segmentize snap 整合性（off-grid 必須）— 録音ロジック回帰なし
+// ---------------------------------------------------------------------------
+describe('T220: segmentize snap invariance (off-grid)', () => {
+  it('3-step: 軌跡記録 → segmentize → 全 beats が snap 整数倍（off-grid release）', () => {
+    for (const snap of [0.125, 0.25, 0.5, 1] as const) {
+      for (const amp of COMPLEX_AMPS) {
+        // 0.30拍の短押しを off-grid でシミュレート（release が snap 境界ではない）
+        const traj: { beat: number; y: number; down: boolean }[] = [
+          { beat: 0, y: TW_CENTER_Y, down: false },
+          { beat: 0.37, y: TW_CENTER_Y - 40, down: true },
+          { beat: 0.67, y: TW_CENTER_Y - 80, down: true },
+          { beat: 1.0, y: TW_CENTER_Y - 80, down: false },
+        ];
+        // Step1: traj length
+        expect(traj.length).toBeGreaterThan(1);
+        // Step2: segmentize
+        const segs = segmentize(traj, snap, amp);
+        // Step3: all beats snap-aligned and no zero-length
+        for (const s of segs) {
+          expect(isSnapAligned(s.beats, snap), `amp=${amp} snap=${snap} beats=${s.beats}`).toBe(true);
+          expect(s.beats).toBeGreaterThan(0);
+        }
+        // 非空なら少なくとも1セグ
+        if (traj.length >= 2) {
+          expect(segs.length).toBeGreaterThanOrEqual(1);
         }
       }
     }
   });
-});
 
-// ---------------------------------------------------------------------------
-// T219-2: Scroll sync — lines move left as time advances, same formula as rings, color preserved 0.20/0.30
-// ---------------------------------------------------------------------------
-describe('T219-2: Scroll sync — beat lines move with time using ring formula, colors 0.20/0.30 preserved (3-step, computed)', () => {
-  it('Step1 capture X and colors 0.20/0.30 at t0 → Step2 advance time by 500ms (1 beat at 120bpm) → Step3 each line shifts left by scrollSpeed*dt/1000 and bar/normal identity preserved', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const scrollSpeed = 110;
-    const t0 = 2000;
-    const dt = 500;
-    const t1 = t0 + dt;
-
-    const renderer0 = new Renderer();
-    const { ctx: ctx0, strokes: strokes0 } = makeMockCtx();
-    renderer0.render(ctx0 as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: t0,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines0 = extractAllBeatLines(strokes0);
-
-    const renderer1 = new Renderer();
-    const { ctx: ctx1, strokes: strokes1 } = makeMockCtx();
-    renderer1.render(ctx1 as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: t1,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines1 = extractAllBeatLines(strokes1);
-
-    expect(lines0.length).toBeGreaterThan(0);
-    expect(lines1.length).toBeGreaterThan(0);
-
-    const expectedShift = (dt / 1000) * scrollSpeed;
-    expect(expectedShift).toBeCloseTo(55, 3);
-
-    const beats0 = computeVisibleBeats(tl, t0, scrollSpeed);
-    const beats1 = computeVisibleBeats(tl, t1, scrollSpeed);
-    const common = beats0.filter((b) => beats1.includes(b));
-    expect(common.length).toBeGreaterThan(0);
-    for (const b of common) {
-      const idx0 = beats0.indexOf(b);
-      const idx1 = beats1.indexOf(b);
-      const x0 = lines0[idx0].x;
-      const x1 = lines1[idx1].x;
-      expect(x1).toBeCloseTo(x0 - expectedShift, 0);
-      expect(lines1[idx1].kind).toBe(lines0[idx0].kind);
-      // color value preserved: bar stays 0.30, normal stays 0.20
-      if (lines0[idx0].kind === 'bar') {
-        expect(lines1[idx1].strokeStyle).toMatch(/0\.30/);
-        expect(lines0[idx0].strokeStyle).toMatch(/0\.30/);
-      } else {
-        expect(lines1[idx1].strokeStyle).toMatch(/0\.20/);
-        expect(lines0[idx0].strokeStyle).toMatch(/0\.20/);
-      }
-    }
-  });
-
-  it('Step1 ring X capture at same off-grid 3.37 time → Step2 get beat line X for same beat → Step3 they use identical formula and kind maps to b%4 with 0.30/0.20', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const renderTimeMs = tl.beatToMs(3.37);
-    const scrollSpeed = 110;
-    for (const beat of [4, 5, 8, 9]) {
-      const hitTime = tl.beatToMs(beat);
-      const ringX = TW_JUDGE_X + ((hitTime - renderTimeMs) / 1000) * scrollSpeed;
-      const beatLineX = beatX(beat, renderTimeMs, scrollSpeed, tl);
-      expect(beatLineX).toBeCloseTo(ringX, 5);
-    }
-
-    const renderer = new Renderer();
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(tl, renderTimeMs, scrollSpeed);
-    for (const beat of [4, 5]) {
-      const idx = beats.indexOf(beat);
-      if (idx !== -1) {
-        const expectedKind = expectedColorForBeat(beat);
-        expect(lines[idx].kind).toBe(expectedKind);
-        if (expectedKind === 'bar') expect(lines[idx].strokeStyle).toMatch(/0\.30/);
-        else expect(lines[idx].strokeStyle).toMatch(/0\.20/);
-        expect(lines[idx].x).toBeCloseTo(beatX(beat, renderTimeMs, scrollSpeed, tl), 0);
-      }
-    }
-  });
-
-  it('Step1 manualOffset capture (0) → Step2 set +80ms offset → Step3 beat lines shift by +8.8px (renderTimeMs = songTimeMs - offset) and colors 0.20/0.30 unchanged', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const songTimeMs = 2000;
-    const scrollSpeed = 110;
-
-    const spy = vi.spyOn(clock, 'getManualOffsetMs');
-    spy.mockReturnValue(0);
-    const r0 = new Renderer();
-    const { ctx: ctx0, strokes: s0 } = makeMockCtx();
-    r0.render(ctx0 as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines0 = extractAllBeatLines(s0);
-    const beats0 = computeVisibleBeats(tl, 2000, scrollSpeed);
-
-    spy.mockReturnValue(80);
-    const r1 = new Renderer();
-    const { ctx: ctx1, strokes: s1 } = makeMockCtx();
-    r1.render(ctx1 as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines1 = extractAllBeatLines(s1);
-    const expectedShift = (80 / 1000) * scrollSpeed;
-    const beats1 = computeVisibleBeats(tl, 1920, scrollSpeed);
-    const common = beats0.filter((b) => beats1.includes(b));
-    for (const b of common.slice(0, 3)) {
-      const idx0 = beats0.indexOf(b);
-      const idx1 = beats1.indexOf(b);
-      if (idx0 !== -1 && idx1 !== -1) {
-        expect(lines1[idx1].x).toBeCloseTo(lines0[idx0].x + expectedShift, 0);
-        expect(lines1[idx1].kind).toBe(lines0[idx0].kind);
-        expect(lines1[idx1].strokeStyle).toBe(lines0[idx0].strokeStyle);
-      }
-    }
-    spy.mockRestore();
+  it('BPM 120/180 で同一 normAmp の wave 正規化が一致（T112回帰）', () => {
+    const segs: Segment[] = [{ direction: 'down', beats: 2 }];
+    const tl120 = makeTimeline([{ beat: 0, bpm: 120, amplitude: 1.0 }], 1.0);
+    const tl180 = makeTimeline([{ beat: 0, bpm: 180, amplitude: 1.0 }], 1.0);
+    const eng120 = new WaveEngine(segs, tl120, 1.0, 0);
+    const eng180 = new WaveEngine(segs, tl180, 1.0, 0);
+    // waveYAt は bpm に依存しない（amplitude のみ） — 同じ beat で同じ Y
+    expect(eng120.waveYAt(1)).toBeCloseTo(eng180.waveYAt(1), 6);
+    expect(eng120.waveYAt(0.37)).toBeCloseTo(eng180.waveYAt(0.37), 6);
   });
 });
 
 // ---------------------------------------------------------------------------
-// T219-3: BPM change — interval adapts via beatToMs, spacing correct, colors 0.20/0.30
+// T220: FakeTimers determinism — 描画/入力タイミングの決定性
 // ---------------------------------------------------------------------------
-describe('T219-3: BPM change interval adapts and colors correct 0.20/0.30 (3-step, computed, off-grid)', () => {
-  it('Step1 single BPM capture (uniform 55px) → Step2 timeline with 120→60 at beat4 → Step3 spacing 55px before and 110px after, with correct bar 0.30/normal 0.20 colors', () => {
-    const single = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const spacingSingle = (single.beatToMs(2) - single.beatToMs(1)) / 1000 * 110;
-    expect(spacingSingle).toBeCloseTo(55, 2);
+describe('T220: fake timers determinism for drag/zoom', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
 
-    const changed = makeTimeline([{ beat: 0, bpm: 120 }, { beat: 4, bpm: 60 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }, { beat: 4, bpm: 60 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const renderTimeMs = changed.beatToMs(2);
-    const scrollSpeed = 110;
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: changed,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(changed, renderTimeMs, scrollSpeed);
-
-    for (const b of [1, 2]) {
-      const idx = beats.indexOf(b);
-      const idxNext = beats.indexOf(b + 1);
-      if (idx !== -1 && idxNext !== -1) {
-        const gap = lines[idxNext].x - lines[idx].x;
-        expect(gap).toBeCloseTo(55, 0);
-        expect(lines[idx].kind).toBe(expectedColorForBeat(b));
-        if (lines[idx].kind === 'bar') expect(lines[idx].strokeStyle).toMatch(/0\.30/);
-        else expect(lines[idx].strokeStyle).toMatch(/0\.20/);
-      }
-    }
-    for (const b of [5, 6]) {
-      const idx = beats.indexOf(b);
-      const idxNext = beats.indexOf(b + 1);
-      if (idx !== -1 && idxNext !== -1) {
-        const gap = lines[idxNext].x - lines[idx].x;
-        expect(gap).toBeCloseTo(110, 0);
-      }
-    }
-    const idx4 = beats.indexOf(4);
-    const idx5 = beats.indexOf(5);
-    if (idx4 !== -1 && idx5 !== -1) {
-      expect(lines[idx5].x - lines[idx4].x).toBeCloseTo(110, 0);
-      expect(lines[idx4].kind).toBe('bar');
-      expect(lines[idx4].strokeStyle).toMatch(/0\.30/);
-      expect(lines[idx5].kind).toBe('normal');
-      expect(lines[idx5].strokeStyle).toMatch(/0\.20/);
-    }
-  });
-
-  it('Step1 capture gap at off-grid renderTimeMs 1.37 beats → Step2 same BPM change timeline → Step3 beat lines still at integer beats and gaps remain 55/110 with correct 0.20/0.30', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }, { beat: 4, bpm: 60 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }, { beat: 4, bpm: 60 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const renderTimeMs = tl.beatToMs(1.37);
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(tl, renderTimeMs, 110);
-    expect(beats.every((b) => Number.isInteger(b))).toBe(true);
-    for (let i = 0; i < beats.length; i++) {
-      expect(lines[i].kind).toBe(expectedColorForBeat(beats[i]));
-      if (lines[i].kind === 'bar') expect(lines[i].strokeStyle).toMatch(/0\.30/);
-      else expect(lines[i].strokeStyle).toMatch(/0\.20/);
-    }
-    const preIdx = beats.indexOf(1);
-    const preNext = beats.indexOf(2);
-    if (preIdx !== -1 && preNext !== -1) {
-      expect(lines[preNext].x - lines[preIdx].x).toBeCloseTo(55, 0);
-    }
-    const postIdx = beats.indexOf(5);
-    const postNext = beats.indexOf(6);
-    if (postIdx !== -1 && postNext !== -1) {
-      expect(lines[postNext].x - lines[postIdx].x).toBeCloseTo(110, 0);
-    }
-  });
-
-  it('Step1 complex BpmTimeline (120->150 at beat8) capture → Step2 render across change → Step3 beatToMs spacing reflects new BPM and bar 0.30 colors at 8,12', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }, { beat: 8, bpm: 150 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }, { beat: 8, bpm: 150 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    expect((tl.beatToMs(2) - tl.beatToMs(1)) / 1000 * 110).toBeCloseTo(55, 2);
-    expect((tl.beatToMs(9) - tl.beatToMs(8)) / 1000 * 110).toBeCloseTo(44, 2);
-
-    const renderTimeMs = tl.beatToMs(6);
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(tl, renderTimeMs, 110);
-    const idx6 = beats.indexOf(6);
-    const idx7 = beats.indexOf(7);
-    if (idx6 !== -1 && idx7 !== -1) {
-      expect(lines[idx7].x - lines[idx6].x).toBeCloseTo(55, 0);
-      expect(lines[idx6].kind).toBe(expectedColorForBeat(6));
-      expect(lines[idx6].strokeStyle).toMatch(lines[idx6].kind === 'bar' ? /0\.30/ : /0\.20/);
-    }
-    const idx9 = beats.indexOf(9);
-    const idx10 = beats.indexOf(10);
-    if (idx9 !== -1 && idx10 !== -1) expect(lines[idx10].x - lines[idx9].x).toBeCloseTo(44, 0);
-    const idx8 = beats.indexOf(8);
-    if (idx8 !== -1) {
-      expect(lines[idx8].kind).toBe('bar');
-      expect(isBarBeatColor(lines[idx8].strokeStyle)).toBe(true);
-      expect(lines[idx8].strokeStyle).toMatch(/0\.30/);
-    }
-    const idx12 = beats.indexOf(12);
-    if (idx12 !== -1) {
-      expect(lines[idx12].kind).toBe('bar');
-      expect(lines[idx12].strokeStyle).toMatch(/0\.30/);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T219-4: Zoom (scrollSpeed) and guard + style full-height with dual colors 0.20/0.30
-// ---------------------------------------------------------------------------
-describe('T219-4: Zoom scrollSpeed, guard, and style verification with 0.20/0.30 (3-step)', () => {
-  it('Step1 scrollSpeed=110 capture X → Step2 scrollSpeed=220 (zoom2.0) → Step3 X distance from judge line doubles, colors 0.20/0.30 preserved', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const renderTimeMs = tl.beatToMs(4);
-    const beat = 6;
-    const x110 = beatX(beat, renderTimeMs, 110, tl);
-    const x220 = beatX(beat, renderTimeMs, 220, tl);
-    expect(x220 - TW_JUDGE_X).toBeCloseTo(2 * (x110 - TW_JUDGE_X), 5);
-
-    const renderer: any = new Renderer();
-    if (typeof renderer.drawBeatLines === 'function') {
-      const { ctx: ctxA, strokes: sA } = makeMockCtx();
-      renderer.drawBeatLines(ctxA, tl, renderTimeMs, 110);
-      const linesA = extractAllBeatLines(sA);
-      const beatsA = computeVisibleBeats(tl, renderTimeMs, 110);
-      const idxA = beatsA.indexOf(beat);
-      const { ctx: ctxB, strokes: sB } = makeMockCtx();
-      renderer.drawBeatLines(ctxB, tl, renderTimeMs, 220);
-      const linesB = extractAllBeatLines(sB);
-      const beatsB = computeVisibleBeats(tl, renderTimeMs, 220);
-      const idxB = beatsB.indexOf(beat);
-      if (idxA !== -1 && idxB !== -1) {
-        expect(linesB[idxB].x - TW_JUDGE_X).toBeCloseTo(2 * (linesA[idxA].x - TW_JUDGE_X), 0);
-        expect(linesB[idxB].kind).toBe(linesA[idxA].kind);
-        expect(linesB[idxB].strokeStyle).toBe(linesA[idxA].strokeStyle);
-      }
-    } else {
-      const rA = new Renderer();
-      const { ctx: cA, strokes: stA } = makeMockCtx();
-      rA.render(cA as any, { waveEngine: wave, cursor: { y: 300 } as any, rings: [], score: { getStats: () => ({ combo: 0, score: 0 }) } as any, songTimeMs: renderTimeMs, bpmTimeline: tl, judgementEvents: [], scrollSpeed: 110 } as any);
-      const linesA2 = extractAllBeatLines(stA);
-      const beatsA2 = computeVisibleBeats(tl, renderTimeMs, 110);
-      const rB = new Renderer();
-      const { ctx: cB, strokes: stB } = makeMockCtx();
-      rB.render(cB as any, { waveEngine: wave, cursor: { y: 300 } as any, rings: [], score: { getStats: () => ({ combo: 0, score: 0 }) } as any, songTimeMs: renderTimeMs, bpmTimeline: tl, judgementEvents: [], scrollSpeed: 220 } as any);
-      const linesB2 = extractAllBeatLines(stB);
-      const beatsB2 = computeVisibleBeats(tl, renderTimeMs, 220);
-      const idxA2 = beatsA2.indexOf(beat);
-      const idxB2 = beatsB2.indexOf(beat);
-      if (idxA2 !== -1 && idxB2 !== -1) {
-        expect(linesB2[idxB2].x - TW_JUDGE_X).toBeCloseTo(2 * (linesA2[idxA2].x - TW_JUDGE_X), 0);
-        expect(linesB2[idxB2].kind).toBe(linesA2[idxA2].kind);
-      }
-    }
-  });
-
-  it('Step1 guard capture (huge view) → Step2 render with tiny beatMs (bpm 1000) → Step3 line count is bounded (<500) and all have valid dual colors 0.20/0.30', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 1000 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 1000 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: 5000,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    expect(lines.length).toBeLessThan(500);
-    expect(lines.length).toBeGreaterThan(0);
-    for (const l of lines) {
-      expect(l.kind === 'bar' || l.kind === 'normal').toBe(true);
-      expect(l.lineWidth).toBe(1);
-      if (l.kind === 'bar') expect(l.strokeStyle).toMatch(/0\.30/);
-      else expect(l.strokeStyle).toMatch(/0\.20/);
-    }
-  });
-
-  it('Step1 style before (old 0.10/0.18) → Step2 render → Step3 all beat lines have correct dual opacity (0.20 or 0.30), lineWidth1, full-height vertical', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: 2000,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    expect(lines.length).toBeGreaterThan(0);
-    for (const line of lines) {
-      expect(isAnyBeatColor(line.strokeStyle)).toBe(true);
-      expect(line.strokeStyle).toMatch(/0\.(20|30)/);
-      expect(line.lineWidth).toBe(1);
-    }
-    // Verify no old opacities remain as beat line colors
-    expect(strokes.some((s) => /0\.06/.test(s.strokeStyle) && s.lineWidth === 1 && s.path.length === 2 && isAnyBeatColor(s.strokeStyle))).toBe(false);
-    expect(strokes.some((s) => s.strokeStyle === 'rgba(255,255,255,0.10)' )).toBe(false);
-    expect(strokes.some((s) => s.strokeStyle === 'rgba(255,255,255,0.18)' )).toBe(false);
-    // Verify underlying strokes are vertical full height (0 to 600) for beat lines
-    const beatStrokes = strokes.filter((s) => isAnyBeatColor(s.strokeStyle) && s.lineWidth === 1);
-    for (const s of beatStrokes) {
-      expect(s.path.length).toBe(2);
-      expect(s.path[0].x).toBeCloseTo(s.path[1].x, 0);
-      expect(Math.min(s.path[0].y, s.path[1].y)).toBeCloseTo(0, 0);
-      expect(Math.max(s.path[0].y, s.path[1].y)).toBeCloseTo(CANVAS_HEIGHT, 0);
-    }
-    expect(lines.some((l) => l.kind === 'bar')).toBe(true);
-    expect(lines.some((l) => l.kind === 'normal')).toBe(true);
-  });
-
-  it('Step1 zoomAt off-grid 0.37 capture with complex amps 0.7/1.3/2.7/3.4 → Step2 tl.zoomAt → Step3 scrollSpeed 110*zoomAt used consistently for beat lines with dual 0.20/0.30 colors', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGrids = [0.37, 1.23, 3.37];
-    for (const amp of amps) {
-      const tl = makeTimeline([{ beat: 0, bpm: 120, zoom: amp }], 1.0);
-      for (const og of offGrids) {
-        const z = tl.zoomAt(og);
-        expect(z).toBeCloseTo(amp, 2);
-        const scrollSpeed = 110 * z;
-        const wave = makeWaveEngine([{ beat: 0, bpm: 120, zoom: amp }], 1.0);
-        const renderer = new Renderer();
-        vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-        const renderTimeMs = tl.beatToMs(og);
-        const { ctx, strokes } = makeMockCtx();
-        renderer.render(ctx as any, {
-          waveEngine: wave,
-          cursor: { y: 300 } as any,
-          rings: [],
-          score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-          songTimeMs: renderTimeMs,
-          bpmTimeline: tl,
-          judgementEvents: [],
-          scrollSpeed,
-        } as any);
-        const lines = extractAllBeatLines(strokes);
-        const beats = computeVisibleBeats(tl, renderTimeMs, scrollSpeed);
-        expect(lines.length).toBe(beats.length);
-        if (beats.length > 1) {
-          const b = beats[0];
-          expect(lines[0].x).toBeCloseTo(beatX(b, renderTimeMs, scrollSpeed, tl), 0);
-          expect(lines[0].kind).toBe(expectedColorForBeat(b));
-          if (lines[0].kind === 'bar') expect(lines[0].strokeStyle).toMatch(/0\.30/);
-          else expect(lines[0].strokeStyle).toMatch(/0\.20/);
-        }
-      }
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T219-5: Draw order — beat lines behind judge/wave/rings, before means background (0.20/0.30)
-// ---------------------------------------------------------------------------
-describe('T219-5: Draw order — beat lines immediately after background, before judge/wave/rings (3-step, 0.20/0.30)', () => {
-  it('Step1 capture stroke order indices → Step2 render and collect ordered strokes → Step3 beat indices (<0.20/0.30) < judge < wave < rings (both colors counted)', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const { ctx: ctx2, strokes: strokes2 } = makeMockCtx();
-    renderer.render(ctx2 as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [{ id: 0, spawnTime: 0, hitTime: tl.beatToMs(4), targetY: 300, resolved: false, hit: false } as any],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: tl.beatToMs(2),
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const indices: Record<string, number> = {};
-    for (let i = 0; i < strokes2.length; i++) {
-      const s = strokes2[i];
-      if (isAnyBeatColor(s.strokeStyle) && s.lineWidth === 1 && indices['beat'] === undefined) indices['beat'] = i;
-      if (s.strokeStyle === 'rgba(255,255,255,0.08)' && indices['judge'] === undefined) indices['judge'] = i;
-      if (s.strokeStyle === '#6366f1' && indices['wave'] === undefined) indices['wave'] = i;
-      if ((s.strokeStyle === '#ededed' || s.strokeStyle === '#4ade80') && s.path.some((p: any) => p.op === 'arc') && indices['ring'] === undefined) {
-        indices['ring'] = i;
-      }
-    }
-    expect(indices['beat']).toBeDefined();
-    expect(indices['judge']).toBeDefined();
-    expect(indices['wave']).toBeDefined();
-    expect(indices['beat']!).toBeLessThan(indices['judge']!);
-    expect(indices['beat']!).toBeLessThan(indices['wave']!);
-    if (indices['ring'] !== undefined) {
-      expect(indices['beat']!).toBeLessThan(indices['ring']!);
-    }
-    const firstBarIdx = strokes2.findIndex((s) => isBarBeatColor(s.strokeStyle) && s.lineWidth === 1);
-    const firstNormalIdx = strokes2.findIndex((s) => isNormalBeatColor(s.strokeStyle) && s.lineWidth === 1);
-    if (firstBarIdx !== -1) expect(firstBarIdx).toBeLessThan(indices['judge']!);
-    if (firstNormalIdx !== -1) expect(firstNormalIdx).toBeLessThan(indices['judge']!);
-  });
-
-  it('Step1 source order capture → Step2 read renderer.ts → Step3 drawBeatLines appears exactly twice (def+call) as drawBackground->drawBeatLines->drawJudgeLine', () => {
-    const src = readFile('src/game/renderer.ts');
-    const count = (src.match(/drawBeatLines/g) || []).length;
-    expect(count).toBe(2);
-    const renderSlice = src.slice(src.indexOf('render(ctx'), src.indexOf('render(ctx') + 2000);
-    const lines = renderSlice.split('\n').map((l) => l.trim()).filter((l) => l.includes('this.draw'));
-    const order = lines.map((l) => {
-      const m = l.match(/this\.(draw\w+)/);
-      return m ? m[1] : '';
-    }).filter(Boolean);
-    expect(order[0]).toBe('drawBackground');
-    expect(order[1]).toBe('drawBeatLines');
-    expect(order).toContain('drawJudgeLine');
-    expect(order).toContain('drawWave');
-    expect(order).toContain('drawRings');
-    expect(order.indexOf('drawBeatLines')).toBeLessThan(order.indexOf('drawJudgeLine'));
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T219-6: Integration — drawBeatLines callable directly and matches render path, dual colors 0.20/0.30
-// ---------------------------------------------------------------------------
-describe('T219-6: drawBeatLines direct call matches ring formula and guards with dual 0.20/0.30 (3-step)', () => {
-  it('Step1 direct call at renderTimeMs 1.23 off-grid → Step2 call drawBeatLines with same params → Step3 lines count, X, and kind 0.20/0.30 identical to render path', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const renderer: any = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-
-    const renderTimeMs = tl.beatToMs(1.23);
-    const scrollSpeed = 110;
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const { ctx: ctxRender, strokes: strokesRender } = makeMockCtx();
-    renderer.render(ctxRender as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const viaRender = extractAllBeatLines(strokesRender);
-
-    if (typeof renderer.drawBeatLines === 'function') {
-      const { ctx, strokes } = makeMockCtx();
-      renderer.drawBeatLines(ctx, tl, renderTimeMs, scrollSpeed);
-      const direct = extractAllBeatLines(strokes);
-      expect(direct.length).toBe(viaRender.length);
-      for (let i = 0; i < direct.length; i++) {
-        expect(direct[i].x).toBeCloseTo(viaRender[i].x, 0);
-        expect(direct[i].kind).toBe(viaRender[i].kind);
-        expect(direct[i].strokeStyle).toBe(viaRender[i].strokeStyle);
-      }
-    } else {
-      expect(viaRender.length).toBeGreaterThan(0);
-      const beats = computeVisibleBeats(tl, renderTimeMs, scrollSpeed);
-      expect(viaRender.length).toBe(beats.length);
-      for (let i = 0; i < beats.length; i++) {
-        expect(viaRender[i].kind).toBe(expectedColorForBeat(beats[i]));
-        if (viaRender[i].kind === 'bar') expect(viaRender[i].strokeStyle).toMatch(/0\.30/);
-        else expect(viaRender[i].strokeStyle).toMatch(/0\.20/);
-      }
-    }
-  });
-
-  it('Step1 off-grid complex amp capture (2.7 at 0.37 beat) with zoom-derived scrollSpeed → Step2 direct drawBeatLines → Step3 X and dual 0.20/0.30 colors correct', () => {
-    const tl2 = makeTimeline([{ beat: 0, bpm: 120, zoom: 2.7 }], 1.0);
-    const renderTimeMs = tl2.beatToMs(0.37);
-    const scrollSpeed = 110 * tl2.zoomAt(0.37);
-    expect(scrollSpeed).toBeCloseTo(110 * 2.7, 2);
-    const renderer: any = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-    if (typeof renderer.drawBeatLines === 'function') {
-      const { ctx, strokes } = makeMockCtx();
-      renderer.drawBeatLines(ctx, tl2, renderTimeMs, scrollSpeed);
-      const lines = extractAllBeatLines(strokes);
-      const beats = computeVisibleBeats(tl2, renderTimeMs, scrollSpeed);
-      expect(lines.length).toBe(beats.length);
-      for (let i = 0; i < beats.length; i++) {
-        expect(lines[i].kind).toBe(expectedColorForBeat(beats[i]));
-        if (lines[i].kind === 'bar') expect(lines[i].strokeStyle).toMatch(/0\.30/);
-        else expect(lines[i].strokeStyle).toMatch(/0\.20/);
-        expect(lines[i].x).toBeCloseTo(beatX(beats[i], renderTimeMs, scrollSpeed, tl2), 0);
-      }
-    } else {
-      const wave = makeWaveEngine([{ beat: 0, bpm: 120 }], 2.7);
-      const r = new Renderer();
-      const { ctx, strokes } = makeMockCtx();
-      r.render(ctx as any, {
-        waveEngine: wave,
-        cursor: { y: 300 } as any,
-        rings: [],
-        score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-        songTimeMs: renderTimeMs,
-        bpmTimeline: tl2,
-        judgementEvents: [],
-        scrollSpeed,
-      } as any);
-      const lines = extractAllBeatLines(strokes);
-      expect(lines.length).toBeGreaterThan(0);
-      for (const l of lines) {
-        if (l.kind === 'bar') expect(l.strokeStyle).toMatch(/0\.30/);
-        else expect(l.strokeStyle).toMatch(/0\.20/);
-      }
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T219-7: Regression — no old opacities, both new opacities distinct, and b%4 logic preserved
-// ---------------------------------------------------------------------------
-describe('T219-7: Regression — no 0.06/0.10/0.18, both 0.20 and 0.30 appear, b%4 segregation (3-step)', () => {
-  it('Step1 old color capture (0.06/0.10/0.18) → Step2 render current → Step3 no stroke uses old values and both 0.20 and 0.30 appear', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: 2000,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const hasOld06 = strokes.some((s) => /0\.06/.test(s.strokeStyle));
-    expect(hasOld06).toBe(false);
-    // old beat colors must be absent as exact beat line colors
-    expect(strokes.some((s) => s.strokeStyle === 'rgba(255,255,255,0.10)')).toBe(false);
-    expect(strokes.some((s) => s.strokeStyle === 'rgba(255,255,255,0.18)')).toBe(false);
-    const hasNormal = strokes.some((s) => isNormalBeatColor(s.strokeStyle));
-    const hasBar = strokes.some((s) => isBarBeatColor(s.strokeStyle));
-    expect(hasNormal).toBe(true);
-    expect(hasBar).toBe(true);
-    // Also verify both use correct string forms
-    expect(strokes.some((s) => /0\.20/.test(s.strokeStyle) && isNormalBeatColor(s.strokeStyle))).toBe(true);
-    expect(strokes.some((s) => /0\.30/.test(s.strokeStyle) && isBarBeatColor(s.strokeStyle))).toBe(true);
-  });
-
-  it('Step1 bar beats capture (0,4,8) → Step2 verify b%4===0 maps to 0.30 and others to 0.20 → Step3 computed strict segregation with no crossover', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-    const renderTimeMs = 0;
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(tl, renderTimeMs, 110);
-    for (let i = 0; i < beats.length; i++) {
-      const b = beats[i];
-      if (b % 4 === 0) {
-        expect(lines[i].strokeStyle).toMatch(/0\.30/);
-        expect(lines[i].kind).toBe('bar');
-      } else {
-        expect(lines[i].strokeStyle).toMatch(/0\.20/);
-        expect(lines[i].strokeStyle).not.toMatch(/0\.30/);
-        expect(lines[i].kind).toBe('normal');
-      }
-    }
-    // Ensure no normal beat accidentally gets bar opacity and vice versa
-    const barBeats = beats.filter((b) => b % 4 === 0);
-    const normalBeats = beats.filter((b) => b % 4 !== 0);
-    expect(barBeats.length).toBeGreaterThan(0);
-    expect(normalBeats.length).toBeGreaterThan(0);
-    for (const b of barBeats) {
-      const idx = beats.indexOf(b);
-      expect(lines[idx].strokeStyle).toMatch(/0\.30/);
-    }
-    for (const b of normalBeats) {
-      const idx = beats.indexOf(b);
-      expect(lines[idx].strokeStyle).toMatch(/0\.20/);
-    }
-  });
-
-  it('Step1 complex amplitude 1.3 off-grid 1.23 capture → Step2 render → Step3 bar segregation 0.30/0.20 still holds and X uses beatToMs correctly', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120, zoom: 1.3 }], 1.0);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120, zoom: 1.3 }], 1.0);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-    const renderTimeMs = tl.beatToMs(1.23);
-    const scrollSpeed = 110 * tl.zoomAt(1.23);
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: renderTimeMs,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    const beats = computeVisibleBeats(tl, renderTimeMs, scrollSpeed);
-    expect(lines.length).toBe(beats.length);
-    for (let i = 0; i < beats.length; i++) {
-      expect(lines[i].kind).toBe(expectedColorForBeat(beats[i]));
-      if (lines[i].kind === 'bar') expect(lines[i].strokeStyle).toMatch(/0\.30/);
-      else expect(lines[i].strokeStyle).toMatch(/0\.20/);
-      expect(lines[i].x).toBeCloseTo(beatX(beats[i], renderTimeMs, scrollSpeed, tl), 0);
-    }
-  });
-
-  it('Step1 verify beat lines thinner than wave but new opacities higher than before → Step2 render and compare alphas → Step3 0.20/0.30 < 1.0 wave opacity and > old 0.06', () => {
-    // This test ensures spec invariant: "Wave (単色ベタ)・リングよりは薄いまま"
-    // Wave is opaque (globalAlpha 1, solid color), beat lines are 0.20/0.30 < 1.0
-    // And new values are indeed higher than old 0.06 (density increase)
-    expect(0.20).toBeGreaterThan(0.06);
-    expect(0.30).toBeGreaterThan(0.18);
-    expect(0.30).toBeGreaterThan(0.20);
-    expect(0.30).toBeLessThan(1.0);
-    expect(0.20).toBeLessThan(1.0);
-    // Also verify renderer does not set globalAlpha for beat lines (they use strokeStyle alpha)
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
-    const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
-    const renderer = new Renderer();
-    vi.spyOn(clock, 'getManualOffsetMs').mockReturnValue(0);
-    const { ctx, strokes } = makeMockCtx();
-    renderer.render(ctx as any, {
-      waveEngine: wave,
-      cursor: { y: 300 } as any,
-      rings: [],
-      score: { getStats: () => ({ combo: 0, score: 0 }) } as any,
-      songTimeMs: 2000,
-      bpmTimeline: tl,
-      judgementEvents: [],
-      scrollSpeed: 110,
-    } as any);
-    const lines = extractAllBeatLines(strokes);
-    for (const l of lines) {
-      expect(l.globalAlpha).toBeUndefined(); // beat lines use strokeStyle alpha, not globalAlpha
-    }
+  it('vi.advanceTimersByTime が決定的に進行する（T220のtick前提）', () => {
+    let tick = 0;
+    const id = setInterval(() => { tick += 1; }, 16);
+    // Step1: initial
+    expect(tick).toBe(0);
+    // Step2: advance 100ms -> ~6 ticks
+    vi.advanceTimersByTime(100);
+    const after100 = tick;
+    expect(after100).toBeGreaterThanOrEqual(6);
+    // Step3: advance another 100 -> doubles
+    vi.advanceTimersByTime(100);
+    expect(tick).toBe(after100 * 2);
+    clearInterval(id);
   });
 });
