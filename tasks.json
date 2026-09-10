@@ -1442,5 +1442,14 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T217",
+    "desc": "プレイ画面の1拍ごとの薄い縦線（拍グリッド）。要求: プレイ画面で1拍ごとに薄く線を描画してほしい。仕様: 整数拍ごとに1pxの縦線を画面全高に描画。スクロールに連動して右→左へ流れる（リングと同一式で位置算出）。色は薄い白（例rgba(255,255,255,0.06)、線幅1）。BPM変更があってもbeatToMs(beat)で位置を求めるため間隔が自動追従する。時変zoom時はリングと同一の近似式を使う（一貫性優先）。描画順は背景の直後（判定線・波形・リングより背面）。CalibrationModalも同一Rendererを使うため自動で追従する。修正（src/game/renderer.tsのみ）: 新規drawBeatLines(ctx, bpmTimeline, renderTimeMs, scrollSpeed)を追加し、render()内でdrawBackgroundの直後に呼ぶ。表示範囲の拍を求める：左端・右端のmsをmsToBeatで拍に換算し、その間の整数拍をループ（件数ガード付き）。b < 0は描画しない。完了条件: (1)1拍ごとに薄い縦線が表示されスクロールと一体で流れる (2)BPM変更区間で線間隔が正しく変わる (3)tsc --noEmit（＋描画ピクセルの単体検証）。",
+    "depends_on": [
+      "T216"
+    ],
+    "type": "feat",
+    "test": true
   }
 ]

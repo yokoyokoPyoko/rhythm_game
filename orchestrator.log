@@ -9965,3 +9965,6 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-09 21:09:20,022 [INFO] [T216] Gate B Red check OK: test fails as expected (pre-implementation).
 2026-09-09 21:09:20,028 [INFO] RateLimit sleep: 5s...
 2026-09-09 21:09:25,028 [INFO] Dispatching [1mCoder(T216)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T216] Coder 5d1dbd2f)
+2026-09-10 09:37:20,462 [WARNING] Selected range has unpassed prerequisite dependencies: T212 (status: None)
+2026-09-10 09:38:00,235 [INFO] Orchestrator range execution: 1 tasks (from=T217, to=T217, budget=600m)
+2026-09-10 09:38:00,235 [INFO] [T217] --only mode: skipping dependency checks.
