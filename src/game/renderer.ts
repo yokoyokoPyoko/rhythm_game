@@ -248,7 +248,7 @@ export class Renderer {
     let count = 0;
     for (let b = beatStart; b <= beatEnd; b++) {
       if (b < 0) continue;
-      ctx.strokeStyle = b % 4 === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.10)';
+      ctx.strokeStyle = b % 4 === 0 ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.20)';
       const x = TW_JUDGE_X + ((bpmTimeline.beatToMs(b) - renderTimeMs) / 1000) * scrollSpeed;
       ctx.beginPath();
       ctx.moveTo(x, 0);

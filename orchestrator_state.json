@@ -2016,9 +2016,15 @@
       "finished": 1789002106.8548386
     },
     "T219": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1789005755.591286
+      "started": 1789005755.591286,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f76f26dafffey7dACE50kisT3Q",
+        "coder": "ses_f76f0bd3effeZ5MVgTGuQfaduF"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

@@ -2,11 +2,11 @@
  * T218 — 拍グリッド線の濃度引き上げ＋小節協調 TDD Red → Green
  * Vitest (TypeScript, node environment) pure unit — no browser / no DOM.
  * Spec T218:
- *  - 1拍線: rgba(255,255,255,0.06) → 0.10 (判定線0.08より濃く波形より薄い)
- *  - 小節線 (b % 4 === 0): 0.18 (エディタ太グリッド0.20に準じる)
+ *  - 1拍線: rgba(255,255,255,0.20) (エディタ太グリッド並み)
+ *  - 小節線 (b % 4 === 0): 0.30
  *  - 線幅1・全高・背景直後の描画順・スクロール連動・BPM追従は不変・b<0スキップ・件数ガード維持
  *  - 実装は src/game/renderer.ts の drawBeatLines のみ: 拍ごとに b%4===0 でstrokeStyle 2色切替
- *  - 付随: tests/dynamic.test.ts の 0.06 期待値を新濃度 (0.10/0.18) に更新想定
+ *  - 付随: tests/dynamic.test.ts の 0.06 期待値を新濃度 (0.20/0.30) に更新想定
  * STRICT QA: 3-step state-transition / computed values / off-grid (0.37/1.23) / complex amps (0.7/1.3/2.7/3.4)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -100,11 +100,11 @@ function beatX(beat: number, renderTimeMs: number, scrollSpeed: number, tl: BpmT
 }
 
 function isNormalBeatColor(s: string): boolean {
-  // normal beat line = rgba(255,255,255,0.1) or (0.10); must exclude bar (0.18) and old (0.06)
-  return /rgba\(255,\s*255,\s*255,\s*0\.10?\)/.test(s) && !/0\.18/.test(s) && !/0\.06/.test(s);
+  // normal beat line = rgba(255,255,255,0.20); must exclude bar (0.30) and old (0.06/0.10/0.18)
+  return /rgba\(255,\s*255,\s*255,\s*0\.20\)/.test(s) && !/0\.30/.test(s) && !/0\.06/.test(s) && !/0\.10/.test(s) && !/0\.18/.test(s);
 }
 function isBarBeatColor(s: string): boolean {
-  return /rgba\(255,\s*255,\s*255,\s*0\.18\)/.test(s);
+  return /rgba\(255,\s*255,\s*255,\s*0\.30\)/.test(s);
 }
 function isAnyBeatColor(s: string): boolean {
   return isNormalBeatColor(s) || isBarBeatColor(s);
@@ -167,7 +167,7 @@ afterEach(() => {
 // T218-0: File contract — drawBeatLines existence and dual-color logic
 // ---------------------------------------------------------------------------
 describe('T218-0: File contract — drawBeatLines dual opacity (3-step)', () => {
-  it('Step1 capture initial (no dual color) → Step2 read source → Step3 drawBeatLines contains 0.10 and 0.18 and b%4===0 switch', () => {
+  it('Step1 capture initial (no dual color) → Step2 read source → Step3 drawBeatLines contains 0.20 and 0.30 and b%4===0 switch', () => {
     const beforeHasDual = false;
     expect(beforeHasDual).toBe(false);
 
@@ -176,8 +176,8 @@ describe('T218-0: File contract — drawBeatLines dual opacity (3-step)', () => 
     expect(src).toContain('drawBeatLines');
     expect(src).toMatch(/drawBeatLines\s*\([^)]*bpmTimeline[^)]*renderTimeMs[^)]*scrollSpeed[^)]*\)/);
     // dual colors must exist
-    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.1(0)?\)/);
-    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.18\)/);
+    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.20\)/);
+    expect(src).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.30\)/);
     // old 0.06 must NOT be the beat line color anymore
     // we allow 0.06 to appear nowhere or only if not as beat line primary; strict: should not contain 0.06 in drawBeatLines region
     const beatRegion = src.slice(src.indexOf('drawBeatLines'), src.indexOf('drawBeatLines') + 2000);
@@ -192,7 +192,7 @@ describe('T218-0: File contract — drawBeatLines dual opacity (3-step)', () => 
     // Instead after T218, strokeStyle assignment should be inside loop (conditional)
     const afterLoopStart = beatRegion.slice(loopStart);
     expect(afterLoopStart).toMatch(/strokeStyle/);
-    expect(afterLoopStart).toMatch(/0\.18/);
+    expect(afterLoopStart).toMatch(/0\.30/);
   });
 
   it('Step1 render before state (only 0.06) → Step2 read render() body → Step3 drawBeatLines called after background before judge/wave/rings', () => {
@@ -223,7 +223,7 @@ describe('T218-0: File contract — drawBeatLines dual opacity (3-step)', () => 
     expect(beatIdx - bgIdx).toBeLessThan(judgeIdx - bgIdx);
   });
 
-  it('Step1 style capture (no thin 0.10/0.18) → Step2 source search → Step3 lineWidth 1, b<0 guard, count guard, msToBeat/beatToMs, TW_JUDGE_X formula exist', () => {
+  it('Step1 style capture (no thin 0.20/0.30) → Step2 source search → Step3 lineWidth 1, b<0 guard, count guard, msToBeat/beatToMs, TW_JUDGE_X formula exist', () => {
     const src = readFile('src/game/renderer.ts');
     expect(src).toMatch(/lineWidth\s*=\s*1/);
     expect(src).toMatch(/b\s*<\s*0/);
@@ -236,10 +236,10 @@ describe('T218-0: File contract — drawBeatLines dual opacity (3-step)', () => 
 });
 
 // ---------------------------------------------------------------------------
-// T218-1: Beat grid renders with correct dual opacity (0.10 vs 0.18)
+// T218-1: Beat grid renders with correct dual opacity (0.20 vs 0.30)
 // ---------------------------------------------------------------------------
 describe('T218-1: Beat grid renders integer beats with correct dual opacity (3-step, computed, off-grid)', () => {
-  it('Step1 capture no lines at t=0 renderTimeMs → Step2 render at 2000ms (beat4 at judge) → Step3 each beat has correct X and correct color (bar 0.18 vs normal 0.10) and full height', () => {
+  it('Step1 capture no lines at t=0 renderTimeMs → Step2 render at 2000ms (beat4 at judge) → Step3 each beat has correct X and correct color (bar 0.30 vs normal 0.20) and full height', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -336,7 +336,7 @@ describe('T218-1: Beat grid renders integer beats with correct dual opacity (3-s
     }
   });
 
-  it('Step1 b<0 guard capture (renderTimeMs=0, left beat negative) → Step2 render at start → Step3 beats <0 not drawn, first beat is 0 (bar 0.18)', () => {
+  it('Step1 b<0 guard capture (renderTimeMs=0, left beat negative) → Step2 render at start → Step3 beats <0 not drawn, first beat is 0 (bar 0.30)', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -368,7 +368,7 @@ describe('T218-1: Beat grid renders integer beats with correct dual opacity (3-s
     }
   });
 
-  it('Step1 color distribution capture (empty) → Step2 render where 0..8 visible → Step3 bar lines at 0,4,8 are 0.18 and others 0.10', () => {
+  it('Step1 color distribution capture (empty) → Step2 render where 0..8 visible → Step3 bar lines at 0,4,8 are 0.30 and others 0.20', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -391,11 +391,11 @@ describe('T218-1: Beat grid renders integer beats with correct dual opacity (3-s
       const b = beats[i];
       if (b % 4 === 0) {
         expect(beatLines[i].kind).toBe('bar');
-        expect(beatLines[i].strokeStyle).toMatch(/0\.18/);
+        expect(beatLines[i].strokeStyle).toMatch(/0\.30/);
       } else {
         expect(beatLines[i].kind).toBe('normal');
-        expect(beatLines[i].strokeStyle).toMatch(/0\.1/);
-        expect(beatLines[i].strokeStyle).not.toMatch(/0\.18/);
+        expect(beatLines[i].strokeStyle).toMatch(/0\.20/);
+        expect(beatLines[i].strokeStyle).not.toMatch(/0\.30/);
       }
     }
     // verify counts: bar count = ceil(beats/4)
@@ -778,7 +778,7 @@ describe('T218-4: Zoom scrollSpeed, guard, and style verification with dual colo
     }
   });
 
-  it('Step1 style before (no thin) → Step2 render → Step3 all beat lines have correct dual opacity (0.10 or 0.18), lineWidth1, full-height vertical', () => {
+  it('Step1 style before (no thin) → Step2 render → Step3 all beat lines have correct dual opacity (0.20 or 0.30), lineWidth1, full-height vertical', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -1006,7 +1006,7 @@ describe('T218-6: drawBeatLines direct call matches ring formula and guards with
 // T218-7: Regression — no 0.06 remains, both opacities distinct, and b%4 logic
 // ---------------------------------------------------------------------------
 describe('T218-7: Regression — no 0.06, both opacities distinct, b%4 logic preserved (3-step)', () => {
-  it('Step1 old color capture (0.06) → Step2 render current → Step3 no stroke uses 0.06 and both 0.10 and 0.18 appear', () => {
+  it('Step1 old color capture (0.06) → Step2 render current → Step3 no stroke uses 0.06 and both 0.20 and 0.30 appear', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -1030,7 +1030,7 @@ describe('T218-7: Regression — no 0.06, both opacities distinct, b%4 logic pre
     expect(hasBar).toBe(true);
   });
 
-  it('Step1 bar beats capture (0,4,8) → Step2 verify b%4===0 maps to 0.18 and others to 0.10 → Step3 computed strict segregation', () => {
+  it('Step1 bar beats capture (0,4,8) → Step2 verify b%4===0 maps to 0.30 and others to 0.20 → Step3 computed strict segregation', () => {
     const tl = makeTimeline([{ beat: 0, bpm: 120 }]);
     const wave = makeWaveEngine([{ beat: 0, bpm: 120 }]);
     const renderer = new Renderer();
@@ -1052,11 +1052,11 @@ describe('T218-7: Regression — no 0.06, both opacities distinct, b%4 logic pre
     for (let i = 0; i < beats.length; i++) {
       const b = beats[i];
       if (b % 4 === 0) {
-        expect(lines[i].strokeStyle).toMatch(/0\.18/);
+        expect(lines[i].strokeStyle).toMatch(/0\.30/);
         expect(lines[i].kind).toBe('bar');
       } else {
-        expect(lines[i].strokeStyle).toMatch(/0\.1/);
-        expect(lines[i].strokeStyle).not.toMatch(/0\.18/);
+        expect(lines[i].strokeStyle).toMatch(/0\.20/);
+        expect(lines[i].strokeStyle).not.toMatch(/0\.30/);
         expect(lines[i].kind).toBe('normal');
       }
     }
