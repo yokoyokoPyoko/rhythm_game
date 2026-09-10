@@ -2011,7 +2011,7 @@
         "qa": "ses_f77305310ffe6FznpbCmUg14A2",
         "coder": "ses_f772ef0b5ffeW579l6IC6CVlsG"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
