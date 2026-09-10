@@ -1996,7 +1996,8 @@
       "cycles": 1,
       "sessions": {
         "qa": "ses_f773fdeb5ffe6fVlYYbGG2mCqv",
-        "coder": "ses_f773db266ffem9P9yM7sSEt1aU"
+        "coder": "ses_f773db266ffem9P9yM7sSEt1aU",
+        "reviewer": "ses_f773a9d3affedQhh5UT9BR5klz"
       },
       "gate_b_golden": true
     }
