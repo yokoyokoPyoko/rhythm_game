@@ -1990,9 +1990,15 @@
       "finished": 1788957068.2941818
     },
     "T217": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1789000680.2360137
+      "started": 1789000680.2360137,
+      "cycles": 1,
+      "sessions": {
+        "qa": "ses_f773fdeb5ffe6fVlYYbGG2mCqv",
+        "coder": "ses_f773db266ffem9P9yM7sSEt1aU"
+      },
+      "gate_b_golden": false
     }
   },
   "consecutive_no_action": 0

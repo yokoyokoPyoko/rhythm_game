@@ -190,7 +190,7 @@ export class Renderer {
   }
 
   render(ctx: CanvasRenderingContext2D, params: RenderParams): void {
-    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline: _bpmTimeline, isTracing: paramIsTracing, cursorVelocity } = params;
+    const { waveEngine, cursor, rings, score, songTimeMs, bpmTimeline, isTracing: paramIsTracing, cursorVelocity } = params;
     const renderTimeMs = songTimeMs - getManualOffsetMs();
     const scrollSpeed = Number.isFinite(params.scrollSpeed) && (params.scrollSpeed as number) > 0 ? (params.scrollSpeed as number) : DEFAULT_SCROLL_SPEED;
 
@@ -219,6 +219,7 @@ export class Renderer {
     });
 
     this.drawBackground(ctx);
+    this.drawBeatLines(ctx, bpmTimeline, renderTimeMs, scrollSpeed);
     this.drawJudgeLine(ctx);
     this.drawWave(ctx, waveEngine, renderTimeMs, scrollSpeed);
     this.drawRings(ctx, rings, renderTimeMs, scrollSpeed, waveEngine);
@@ -231,6 +232,31 @@ export class Renderer {
   private drawBackground(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  }
+
+  private drawBeatLines(ctx: CanvasRenderingContext2D, bpmTimeline: BpmTimeline, renderTimeMs: number, scrollSpeed: number): void {
+    const leftMs = renderTimeMs + ((0 - TW_JUDGE_X) / scrollSpeed) * 1000;
+    const rightMs = renderTimeMs + ((CANVAS_WIDTH - TW_JUDGE_X) / scrollSpeed) * 1000;
+    const beatStart = Math.ceil(bpmTimeline.msToBeat(leftMs));
+    const beatEnd = Math.floor(bpmTimeline.msToBeat(rightMs));
+    const MAX_LINES = 500;
+    if (!Number.isFinite(beatStart) || !Number.isFinite(beatEnd) || beatEnd - beatStart > MAX_LINES) {
+      return;
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    let count = 0;
+    for (let b = beatStart; b <= beatEnd; b++) {
+      if (b < 0) continue;
+      const x = TW_JUDGE_X + ((bpmTimeline.beatToMs(b) - renderTimeMs) / 1000) * scrollSpeed;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, CANVAS_HEIGHT);
+      ctx.stroke();
+      count++;
+      if (count >= MAX_LINES) break;
+    }
   }
 
   private drawJudgeLine(ctx: CanvasRenderingContext2D): void {
