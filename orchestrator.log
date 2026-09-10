@@ -10128,3 +10128,8 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-10 17:09:57,657 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-10 17:09:58,659 [INFO] Orchestrator range execution: 1 tasks (from=T221, to=T221, budget=600m)
 2026-09-10 17:09:58,659 [INFO] [T221] --only mode: skipping dependency checks.
+2026-09-11 06:43:56,364 [ERROR] --resume: no running task found in orchestrator_state.json
+2026-09-11 06:44:03,720 [ERROR] --resume: no running task found in orchestrator_state.json
+2026-09-11 06:44:08,813 [WARNING] Selected range has unpassed prerequisite dependencies: T222 (status: None), T212 (status: None), T223 (status: None), T224 (status: None)
+2026-09-11 06:44:51,540 [INFO] Orchestrator range execution: 1 tasks (from=T225, to=T225, budget=600m)
+2026-09-11 06:44:51,540 [INFO] [T225] --only mode: skipping dependency checks.

@@ -2046,7 +2046,7 @@
     },
     "T221": {
       "attempts": 14,
-      "status": "running",
+      "status": "passed",
       "started": 1789027798.659626,
       "cycles": 4,
       "sessions": {
@@ -2057,7 +2057,13 @@
       },
       "gate_b_golden": true,
       "last_retry_from": "coder",
-      "last_postmortem_at": 1789035538.4673395
+      "last_postmortem_at": 1789035538.4673395,
+      "finished": 1789035917.5473163
+    },
+    "T225": {
+      "attempts": 0,
+      "status": "running",
+      "started": 1789076691.540474
     }
   },
   "consecutive_no_action": 0

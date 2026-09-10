@@ -2929,3 +2929,22 @@ const minorStep =
 1. 上記タッチ操作が破綻なく動くこと。
 2. 既存テストがすべて通過すること。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T225] zipインポートの音声バイト未受渡し修正（無音バグ＋ID二重採番）
+
+**要求（ユーザー確定）**: zip（例：`maou.zip`＋TOML）の曲を追加してプレイしても音楽が流れない。
+
+**根本原因（コード確定）**:
+1. **音声バイト未受渡し（無音の直接原因）**: `SelectScreen.tsx:189` が `new Uint8Array([])` のプレースホルダのままで、zip内の音声バイトを一切取り出していない。空バイトのデコード失敗→無音（またはnull）、かつ `putAudio` に空バイト列が保存される。`GameScreen.tsx:460` は空でもtruthyな `stored.bytes` をデコードしようとして例外→catch→音源fetch（404）→メトロノームのみ再生になる。zip自体とペアリング（TOML内 `audio` basename一致）は正常。
+2. **ID二重採番（潜在）**: `zipImport.ts:241` の `baseTime`（`newSongs` のID）と `SelectScreen.tsx:162` の `Date.now()`（Cache／IDBのキー）が別々に採番され、カードIDと実データのキーがずれる恐れがある（同msで偶然一致している場合が多い）。
+
+**修正**:
+- `src/storage/zipImport.ts`: `handleZipFile` のペア結果に音声バイト（`audioBytes: Uint8Array`）と音声名を含める（フォルダグループの `files` マップから取得。戻り値形状への追加のため後方互換）。
+- `src/screens/SelectScreen.tsx`: プレースホルダを廃止し、ペアの実バイトで `File` 化→デコード→`AudioCache`／`putAudio` する。IDは1箇所で生成したもの（`result.newSongs[i].id` に統一）をキャッシュ・IDB・曲カードのすべてに使う。空バイト時はペア不成立として報告し、空保存しない。
+
+**完了条件**:
+1. zip投入→プレイで音声付き再生されること（IndexedDBの音声バイト長が実ファイルサイズと一致すること）。
+2. カードIDとキャッシュ／IDBのキーが一致し、ミリ秒境界を跨いでも譜面が見つかること。
+3. `tsc --noEmit`、T214・T194〜T196の回帰なし。
