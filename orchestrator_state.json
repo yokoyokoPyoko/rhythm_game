@@ -2045,15 +2045,18 @@
       "finished": 1789018897.9392016
     },
     "T221": {
-      "attempts": 1,
+      "attempts": 12,
       "status": "running",
       "started": 1789027798.659626,
-      "cycles": 1,
+      "cycles": 4,
       "sessions": {
-        "qa": "ses_f7629e7baffeQx9AINGtXrK7Oo",
-        "coder": null
+        "qa": "ses_f753a6c7bffeoy9VGBEXulfQAq",
+        "coder": "ses_f7536755affey3Y19r1QrVQqPC",
+        "postmortem": "ses_f753ebf18ffeXir5IN4SX9Xf74"
       },
-      "gate_b_golden": false
+      "gate_b_golden": false,
+      "last_retry_from": "coder",
+      "last_postmortem_at": 1789034592.885827
     }
   },
   "consecutive_no_action": 0

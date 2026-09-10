@@ -27,6 +27,9 @@ const BOTTOM_Y = TW_CENTER_Y + TW_AMP
 // fixed base amplitude (matching the editor) so editing the main #amplitude input
 // does not immediately change the wave.
 const EDITOR_BASE_AMP = 1.0
+// T221: long press duration and movement threshold for touch-to-right-click emulation
+const LONG_PRESS_MS = 500
+const LONG_PRESS_THRESHOLD = 10
 
 export interface WaveView {
   startBeat: number
@@ -130,6 +133,8 @@ export default function WavePreview({
   const multiDragRef = useRef<{ startBeat: number; startY: number; origRingBeats?: number[]; origSegIndices?: number[]; origVertices?: number[] } | null>(null)
   const [multiDragSegments, setMultiDragSegments] = useState<Segment[] | null>(null)
   const [ringDragOffset, setRingDragOffset] = useState(0)
+  // T221: long press timer for touch-to-right-click emulation
+  const longPressRef = useRef<{ timerId: ReturnType<typeof setTimeout> | null; startX: number; startY: number }>({ timerId: null, startX: 0, startY: 0 })
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
 
@@ -624,6 +629,15 @@ export default function WavePreview({
       // Single-pointer drag: ignore moves from pointers other than the active one.
       if (activePointerIdRef.current !== null && e.pointerId !== activePointerIdRef.current) return
       const rect = canvas.getBoundingClientRect()
+      // T221: cancel long press if pointer moves more than threshold from start
+      if (longPressRef.current.timerId !== null) {
+        const dx = e.clientX - longPressRef.current.startX
+        const dy = e.clientY - longPressRef.current.startY
+        if (Math.hypot(dx, dy) > LONG_PRESS_THRESHOLD) {
+          clearTimeout(longPressRef.current.timerId)
+          longPressRef.current.timerId = null
+        }
+      }
       // T156: rubber band selection (right-drag) — draw rect only, no state change
       if (rubberRef.current) {
         const x = Math.min(rubberRef.current.startX, e.clientX - rect.left)
@@ -787,6 +801,11 @@ export default function WavePreview({
       }
     }
     const onUp = (e: PointerEvent) => {
+      // T221: cancel long press on pointer release
+      if (longPressRef.current.timerId !== null) {
+        clearTimeout(longPressRef.current.timerId)
+        longPressRef.current.timerId = null
+      }
       pointersRef.current.delete(e.pointerId)
       // T220: releasing one pinch finger ends zoom; the surviving finger does not
       // auto-resume a drag.
@@ -1103,6 +1122,18 @@ export default function WavePreview({
         e.preventDefault()
         return
       }
+    }
+
+    // T221: long press on touch = right-button equivalent (delete or rubber-band start)
+    if (e.button === 0) {
+      longPressRef.current.timerId = setTimeout(() => {
+        // Fire context menu at the original press location
+        const fakeEvent = { clientX: longPressRef.current.startX, clientY: longPressRef.current.startY } as ReactMouseEvent<HTMLCanvasElement>
+        handleContextMenu(fakeEvent)
+        longPressRef.current.timerId = null
+      }, LONG_PRESS_MS)
+      longPressRef.current.startX = e.nativeEvent.clientX
+      longPressRef.current.startY = e.nativeEvent.clientY
     }
 
     // Mode-specific hit testing — complete separation per T116 (left button only)

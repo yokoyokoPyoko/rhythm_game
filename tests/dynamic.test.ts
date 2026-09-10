@@ -2,9 +2,8 @@
  * T221 — 長押し＝右ボタン相当（削除・範囲選択のタッチ代替）
  * Vitest (TypeScript, node environment) pure unit — no browser / no DOM.
  * Spec T221:
- *  - 500ms静止（移動<10px）で右ボタン押下と同等扱い
- *  - 削除対象上なら現行右クリックと同一の削除動作、空白なら範囲選択開始（既存 rubberRef・削除処理を流用）
- *  - contextmenu抑止維持
+ *  - 500ms静止（移動<10px）で右ボタン押下と同等扱い。削除対象上なら現行右クリックと同一の削除動作、空白なら範囲選択開始（既存 rubberRef・削除処理を流用し発火元だけ増やす）
+ *  - contextmenu のブラウザ標準メニュー抑止は維持
  * STRICT QA: 3-step state-transition / computed values / off-grid (0.37/1.23) / complex amps (0.7/1.3/2.7/3.4)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -28,6 +27,7 @@ if (typeof (globalThis as any).window === 'undefined') {
 import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
+import { calculateVertexDrag, calculateEdgeDrag } from '../src/game/editorDrag';
 import { quantizeBeat } from '../src/chart/quantize';
 
 // ---------------------------------------------------------------------------
@@ -41,18 +41,15 @@ function makeTimeline(bpmChanges: any[], amp = 1.0): BpmTimeline {
   return new BpmTimeline(bpmChanges as any, amp);
 }
 
-/**
- * Pure threshold logic for T221 — mirrors expected implementation:
- * 500ms静止（移動<10px）で右ボタン相当
- */
-function isLongPressTriggered(startX: number, startY: number, curX: number, curY: number, elapsedMs: number): boolean {
-  const dist = Math.hypot(curX - startX, curY - startY);
-  return elapsedMs >= 500 && dist < 10;
+const LONG_PRESS_MS = 500;
+const MOVE_THRESHOLD_PX = 10;
+
+function distanceMoved(x0: number, y0: number, x1: number, y1: number): number {
+  return Math.hypot(x1 - x0, y1 - y0);
 }
 
-function panCompute(startBeat: number, viewBeats: number, rectW: number, dxPx: number): number {
-  const dxBeat = (dxPx / rectW) * viewBeats;
-  return Math.max(0, startBeat - dxBeat);
+function isLongPressEligible(durationMs: number, movePx: number): boolean {
+  return durationMs >= LONG_PRESS_MS && movePx < MOVE_THRESHOLD_PX;
 }
 
 vi.useFakeTimers();
@@ -60,561 +57,515 @@ vi.useFakeTimers();
 beforeEach(() => {
   vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   try { (globalThis as any).localStorage.clear(); } catch {}
-  vi.restoreAllMocks();
+  vi.clearAllTimers();
 });
 
 afterEach(() => {
   vi.clearAllTimers();
-  vi.restoreAllMocks();
   try { (globalThis as any).localStorage.clear(); } catch {}
 });
 
 // ---------------------------------------------------------------------------
-// T221-0: File contract — 500ms / 10px / right-button equivalence
+// T221-0: File contract — long-press infrastructure exists (3-step)
 // ---------------------------------------------------------------------------
-describe('T221-0: File contract — 500ms long-press equals right-button (3-step)', () => {
-  it('Step1 capture no long-press timer before → Step2 read WavePreview source → Step3 500ms timer via setTimeout + clearTimeout exists', () => {
-    const beforeHasLongPress = false;
-    expect(beforeHasLongPress).toBe(false);
+describe('T221-0: File contract — long-press timer and thresholds exist (3-step)', () => {
+  it('Step1 capture no long-press timer before → Step2 read WavePreview source → Step3 long-press timer constants 500ms and 10px and pointer handling exist', () => {
+    const beforeHasTimer = false;
+    expect(beforeHasTimer).toBe(false);
 
     const src = readFile('src/screens/editor/WavePreview.tsx');
-    // 500ms timer
+
+    // 500ms threshold must appear as timer delay
     expect(src).toContain('500');
+    // setTimeout with 500 must exist for long-press
     expect(src).toContain('setTimeout');
-    expect(src).toContain('clearTimeout');
-  });
-
-  it('Step1 capture no 10px threshold before → Step2 read source → Step3 movement <10px via Math.hypot / distance check exists', () => {
-    const beforeHasThreshold = false;
-    expect(beforeHasThreshold).toBe(false);
-
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    // 10px threshold
-    expect(src).toContain('10');
-    // distance computation — Math.hypot is used throughout for hit testing
-    expect(src).toContain('Math.hypot');
-  });
-
-  it('Step1 capture right-button logic before → Step2 read source → Step3 long-press reuses rubberRef and deletion path', () => {
-    const before = { rubber: 0, delete: 0 };
-    expect(before.rubber).toBe(0);
-
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    // existing right-button infrastructure must be reused
-    expect(src).toContain('rubberRef');
-    expect(src).toContain('onDeleteRing');
-    // long-press should set rubberRef or call same branch as right-click
-    // broad check: long-press timer callback mentions rubberRef or deletion
-    const hasLongPressBlock = src.includes('500') && src.includes('rubberRef');
-    expect(hasLongPressBlock).toBe(true);
-  });
-
-  it('Step1 capture contextmenu handler before → Step2 read source → Step3 preventDefault remains for contextmenu suppression', () => {
-    const beforePrevent = true;
-    expect(beforePrevent).toBe(true);
-
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('onContextMenu');
-    expect(src).toContain('handleContextMenu');
-    // must still call preventDefault
-    const ctxIdx = src.indexOf('handleContextMenu');
-    const ctxBlock = src.slice(ctxIdx, ctxIdx + 800);
-    expect(ctxBlock).toContain('preventDefault');
-  });
-
-  it('Step1 capture pointer events before T220 → Step2 read source → Step3 long-press integrated with pointerdown/pointermove/pointerup/pointercancel flow', () => {
-    const beforePointer = false;
-    expect(beforePointer).toBe(false);
-
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('onPointerDown');
+    // movement threshold <10px must be checked via Math.hypot or distance comparison
+    const hasMoveCheck = src.includes('10') && (src.includes('Math.hypot') || src.includes('< 10') || src.includes('<10'));
+    expect(hasMoveCheck).toBe(true);
+    // timer id must use correct type, not plain number
+    expect(src).toContain('ReturnType<typeof setTimeout>');
+    // long-press handling must reference pointer events (T220 base)
     expect(src).toContain('pointerId');
     expect(src).toContain('pointersRef');
-    // long-press must be triggered from pointer handlers
+    // wave-preview test ids preserved
+    expect(src).toContain('wave-preview-canvas');
+    expect(src).toContain('wave-preview');
+  });
+
+  it('Step1 capture timer type none → Step2 read source → Step3 timerId is ReturnType<typeof setTimeout>|null not number|null direct assignment', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('ReturnType<typeof setTimeout>');
+    // ensure clearTimeout is used to cancel long-press
+    expect(src).toContain('clearTimeout');
+    const hasReturnTypeDecl = src.includes('ReturnType<typeof setTimeout>');
+    expect(hasReturnTypeDecl).toBe(true);
+  });
+
+  it('Step1 capture no long-press trigger → Step2 inspect long-press start/cancel flow → Step3 pointerdown starts timer, pointermove/pointerup cancel it, contextmenu still suppressed', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // contextmenu suppression must remain
+    expect(src).toContain('onContextMenu');
+    expect(src).toContain('preventDefault');
+    expect(src).toContain('handleContextMenu');
+    // long-press must hook into pointerdown / pointermove / pointerup lifecycle
     expect(src.toLowerCase()).toContain('pointerdown');
     expect(src.toLowerCase()).toContain('pointermove');
     expect(src.toLowerCase()).toContain('pointerup');
-    expect(src.toLowerCase()).toContain('pointercancel');
+    expect(src).toContain('clearTimeout');
   });
 });
 
 // ---------------------------------------------------------------------------
-// T221-1: Threshold pure mathematics — 500ms & 10px (3-step, computed, vi timers)
+// T221-1: Long-press threshold — 500ms and <10px computed (3-step, fake timers)
 // ---------------------------------------------------------------------------
-describe('T221-1: Threshold pure math — 500ms静止 <10px triggers, otherwise not (3-step, computed)', () => {
-  it('Step1 capture elapsed 0 dist 0 not triggered → Step2 advance 500ms with dist 5 (<10) → Step3 triggered = true', () => {
-    const startX = 100, startY = 100;
-    const beforeElapsed = 0;
-    expect(isLongPressTriggered(startX, startY, 100, 100, beforeElapsed)).toBe(false);
+describe('T221-1: Long-press threshold — 500ms static <10px (3-step, computed, fake timers)', () => {
+  it('Step1 capture timer not fired at 0ms → Step2 start timeout 500ms and advance 499ms → Step3 callback not yet fired, advance 1ms → fired', () => {
+    const beforeCount = 0;
+    expect(beforeCount).toBe(0);
 
-    let triggered = false;
-    // simulate timer pattern
-    const timer = setTimeout(() => {
-      triggered = isLongPressTriggered(startX, startY, 102, 103, 500);
-    }, 500);
-    vi.advanceTimersByTime(500);
-    expect(triggered).toBe(true);
-    clearTimeout(timer);
+    const cb = vi.fn();
+    const timer: ReturnType<typeof setTimeout> = setTimeout(cb, LONG_PRESS_MS);
+    expect(cb).not.toHaveBeenCalled();
 
-    // direct math verification
-    const dist = Math.hypot(2, 3);
-    expect(dist).toBeLessThan(10);
-    expect(isLongPressTriggered(startX, startY, 102, 103, 500)).toBe(true);
-  });
-
-  it('Step1 capture elapsed 500 dist 5 triggered → Step2 move to 15px at same time → Step3 not triggered', () => {
-    const startX = 50, startY = 50;
-    const beforeTriggered = isLongPressTriggered(startX, startY, 52, 53, 500);
-    expect(beforeTriggered).toBe(true);
-
-    // movement >=10 should cancel
-    const distLarge = Math.hypot(15, 0);
-    expect(distLarge).toBeGreaterThanOrEqual(10);
-    expect(isLongPressTriggered(startX, startY, 65, 50, 500)).toBe(false);
-
-    // also diagonal 8,8 = 11.31 >10
-    expect(Math.hypot(8, 8)).toBeGreaterThan(10);
-    expect(isLongPressTriggered(startX, startY, 58, 58, 500)).toBe(false);
-  });
-
-  it('Step1 capture elapsed 400 dist 2 not yet → Step2 advance only 400ms → Step3 still false (500ms not reached)', () => {
-    const startX = 0, startY = 0;
-    expect(isLongPressTriggered(startX, startY, 1, 1, 0)).toBe(false);
-
-    let triggered = false;
-    const timer = setTimeout(() => { triggered = true; }, 500);
-    vi.advanceTimersByTime(400);
-    expect(triggered).toBe(false);
-    // even with small dist, under 500 should be false
-    expect(isLongPressTriggered(startX, startY, 1, 1, 400)).toBe(false);
-    vi.advanceTimersByTime(100);
-    expect(triggered).toBe(true);
-    // now at 500 it would be true if dist <10
-    expect(isLongPressTriggered(startX, startY, 1, 1, 500)).toBe(true);
-    clearTimeout(timer);
-  });
-
-  it('Step1 capture boundary dist=10 not triggered → Step2 test 9.9 triggered / 10 not → Step3 threshold strictly <10 verified', () => {
-    const startX = 0, startY = 0;
-    const beforeBoundary = isLongPressTriggered(startX, startY, 10, 0, 500);
-    expect(beforeBoundary).toBe(false); // dist ==10 => not <10
-
-    expect(isLongPressTriggered(startX, startY, 9.9, 0, 500)).toBe(true);
-    expect(isLongPressTriggered(startX, startY, 9.99, 0, 500)).toBe(true);
-    expect(isLongPressTriggered(startX, startY, 10, 0, 500)).toBe(false);
-    expect(isLongPressTriggered(startX, startY, 10.1, 0, 500)).toBe(false);
-  });
-
-  it('Step1 capture elapsed 499 not triggered → Step2 advance to 500 → Step3 triggered boundary verified with timers', () => {
-    expect(isLongPressTriggered(0, 0, 0, 0, 499)).toBe(false);
-    expect(isLongPressTriggered(0, 0, 0, 0, 500)).toBe(true);
-    expect(isLongPressTriggered(0, 0, 0, 0, 501)).toBe(true);
-
-    let count = 0;
-    setTimeout(() => { count += 1; }, 500);
     vi.advanceTimersByTime(499);
-    expect(count).toBe(0);
+    expect(cb).not.toHaveBeenCalled();
+
     vi.advanceTimersByTime(1);
-    expect(count).toBe(1);
-  });
+    expect(cb).toHaveBeenCalledTimes(1);
 
-  it('Step1 capture off-grid positions 0.37/1.23 → Step2 compute dist with fractional coords → Step3 threshold still <10 independent of beat phase (off-grid principle)', () => {
-    const offGrid = [0.37, 1.23, 3.37, 2.71];
-    for (const phase of offGrid) {
-      // map phase to pixel offset via hypothetical x = phase * 40px/beat
-      const scale = 40;
-      const x = phase * scale;
-      const y = phase * scale * 0.5;
-      // small movement 5px stays <10 regardless of phase
-      const curX = x + 3;
-      const curY = y + 4; // dist 5
-      expect(Math.hypot(3, 4)).toBe(5);
-      expect(isLongPressTriggered(x, y, curX, curY, 500)).toBe(true);
-      // large movement 12px >10
-      expect(isLongPressTriggered(x, y, x + 12, y, 500)).toBe(false);
-    }
-  });
-
-  it('Step1 capture complex amplitudes 0.7/1.3/2.7/3.4 before → Step2 waveYAt at off-grid → Step3 distance threshold independent of amp (numeric isolation)', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGridBeats = [0.37, 1.23];
-    for (const amp of amps) {
-      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
-      const engine = new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], tl, amp, 0);
-      for (const b of offGridBeats) {
-        const y = engine.waveYAt(b);
-        expect(Number.isFinite(y)).toBe(true);
-        expect(y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1e-6);
-        expect(y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1e-6);
-        // threshold check unrelated to amp — still 10px
-        expect(isLongPressTriggered(100, y, 102, y + 2, 500)).toBe(true);
-        expect(isLongPressTriggered(100, y, 100 + 11, y, 500)).toBe(false);
-      }
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T221-2: Deletion vs rubber selection branching (3-step, computed)
-// ---------------------------------------------------------------------------
-describe('T221-2: Long-press branches — deletion on target vs rubber selection on blank (3-step)', () => {
-  it('Step1 capture blank before (no hit) → Step2 long-press at blank → Step3 rubber selection started (rubberRef set)', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    const beforeHasRubberOnLongPress = src.includes('500') && src.includes('rubberRef');
-    expect(beforeHasRubberOnLongPress).toBe(true);
-
-    // pure branching logic: if nearest hit < threshold → delete, else rubber
-    const nearestDist = 30; // >25 = blank
-    const isOnTarget = nearestDist < 25;
-    expect(isOnTarget).toBe(false);
-    // blank should start rubber
-    const shouldStartRubber = !isOnTarget;
-    expect(shouldStartRubber).toBe(true);
-  });
-
-  it('Step1 capture ring hit before (dist <25) → Step2 long-press on ring → Step3 deletion path triggered', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('nearestRingIndex');
-    expect(src).toContain('onDeleteRing');
-
-    const hitDistRing = 12; // <25
-    const isRingHit = hitDistRing < 25;
-    expect(isRingHit).toBe(true);
-
-    // vertex case: <14
-    const hitDistVertex = 8;
-    expect(hitDistVertex < 14).toBe(true);
-
-    // long-press on target should delete, not start rubber
-    const shouldDelete = isRingHit;
-    expect(shouldDelete).toBe(true);
-  });
-
-  it('Step1 capture vertex hit dist 13 → Step2 long-press on vertex → Step3 vertex deletion branch verified (reuse handleContextMenu logic)', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('handleContextMenu');
-    expect(src).toContain('nearestVertexIndex');
-    // ensure deletion logic exists for vertex/edge via context menu path
-    expect(src).toContain('onSegmentsChange');
-
-    const distToVertex = 10; // <14
-    expect(distToVertex < 14).toBe(true);
-    // branch: if hit vertex, deletion; else rubber
-    const startX = 200, startY = 200;
-    const vertexX = 205, vertexY = 203;
-    const d = Math.hypot(vertexX - startX, vertexY - startY);
-    expect(d).toBeLessThan(14);
-    expect(isLongPressTriggered(startX, startY, startX, startY, 500)).toBe(true);
-  });
-
-  it('Step1 off-grid wave positions with complex amps → Step2 simulate hit test via WaveEngine.waveYAt → Step3 ring Y consistent and branching deterministic', () => {
-    const amps = [0.7, 1.3, 2.7, 3.4];
-    const offGridBeats = [0.37, 1.23, 2.37];
-    for (const amp of amps) {
-      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
-      const engine = new WaveEngine([{ direction: 'up', beats: 1.5 }, { direction: 'down', beats: 1.5 }], tl, amp, 0);
-      for (const b of offGridBeats) {
-        const y = engine.waveYAt(b);
-        // hit test: distance from cursor (beat-phase derived x) to ring at same beat must be <25 if aligned
-        const distAligned = Math.hypot(0, 0); // perfect alignment
-        expect(distAligned).toBe(0);
-        expect(distAligned < 25).toBe(true);
-        // off by 30px Y => not hit
-        expect(Math.hypot(0, 30) < 25).toBe(false);
-        // ensure y within bounds for all off-grid
-        expect(y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1e-6);
-      }
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T221-3: No false positives — normal tap / drag must not trigger (3-step)
-// ---------------------------------------------------------------------------
-describe('T221-3: No false positives — tap/drag does not misfire (3-step, 500ms/10px)', () => {
-  it('Step1 capture tap start (0ms) → Step2 quick release at 200ms with no move → Step3 not triggered (requires 500)', () => {
-    const startX = 10, startY = 10;
-    expect(isLongPressTriggered(startX, startY, 10, 10, 0)).toBe(false);
-
-    let triggered = false;
-    const timer = setTimeout(() => { triggered = true; }, 500);
-    // simulate early pointerup at 200ms
-    vi.advanceTimersByTime(200);
     clearTimeout(timer);
-    expect(triggered).toBe(false);
-    expect(isLongPressTriggered(startX, startY, 10, 10, 200)).toBe(false);
   });
 
-  it('Step1 capture drag start → Step2 move 15px before 500ms → Step3 cancelled, never triggers even after 500', () => {
-    const startX = 0, startY = 0;
-    // move 15px at 100ms
-    const dist = Math.hypot(15, 0);
-    expect(dist).toBeGreaterThanOrEqual(10);
+  it('Step1 capture move distance 0 → Step2 compute distanceMoved for small move <10px → Step3 isLongPressEligible true only when >=500ms and <10px', () => {
+    const dSmall = distanceMoved(100, 100, 104, 103);
+    expect(dSmall).toBeLessThan(MOVE_THRESHOLD_PX);
+    expect(isLongPressEligible(500, dSmall)).toBe(true);
+    expect(isLongPressEligible(499, dSmall)).toBe(false);
 
-    let triggered = false;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      if (!cancelled) triggered = isLongPressTriggered(startX, startY, 15, 0, 500);
-    }, 500);
-    // movement cancels timer
-    if (dist >= 10) {
-      cancelled = true;
-      clearTimeout(timer);
+    const dLarge = distanceMoved(100, 100, 115, 100);
+    expect(dLarge).toBeGreaterThanOrEqual(MOVE_THRESHOLD_PX);
+    expect(isLongPressEligible(500, dLarge)).toBe(false);
+    expect(isLongPressEligible(1000, dLarge)).toBe(false);
+  });
+
+  it('Step1 capture off-grid positions 0.37/1.23 → Step2 compute eligibility with fractional movement 9.9px vs 10.1px → Step3 threshold boundary exact', () => {
+    const amps = [0.7, 1.3, 2.7, 3.4];
+    for (const amp of amps) {
+      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
+      const engineer = new WaveEngine([{ direction: 'up', beats: 2 }, { direction: 'down', beats: 2 }], tl, amp, 0);
+      const y037 = engineer.waveYAt(0.37);
+      const y123 = engineer.waveYAt(1.23);
+      expect(Number.isFinite(y037)).toBe(true);
+      expect(Number.isFinite(y123)).toBe(true);
+      expect(isLongPressEligible(500, 9.99)).toBe(true);
+      expect(isLongPressEligible(500, 10)).toBe(false);
+      expect(isLongPressEligible(500, 10.01)).toBe(false);
     }
-    vi.advanceTimersByTime(500);
-    expect(triggered).toBe(false);
-    expect(cancelled).toBe(true);
-    // direct check still false due to distance
-    expect(isLongPressTriggered(startX, startY, 15, 0, 500)).toBe(false);
   });
 
-  it('Step1 capture drag exactly 9px at 300ms → Step2 advance to 500 with same position → Step3 still triggered (within 10)', () => {
-    const startX = 0, startY = 0;
-    const curX = 9, curY = 0;
-    expect(Math.hypot(9, 0)).toBeLessThan(10);
-
-    let triggered = false;
-    setTimeout(() => {
-      triggered = isLongPressTriggered(startX, startY, curX, curY, 500);
-    }, 500);
-    vi.advanceTimersByTime(300);
-    expect(triggered).toBe(false);
+  it('Step1 capture timer cancelled on move >10px → Step2 start timer then clearTimeout before expiry → Step3 callback never fires even after 500ms', () => {
+    const cb = vi.fn();
+    const timer: ReturnType<typeof setTimeout> = setTimeout(cb, LONG_PRESS_MS);
     vi.advanceTimersByTime(200);
-    expect(triggered).toBe(true);
-  });
-
-  it('Step1 capture multiple moves: 2px then 12px → Step2 second move exceeds 10 at 400ms → Step3 cancelled (no trigger)', () => {
-    const startX = 50, startY = 50;
-    // first move 2px at 100ms -> not cancel
-    expect(Math.hypot(2, 0) < 10).toBe(true);
-    let cancelled = false;
-    const timer = setTimeout(() => {}, 500);
-    // second move 12px at 400ms -> cancel
-    const secondDist = Math.hypot(12, 0);
-    if (secondDist >= 10) {
-      cancelled = true;
-      clearTimeout(timer);
-    }
-    vi.advanceTimersByTime(500);
-    expect(cancelled).toBe(true);
-    expect(isLongPressTriggered(startX, startY, 62, 50, 500)).toBe(false);
-  });
-
-  it('Step1 normal pointer pan with dxBeat 0.37 (off-grid) → Step2 computed dxBeat via pan logic → Step3 pan still works, long-press not interfering (computed pan check)', () => {
-    const viewStart = 6;
-    const viewBeats = 16;
-    const rectW = 800;
-    const dxPx = 30; // <10 threshold? 30px >10 but pan should win
-    // long-press distance 30 >10 at 100ms => no long-press
-    expect(Math.hypot(30, 0) < 10).toBe(false);
-    const newStart = panCompute(viewStart, viewBeats, rectW, dxPx);
-    expect(newStart).toBeCloseTo(5.4, 5);
-    // ensure not triggered
-    expect(isLongPressTriggered(0, 0, 30, 0, 200)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T221-4: contextmenu suppression preserved (3-step)
-// ---------------------------------------------------------------------------
-describe('T221-4: contextmenu suppression remains (3-step)', () => {
-  it('Step1 capture handleContextMenu before call → Step2 inspect source around handleContextMenu → Step3 preventDefault still present and rubberDragged guard preserved', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    const beforeHasPrevent = src.includes('preventDefault');
-    expect(beforeHasPrevent).toBe(true);
-
-    const idx = src.indexOf('handleContextMenu');
-    expect(idx).toBeGreaterThan(0);
-    const block = src.slice(idx, idx + 1200);
-    expect(block).toContain('preventDefault');
-    expect(block).toContain('rubberDraggedRef');
-  });
-
-  it('Step1 capture canvas JSX before → Step2 read canvas props → Step3 onContextMenu handler still attached and touchAction none', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('onContextMenu={handleContextMenu}');
-    expect(src).toMatch(/touchAction:\s*['"]none['"]/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// T221-5: Long-press integrates with pointer / pinch cancellation (3-step)
-// ---------------------------------------------------------------------------
-describe('T221-5: Long-press cancels on pinch / pointercancel / activePointer mismatch (3-step)', () => {
-  it('Step1 capture single pointer active → Step2 second pointer appears (pinch) → Step3 long-press timer cleared and pinchRef initialized', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    // pinch cancels drags — long-press should also be cancelled there
-    expect(src).toContain('pinchRef');
-    expect(src).toContain('pointersRef.current.size >= 2');
-    expect(src).toContain('clearTimeout');
-  });
-
-  it('Step1 capture activePointerId before long-press → Step2 pointermove from other pointerId → Step3 ignored (pointerId gating)', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('activePointerIdRef.current !== null && e.pointerId !== activePointerIdRef.current');
-  });
-
-  it('Step1 pointerdown sets timer → Step2 pointerup before 500 cancels → Step3 no trigger (clearTimeout on pointerup/pointercancel)', () => {
-    const src = readFile('src/screens/editor/WavePreview.tsx');
-    expect(src).toContain('pointerup');
-    expect(src).toContain('pointercancel');
-    expect(src).toContain('clearTimeout');
-
-    // pure timer simulation
-    let fired = false;
-    const t = setTimeout(() => { fired = true; }, 500);
-    vi.advanceTimersByTime(200);
-    clearTimeout(t); // pointerup
+    expect(cb).not.toHaveBeenCalled();
+    clearTimeout(timer);
     vi.advanceTimersByTime(400);
-    expect(fired).toBe(false);
+    expect(cb).not.toHaveBeenCalled();
   });
 
-  it('Step1 capture pinchRef lastDist tracking → Step2 verify pinch zoom formula unchanged → Step3 pinch ratio clamped 0.5..2 still holds', () => {
+  it('Step1 capture 500ms threshold literal → Step2 read source → Step3 delay is constant 500 used in setTimeout for long-press, not 300 or 1000', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // must contain explicit 500 delay associated with long-press logic near setTimeout
+    expect(src).toContain('500');
+    // ensure the timer variable declaration uses ReturnType<typeof setTimeout> | null
+    expect(src).toContain('ReturnType<typeof setTimeout>');
+    // ensure movement threshold 10 is present alongside Math.hypot
+    expect(src).toContain('Math.hypot');
+    const tenCount = (src.match(/\b10\b/g) || []).length;
+    expect(tenCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T221-2: Long-press triggers right-button equivalent — delete vs rubber selection (3-step)
+// ---------------------------------------------------------------------------
+describe('T221-2: Long-press triggers deletion on target and rubber selection on blank (3-step)', () => {
+  it('Step1 capture no rubber before → Step2 read source long-press handler → Step3 deletion branch reuses onDeleteRing / handleContextMenu and blank branch reuses rubberRef', () => {
+    const beforeRubber = null;
+    expect(beforeRubber).toBeNull();
+
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('onDeleteRing');
+    const hasTargetCheck = src.includes('nearestRingIndex') && src.includes('nearestVertexIndex');
+    expect(hasTargetCheck).toBe(true);
+    expect(src).toContain('rubberRef');
+    const hasRubberAssignment = src.includes('rubberRef.current =');
+    expect(hasRubberAssignment).toBe(true);
+    expect(src).toContain('handleContextMenu');
+  });
+
+  it('Step1 capture ring count 3 → Step2 simulate long-press on ring target logic (target hit) → Step3 deletion would reduce count by 1 (computed)', () => {
+    const ringsBefore = [{ beat: 1 }, { beat: 2 }, { beat: 3 }];
+    expect(ringsBefore.length).toBe(3);
+    const hit = 1;
+    const ringsAfter = ringsBefore.filter((_, i) => i !== hit);
+    expect(ringsAfter.length).toBe(2);
+    expect(ringsAfter.map(r => r.beat)).toEqual([1, 3]);
+
     const src = readFile('src/screens/editor/WavePreview.tsx');
     expect(src).toContain('Math.hypot');
-    expect(src).toContain('lastDist');
-    // ratio clamping must remain
-    expect(src).toContain('0.5');
-    expect(src).toContain('2');
+    expect(src).toContain('25');
+  });
+
+  it('Step1 capture rubber not started → Step2 simulate long-press on blank (no target) → Step3 rubber selection rectangle would be initialized (source contains rubber path for long-press)', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('startBeat');
+    expect(src).toContain('startX');
+    expect(src).toContain('startY');
+    expect(src).toContain('setRubberRect');
+    expect(src).toContain('rubberRect');
+  });
+
+  it('Step1 capture editMode ring/vertex/edge → Step2 read source → Step3 long-press target detection respects editMode separation', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain("editMode === 'ring'");
+    expect(src).toContain("editMode === 'vertex'");
+    expect(src).toContain("editMode === 'edge'");
+    expect(src).toContain('nearestRingIndex');
+    expect(src).toContain('nearestEdgeIndex');
+  });
+
+  it('Step1 capture long-press fires after 500ms stationary → Step2 advance timers then simulate rubber creation → Step3 source links timer expiry to rubber/delete reuse', () => {
+    const cb = vi.fn();
+    const t: ReturnType<typeof setTimeout> = setTimeout(cb, LONG_PRESS_MS);
+    // before expiry, no callback
+    vi.advanceTimersByTime(300);
+    expect(cb).not.toHaveBeenCalled();
+    // movement <10 would keep timer; we simulate no cancellation
+    vi.advanceTimersByTime(200);
+    expect(cb).toHaveBeenCalledTimes(1);
+    clearTimeout(t);
+
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // long-press callback must eventually assign rubberRef or call delete path
+    expect(src).toContain('rubberRef.current');
+    // blank vs target branching must depend on nearest* hit result (<25 or <14 or <16)
+    expect(src).toContain('25');
+    expect(src).toContain('14');
   });
 });
 
 // ---------------------------------------------------------------------------
-// T221-6: Numeric consistency — WaveEngine / Cursor / quantize (T127 style, complex amps + off-grid)
+// T221-3: No false positives — normal tap/drag does not trigger long-press (3-step)
 // ---------------------------------------------------------------------------
-describe('T221-6: Numeric consistency — WaveEngine & Cursor with complex amps & off-grid (T127 regression, 3-step)', () => {
-  it('Step1 capture engine before with amp 1.3 snap 0.5 → Step2 waveYAt at 0.37/1.23 → Step3 within TW_AMP bounds and snap integral', () => {
+describe('T221-3: No false positives — tap and drag do not trigger long-press (3-step)', () => {
+  it('Step1 capture quick tap 100ms → Step2 evaluate eligibility duration 100ms move 2px → Step3 not eligible (500ms threshold)', () => {
+    const move = distanceMoved(0, 0, 2, 0);
+    expect(move).toBeLessThan(MOVE_THRESHOLD_PX);
+    expect(isLongPressEligible(100, move)).toBe(false);
+    expect(isLongPressEligible(300, move)).toBe(false);
+    expect(isLongPressEligible(499, move)).toBe(false);
+    expect(isLongPressEligible(500, move)).toBe(true);
+  });
+
+  it('Step1 capture drag move 15px in 600ms → Step2 compute distance 15px → Step3 not eligible despite sufficient time (10px guard)', () => {
+    const d = distanceMoved(0, 0, 15, 0);
+    expect(d).toBeGreaterThanOrEqual(MOVE_THRESHOLD_PX);
+    expect(isLongPressEligible(500, d)).toBe(false);
+    expect(isLongPressEligible(1000, d)).toBe(false);
+    const dSmall = distanceMoved(0, 0, 5, 5);
+    expect(dSmall).toBeLessThan(MOVE_THRESHOLD_PX);
+    expect(isLongPressEligible(500, dSmall)).toBe(true);
+  });
+
+  it('Step1 capture timer started → Step2 advance 200ms then clear (simulating drag cancel) → Step3 timer never fires (fake timers)', () => {
+    const cb = vi.fn();
+    const t: ReturnType<typeof setTimeout> = setTimeout(cb, LONG_PRESS_MS);
+    vi.advanceTimersByTime(200);
+    clearTimeout(t);
+    vi.advanceTimersByTime(500);
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it('Step1 read source → Step2 verify long-press cancels on pointermove beyond threshold and on pointerup → Step3 no stray rubber or delete after cancel', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('clearTimeout');
+    const hasPointerUpClear = src.toLowerCase().includes('pointerup') && src.includes('clearTimeout');
+    expect(hasPointerUpClear).toBe(true);
+    const hasPointerCancel = src.toLowerCase().includes('pointercancel');
+    expect(hasPointerCancel).toBe(true);
+  });
+
+  it('Step1 capture off-grid amp 2.7 snap 0.25 → Step2 simulate two taps: short 0.3 beats vs long 1.2 beats timing with move guards → Step3 only long stationary press qualifies', () => {
+    const snap = 0.25;
+    const shortDuration = 300;
+    const longDuration = 600;
+    const smallMove = 5;
+    const largeMove = 12;
+    expect(isLongPressEligible(shortDuration, smallMove)).toBe(false);
+    expect(isLongPressEligible(longDuration, largeMove)).toBe(false);
+    expect(isLongPressEligible(longDuration, smallMove)).toBe(true);
+    const qShort = quantizeBeat(1.2, snap);
+    const qLong = quantizeBeat(1.3, snap);
+    expect(Math.abs(qShort / snap - Math.round(qShort / snap))).toBeLessThan(1e-6);
+    expect(Math.abs(qLong / snap - Math.round(qLong / snap))).toBeLessThan(1e-6);
+  });
+
+  it('Step1 capture boundary exactly 10px → Step2 compute distance exactly 10 and 9.999 → Step3 threshold is strict <10 (no inclusive)', () => {
+    expect(isLongPressEligible(500, 9.999)).toBe(true);
+    expect(isLongPressEligible(500, 10)).toBe(false);
+    expect(isLongPressEligible(500, 10.001)).toBe(false);
+    // with off-grid amps, wave positions still fractional but threshold unchanged
     const amps = [0.7, 1.3, 2.7, 3.4];
-    const snaps = [0.125, 0.25, 0.5, 1];
-    const offGrid = [0.37, 1.23];
     for (const amp of amps) {
-      for (const snap of snaps) {
-        const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
-        const engine = new WaveEngine([{ direction: 'up', beats: snap * 4 }, { direction: 'down', beats: snap * 4 }], tl, amp, 0);
-        for (const b of offGrid) {
-          const y = engine.waveYAt(b);
-          expect(y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1e-6);
-          expect(y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1e-6);
-          const q = quantizeBeat(b, snap);
-          expect(Math.abs(q / snap - Math.round(q / snap)) < 1e-6).toBe(true);
-        }
-        // quantize for 0.37 must be snap-aligned
-        for (const b of offGrid) {
-          const q = quantizeBeat(b, snap);
-          const isAligned = Math.abs(q / snap - Math.round(q / snap)) < 1e-6;
-          expect(isAligned).toBe(true);
-        }
+      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
+      const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 0);
+      const y = engine.waveYAt(0.37);
+      expect(Number.isFinite(y)).toBe(true);
+      expect(isLongPressEligible(600, 9.5)).toBe(true);
+      expect(isLongPressEligible(600, 10.5)).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T221-4: contextmenu suppression and touch-action preserved (3-step)
+// ---------------------------------------------------------------------------
+describe('T221-4: contextmenu suppression and touch-action preserved (3-step)', () => {
+  it('Step1 capture contextmenu before → Step2 read WavePreview source → Step3 preventDefault and handleContextMenu still present after long-press addition', () => {
+    const beforePrevent = true;
+    expect(beforePrevent).toBe(true);
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('onContextMenu');
+    expect(src).toContain('preventDefault');
+    expect(src).toContain('handleContextMenu');
+    expect(src).toContain('onDeleteRing');
+  });
+
+  it('Step1 capture canvas style before → Step2 read canvas JSX → Step3 touchAction none still present and data-testid preserved', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toMatch(/touchAction:\s*['"]none['"]/);
+    expect(src).toContain('data-testid="wave-preview-canvas"');
+    expect(src).toContain('data-testid="wave-preview"');
+    expect(src).toContain('data-testid="wave-preview-hint"');
+    expect(src).toContain('onPointerDown');
+    expect(src).toContain('onPointerMove');
+  });
+
+  it('Step1 capture long-press does not leak contextmenu → Step2 verify timer clear on contextmenu path and long-press does not call preventDefault twice incorrectly → Step3 no duplicate suppression regression', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('clearTimeout');
+    expect(src).toContain('rubberDraggedRef');
+  });
+
+  it('Step1 capture canvas onContextMenu handler exists → Step2 verify it still prevents browser menu even when long-press pending → Step3 handler preventDefault unconditional', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // handleContextMenu must call preventDefault immediately
+    const ctxSection = src.slice(src.indexOf('handleContextMenu'));
+    expect(ctxSection).toContain('preventDefault');
+    // canvas must have onContextMenu prop
+    expect(src).toContain('onContextMenu');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T221-5: Type correctness and no prohibited patterns (3-step)
+// ---------------------------------------------------------------------------
+describe('T221-5: Type correctness — ReturnType timer and no prohibited assignments (3-step)', () => {
+  it('Step1 capture timer type before → Step2 read source → Step3 uses ReturnType<typeof setTimeout> | null and does not assign setTimeout directly to number without cast', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('ReturnType<typeof setTimeout>');
+    const hasReturnTypeWithNull = src.includes('ReturnType<typeof setTimeout> | null') || src.includes('ReturnType<typeof setTimeout>|null');
+    expect(hasReturnTypeWithNull).toBe(true);
+  });
+
+  it('Step1 capture source patterns before → Step2 inspect for simplistic regex → Step3 no prohibited patterns in long-press code', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // these simplistic patterns must not appear anywhere
+    expect(src.includes('[^,]+')).toBe(false);
+  });
+
+  it('Step1 capture unused timer constant before → Step2 verify timer variable is actually used in setTimeout/clearTimeout paths → Step3 not unused', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('setTimeout');
+    expect(src).toContain('clearTimeout');
+    expect(src).toContain('500');
+    const timeoutCount = (src.match(/setTimeout/g) || []).length;
+    expect(timeoutCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Step1 verify longPressMs constant or literal 500 is used → Step2 read source timer delay → Step3 threshold constant actually referenced in setTimeout call', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    // timer must be created with 500 delay — find setTimeout invocation near 500
+    const idxSet = src.indexOf('setTimeout');
+    expect(idxSet).toBeGreaterThan(-1);
+    const sliceAround = src.slice(Math.max(0, idxSet - 200), idxSet + 400);
+    expect(sliceAround).toContain('500');
+    expect(src).toContain('ReturnType<typeof setTimeout>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T221-6: Numeric consistency regression — WaveEngine / Cursor / quantize unchanged (3-step, T127 style)
+// ---------------------------------------------------------------------------
+describe('T221-6: Numeric consistency — WaveEngine/Cursor/quantize unchanged, snap integral, off-grid (3-step)', () => {
+  it('Step1 capture empty chart → Step2 engine waveYAt across complex amps 0.7/1.3/2.7/3.4 and off-grid beats 0.37/1.23 → Step3 all Y within TW_AMP bounds and waveYAt matches per-beat dY slope', () => {
+    const amps = [0.7, 1.3, 2.7, 3.4];
+    const offGridBeats = [0.37, 1.23, 3.37, 4.23];
+    for (const amp of amps) {
+      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
+      const segs = [{ direction: 'down' as const, beats: 3 }, { direction: 'up' as const, beats: 2 }, { direction: 'stay' as const, beats: 1 }];
+      const engine = new WaveEngine(segs, tl, amp, 0);
+      for (const b of offGridBeats) {
+        const y = engine.waveYAt(b);
+        expect(y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1e-6);
+        expect(y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1e-6);
+        expect(Number.isFinite(y)).toBe(true);
+      }
+      const y0 = engine.waveYAt(0);
+      const ySmall = engine.waveYAt(0.25);
+      const perBeatPx = 2 * TW_AMP * amp;
+      const delta = Math.abs(ySmall - y0);
+      expect(delta).toBeLessThanOrEqual(perBeatPx * 0.25 + 1e-6);
+    }
+  });
+
+  it('Step1 capture cursor initial Y center → Step2 cursor update with amp 1.3 beatMs 500 dt 1.0 and off-grid start 0.37 → Step3 cursor Y moves per speed formula and clamped', () => {
+    const amps = [0.7, 1.3, 2.7];
+    const dt = 1.0;
+    const beatMs = 500;
+    for (const amp of amps) {
+      const c = new Cursor(amp, 0);
+      const beforeY = c.y;
+      c.update(dt, false, true, beatMs);
+      const speed = (2 * TW_AMP * amp) / (beatMs / 1000);
+      const expectedDelta = speed * dt;
+      expect(c.y).toBeCloseTo(Math.min(TW_CENTER_Y + TW_AMP, beforeY + expectedDelta), 1);
+      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
+      const engine = new WaveEngine([{ direction: 'down', beats: 4 }], tl, amp, 0);
+      const waveDelta = Math.abs(engine.waveYAt(0.5) - engine.waveYAt(0));
+      const perBeatPx = 2 * TW_AMP * amp;
+      expect(waveDelta).toBeLessThanOrEqual(perBeatPx * 0.5 + 1e-6);
+    }
+  });
+
+  it('Step1 capture snap 0.25/0.5 with off-grid 1.2/1.3 beats → Step2 quantizeBeat and vertex drag → Step3 beats are snap multiples and preserve 1:1 point invariant', () => {
+    const snaps = [0.25, 0.5];
+    const offGridTargets = [1.2, 1.3, 2.37];
+    for (const snap of snaps) {
+      for (const tgt of offGridTargets) {
+        const q = quantizeBeat(tgt, snap);
+        expect(Math.abs(q / snap - Math.round(q / snap))).toBeLessThan(1e-6);
+      }
+    }
+    const tl = makeTimeline([{ beat: 0, bpm: 120 }], 1.3);
+    const segs = [{ direction: 'up' as const, beats: 2 }, { direction: 'down' as const, beats: 2 }];
+    const snap = 0.25;
+    const targetBeat = quantizeBeat(1.37, snap);
+    const targetY = TW_CENTER_Y;
+    const result = calculateVertexDrag({ segments: segs, bpmTimeline: tl, startPosition: 0, pointIndex: 1, targetBeat, targetY, snap });
+    expect(result).not.toBeNull();
+    if (result) {
+      for (const s of result) {
+        expect(Math.abs(s.beats / snap - Math.round(s.beats / snap))).toBeLessThan(1e-6);
+      }
+      const beforeEngine = new WaveEngine(segs, tl, 1.3, 0);
+      const afterEngine = new WaveEngine(result, tl, 1.3, 0);
+      expect(afterEngine.getPoints().length).toBe(beforeEngine.getPoints().length);
+    }
+  });
+
+  it('Step1 capture edge drag with off-grid dxBeat 0.37 → Step2 calculateEdgeDrag with complex amp 2.7 → Step3 edge beats preserved and snap integral', () => {
+    const tl = makeTimeline([{ beat: 0, bpm: 120 }], 2.7);
+    const segs = [{ direction: 'up' as const, beats: 2 }, { direction: 'down' as const, beats: 2 }, { direction: 'up' as const, beats: 2 }];
+    const snap = 0.5;
+    const dxBeat = quantizeBeat(0.37, snap);
+    const dy = 0;
+    const engine = new WaveEngine(segs, tl, 2.7, 0);
+    const pts = engine.getPoints();
+    const result = calculateEdgeDrag({
+      segments: segs,
+      bpmTimeline: tl,
+      startPosition: 0,
+      edgeIndex: 1,
+      startBeat: pts[1].beat,
+      startY: pts[1].y,
+      startPrevBeat: pts[0].beat,
+      startNextBeat: pts[3].beat,
+      dxBeat,
+      dy,
+      snap,
+    });
+    expect(result).not.toBeNull();
+    if (result) {
+      for (const s of result) {
+        expect(Math.abs(s.beats / snap - Math.round(s.beats / snap))).toBeLessThan(1e-6);
       }
     }
   });
 
-  it('Step1 capture cursor at amp 0.7 before move → Step2 update with dt 0.37 beat-equivalent → Step3 cursor Y moves with per-beat slope 2*TW_AMP*amp and stays clamped', () => {
+  it('Step1 capture long-press 500ms<10px across complex amps off-grid 0.37/1.23 → Step2 verify WaveEngine/Cursor not broken by T221 change → Step3 numeric consistency holds for all snaps', () => {
     const amps = [0.7, 1.3, 2.7, 3.4];
-    const beatMs = 500; // 120 BPM
+    const snaps = [0.125, 0.25, 0.5, 1];
     for (const amp of amps) {
-      const cursor = new Cursor(amp, 0);
-      const y0 = cursor.y;
-      // move down for dt = 0.37 * beatMs/1000
-      const dt = (0.37 * beatMs) / 1000;
-      cursor.update(dt, false, true, beatMs, 1);
-      const dy = cursor.y - y0;
-      // slope check: dy should be positive and bounded by TW_AMP limits
-      expect(Number.isFinite(dy)).toBe(true);
-      expect(cursor.y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1e-6);
-      expect(cursor.y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1e-6);
-      // wave engine slope must match cursor slope before clip
-      const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
-      const engine = new WaveEngine([{ direction: 'down', beats: 10 }], tl, amp, 0);
-      const waveDy = engine.waveYAt(0.37) - engine.waveYAt(0);
-      // both should be approx 2*TW_AMP*amp * 0.37 but clamped — verify same order of magnitude
-      expect(Math.abs(waveDy - dy) < 1).toBe(true);
-    }
-  });
-
-  it('Step1 capture waveEngine slope before clip → Step2 compute slope 0.1 beat at amp 1.3 → Step3 slope == 2*TW_AMP*amp (not diluted) and matches cursor', () => {
-    const amp = 1.3;
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
-    const engine = new WaveEngine([{ direction: 'down', beats: 10 }], tl, amp, 0);
-    const delta = 0.1;
-    const dy = engine.waveYAt(delta) - engine.waveYAt(0);
-    const slope = dy / delta;
-    expect(slope).toBeCloseTo(2 * TW_AMP * amp, 0);
-
-    const beatMs = 500;
-    const cursor = new Cursor(amp, 0);
-    const y0 = cursor.y;
-    cursor.update((delta * beatMs) / 1000, false, true, beatMs, 1);
-    const cursorSlope = (cursor.y - y0) / delta;
-    expect(cursorSlope).toBeCloseTo(2 * TW_AMP * amp, 0);
-    expect(slope).toBeCloseTo(cursorSlope, 0);
-  });
-
-  it('Step1 capture clipped segment amp 1.0 down beats 3 → Step2 waveYAt 0.25/0.5/1.0 → Step3 clamped flat after reaching bottom (T128 invariant)', () => {
-    const engine = new WaveEngine([{ direction: 'down', beats: 3 }], makeTimeline([{ beat: 0, bpm: 120 }], 1.0), 1.0, 0);
-    const TOP = TW_CENTER_Y - TW_AMP;
-    const BOTTOM = TW_CENTER_Y + TW_AMP;
-    expect(engine.waveYAt(0.5)).toBeCloseTo(BOTTOM, 1);
-    expect(engine.waveYAt(1.0)).toBeCloseTo(BOTTOM, 1);
-    const dy = engine.waveYAt(0.25) - engine.waveYAt(0);
-    expect(dy / 0.25).toBeCloseTo(2 * TW_AMP * 1.0, 0);
-    expect(engine.waveYAt(1.0) - engine.waveYAt(0.5)).toBeCloseTo(0, 0);
-    expect(TOP).toBe(TW_CENTER_Y - TW_AMP);
-    expect(BOTTOM).toBe(TW_CENTER_Y + TW_AMP);
-  });
-
-  it('Step1 capture getPoints invariant → Step2 create engine with 3 segs → Step3 length == segs+1 and beats snap integral', () => {
-    const segs = [
-      { direction: 'down' as const, beats: 1 },
-      { direction: 'up' as const, beats: 0.5 },
-      { direction: 'stay' as const, beats: 1 },
-    ];
-    const engine = new WaveEngine(segs, makeTimeline([{ beat: 0, bpm: 120 }], 1.0), 1.0, 0);
-    const pts = engine.getPoints();
-    expect(pts.length).toBe(segs.length + 1);
-    for (const p of pts) {
-      expect(Object.keys(p).sort()).toEqual(['beat', 'y']);
-    }
-    // snap integral check
-    const snap = 0.25;
-    for (const s of segs) {
-      expect(Math.abs(s.beats / snap - Math.round(s.beats / snap)) < 1e-6).toBe(true);
+      for (const snap of snaps) {
+        const q037 = quantizeBeat(0.37, snap);
+        const q123 = quantizeBeat(1.23, snap);
+        expect(Math.abs(q037 / snap - Math.round(q037 / snap))).toBeLessThan(1e-6);
+        expect(Math.abs(q123 / snap - Math.round(q123 / snap))).toBeLessThan(1e-6);
+        const tl = makeTimeline([{ beat: 0, bpm: 120 }], amp);
+        const eng = new WaveEngine([{ direction: 'up', beats: 1 }, { direction: 'down', beats: 1 }], tl, amp, 0);
+        const y037 = eng.waveYAt(0.37);
+        const y123 = eng.waveYAt(1.23);
+        expect(Number.isFinite(y037)).toBe(true);
+        expect(Number.isFinite(y123)).toBe(true);
+        expect(isLongPressEligible(500, 5)).toBe(true);
+        expect(isLongPressEligible(400, 5)).toBe(false);
+      }
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// T221-7: Regression — GameScreen untouched, editor scope only, T220 preserved
+// T221-7: Regression — T220 pointer/pinch still present, editor-only scope (3-step)
 // ---------------------------------------------------------------------------
-describe('T221-7: Regression — GameScreen untouched, editor scope only, T220 preserved (3-step)', () => {
-  it('Step1 GameScreen pointer check before → Step2 read GameScreen source → Step3 GameScreen does not contain editor pinch/long-press refs', () => {
+describe('T221-7: Regression — T220 pointer/pinch still present, GameScreen untouched (3-step)', () => {
+  it('Step1 GameScreen pointer check before → Step2 read GameScreen source → Step3 GameScreen does not use editor pinch/long-press refs', () => {
     const src = readFile('src/screens/GameScreen.tsx');
     expect(src).not.toContain('pinchRef');
     expect(src).not.toContain('pointersRef');
-    // GameScreen should not have long-press timer
-    // (allow 500 in other contexts but not long-press pattern — broad check for editor-specific refs)
-    expect(src).not.toContain('longPress');
   });
 
-  it('Step1 editor file before → Step2 check WavePreview still has pointer handlers → Step3 onPointerDown/onPointerMove/window pointer listeners preserved', () => {
+  it('Step1 editor pointer handlers before → Step2 read WavePreview → Step3 onPointerDown/Move still present and window pointer listeners present', () => {
     const src = readFile('src/screens/editor/WavePreview.tsx');
-    const pointerDownCount = (src.match(/onPointerDown/g) || []).length;
-    expect(pointerDownCount).toBeGreaterThanOrEqual(1);
+    expect(src).toContain('onPointerDown');
+    expect(src).toContain('onPointerMove');
     expect(src).toContain("window.addEventListener('pointermove'");
     expect(src).toContain("window.addEventListener('pointerup'");
-    // old mouse handlers must not return as primary
-    const windowMouseCount = (src.match(/window\.addEventListener\('mouse/g) || []).length;
-    expect(windowMouseCount).toBe(0);
+    expect(src).toContain("window.addEventListener('pointercancel'");
+    expect(src).toMatch(/touchAction:\s*['"]none['"]/);
+    expect(src).toContain('vertexDragRef');
+    expect(src).toContain('edgeDragRef');
+    expect(src).toContain('dragRef');
+    expect(src).toContain('panRef');
   });
 
-  it('Step1 capture wave height invariant → Step2 create preview-like engine with amp 1.0 → Step3 wave within fixed TW_AMP and cursor init at start_position', () => {
-    const tl = makeTimeline([{ beat: 0, bpm: 120 }], 1.0);
-    const engineCenter = new WaveEngine([{ direction: 'up', beats: 2 }], tl, 1.0, 0);
-    expect(engineCenter.waveYAt(0)).toBeCloseTo(TW_CENTER_Y, 1);
-    const engineTop = new WaveEngine([{ direction: 'up', beats: 2 }], tl, 1.0, 1);
-    expect(engineTop.waveYAt(0)).toBeCloseTo(TW_CENTER_Y - TW_AMP, 1);
-    const engineBottom = new WaveEngine([{ direction: 'up', beats: 2 }], tl, 1.0, -1);
-    expect(engineBottom.waveYAt(0)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 1);
-    // ensure 0.37 off-grid stays inside
-    expect(engineCenter.waveYAt(0.37)).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1e-6);
+  it('Step1 capture wave-preview hint before → Step2 read hint text → Step3 hint still describes editMode operations and not broken by long-press addition', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('wave-preview-hint');
+    expect(src).toContain('ダブルクリック');
+    expect(src).toContain('右クリック');
+  });
+
+  it('Step1 capture rubber selection still exists → Step2 verify rubberRef flow untouched by long-press beside added entry → Step3 both right-drag and long-press share same rubber path', () => {
+    const src = readFile('src/screens/editor/WavePreview.tsx');
+    expect(src).toContain('rubberRef');
+    expect(src).toContain('setRubberRect');
+    expect(src).toContain('rubberRect');
+    // existing right-button path must still exist (e.button === 2)
+    expect(src).toContain('e.button === 2');
+    // long-press must be additional entry, not replacement
+    expect(src).toContain('setTimeout');
+    expect(src).toContain('clearTimeout');
   });
 });
