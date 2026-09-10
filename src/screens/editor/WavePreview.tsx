@@ -27,9 +27,6 @@ const BOTTOM_Y = TW_CENTER_Y + TW_AMP
 // fixed base amplitude (matching the editor) so editing the main #amplitude input
 // does not immediately change the wave.
 const EDITOR_BASE_AMP = 1.0
-// T221: long press duration and movement threshold for touch-to-right-click emulation
-const LONG_PRESS_MS = 500
-const LONG_PRESS_THRESHOLD = 10
 
 export interface WaveView {
   startBeat: number
@@ -133,6 +130,9 @@ export default function WavePreview({
   const multiDragRef = useRef<{ startBeat: number; startY: number; origRingBeats?: number[]; origSegIndices?: number[]; origVertices?: number[] } | null>(null)
   const [multiDragSegments, setMultiDragSegments] = useState<Segment[] | null>(null)
   const [ringDragOffset, setRingDragOffset] = useState(0)
+  // T221: long press duration and movement threshold for touch-to-right-click emulation
+  const LONG_PRESS_MS = 500
+  const LONG_PRESS_THRESHOLD = 10
   // T221: long press timer for touch-to-right-click emulation
   const longPressRef = useRef<{ timerId: ReturnType<typeof setTimeout> | null; startX: number; startY: number }>({ timerId: null, startX: 0, startY: 0 })
   const onViewChangeRef = useRef(onViewChange)
@@ -1037,6 +1037,10 @@ export default function WavePreview({
       edgeDragRef.current = null
       dragRef.current = null
       panRef.current = null
+      if (longPressRef.current.timerId !== null) {
+        clearTimeout(longPressRef.current.timerId)
+        longPressRef.current.timerId = null
+      }
       rubberRef.current = null
       multiDragRef.current = null
       dragPreviewRef.current = null
@@ -1126,11 +1130,40 @@ export default function WavePreview({
 
     // T221: long press on touch = right-button equivalent (delete or rubber-band start)
     if (e.button === 0) {
+      panRef.current = null
       longPressRef.current.timerId = setTimeout(() => {
-        // Fire context menu at the original press location
-        const fakeEvent = { clientX: longPressRef.current.startX, clientY: longPressRef.current.startY } as ReactMouseEvent<HTMLCanvasElement>
-        handleContextMenu(fakeEvent)
+        vertexDragRef.current = null
+        vertexCreateRef.current = null
+        edgeDragRef.current = null
+        dragRef.current = null
+        multiDragRef.current = null
+        dragPreviewRef.current = null
+        setDragPreview(null)
+        setMultiDragSegments(null)
+        setRingDragOffset(0)
         longPressRef.current.timerId = null
+        const fakeX = longPressRef.current.startX
+        const fakeY = longPressRef.current.startY
+        const ringHit = nearestRingIndex(fakeX, fakeY)
+        const vHit = nearestVertexIndex(fakeX, fakeY)
+        const eHit = nearestEdgeIndex(fakeX, fakeY)
+        if (ringHit >= 0 || vHit >= 0 || eHit >= 0) {
+          const fakeEvent = { clientX: fakeX, clientY: fakeY, preventDefault: () => {} } as ReactMouseEvent<HTMLCanvasElement>
+          handleContextMenu(fakeEvent)
+        } else {
+          const c = canvasRef.current
+          if (c) {
+            const cr = c.getBoundingClientRect()
+            rubberDraggedRef.current = false
+            rubberRef.current = {
+              startBeat: xToBeatLocal(fakeX - cr.left, cr.width),
+              startX: fakeX - cr.left,
+              startY: fakeY - cr.top,
+              mode: editMode,
+            }
+            setRubberRect({ x: fakeX - cr.left, y: fakeY - cr.top, w: 0, h: 0 })
+          }
+        }
       }, LONG_PRESS_MS)
       longPressRef.current.startX = e.nativeEvent.clientX
       longPressRef.current.startY = e.nativeEvent.clientY
