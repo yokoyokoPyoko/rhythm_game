@@ -1469,5 +1469,50 @@
     ],
     "type": "fix",
     "test": true
+  },
+  {
+    "id": "T220",
+    "desc": "エディタCanvasのポインターイベント統一＋ピンチズーム。要求: エディタのみスマホ対応の第1段階としてCanvas操作をタッチで動かす。ゲームプレイは対象外。修正（src/screens/editor/WavePreview.tsxのみ）: mousedown／mousemove／mouseup（windowリスナ含む）→pointerdown／pointermove／pointerup＋pointercancelに置換しpointerIdで単一ポインタ追跡。既存ドラッグロジック流用。canvasにtouch-action:none付与。2ポインタ同時検出時はピンチズーム（既存ホイール計算式流用）。ホバーはタップ選択で代替、ダブルタップ追加維持。完了条件: (1)指1本でドラッグ移動とパンができる (2)ピンチでズームできる。PCマウス操作は従来通り (3)tsc --noEmit。",
+    "depends_on": [
+      "T219"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T221",
+    "desc": "長押し＝右ボタン相当（削除・範囲選択のタッチ代替）。要求: 右ドラッグ選択・右クリック削除のタッチ代替として長押しを導入。修正（src/screens/editor/WavePreview.tsxのみ。T220の後）: 500ms静止（移動<10px）で右ボタン押下と同等扱い。削除対象上なら現行右クリックと同一の削除動作、空白なら範囲選択開始（既存rubberRef・削除処理を流用し発火元だけ増やす）。contextmenu抑止は維持。完了条件: (1)長押しで右クリック削除・範囲選択開始ができる (2)通常タップ・ドラッグと誤発火なし（500ms・10px閾値） (3)tsc --noEmit。",
+    "depends_on": [
+      "T220"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T222",
+    "desc": "録音モード用タッチボタン（Space・↑↓相当）。要求: 録音モードはキー操作専用のためスマホ用簡易ボタンを作る。修正（src/screens/EditorScreen.tsxのみ）: 録音中（mode==='record'）のみ表示するボタン群を追加。Space相当（タッチ開始＝押下・離す＝離上、ホールド対応）、↑・↓相当（タッチ中＝押下状態）。既存keysRef（up／down／space）と同一フラグを操作するため録音ロジック・segmentize・リングスタンプ側の変更は不要。完了条件: (1)タッチボタンで録音（軌跡記録・リングスタンプ・ホールド）ができる (2)PCのキー録音が従来通り (3)tsc --noEmit。",
+    "depends_on": [
+      "T221"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T223",
+    "desc": "エディタのレスポンシブレイアウト＋タップ領域拡大。要求: 狭い画面でエディタが崩れるため縦積み化とタップ領域拡大を行う。修正（src/index.cssのみ。必要ならEditorScreen.tsxに最小のクラス付与）: 狭幅時（例768px以下）で.editor-bodyを縦積みにしサイドバーを上・プレビューを下に配置。サイドバーリサイザー非表示。@media(pointer:coarse)で小型ボタン（−・削除等）のタップ領域を44px相当に拡大、数値入力フォントを16px以上に（iOS自動ズーム防止）。ダイアログ（SectionAddDialog）が狭幅に収まるよう調整。完了条件: (1)狭幅で縦積み表示され操作不能なはみ出しなし (2)小型ボタンが指で押せる大きさ (3)tsc --noEmit。",
+    "depends_on": [
+      "T222"
+    ],
+    "type": "feat",
+    "test": true
+  },
+  {
+    "id": "T224",
+    "desc": "エディタタッチ対応の結合・回帰。要求: T220〜T223の結合仕上げ。修正: Playwrightのタッチコンテキスト（hasTouch:true）でタップ選択・1本指ドラッグ頂点移動・長押し削除・録音ボタンの押下／離上・縦積みレイアウトの表示崩れなしを確認。既存のmouse系spec・unitテストの回帰なし（PC操作の挙動不変）。完了条件: (1)上記タッチ操作が破綻なく動く (2)既存テストがすべて通過 (3)tsc --noEmit。",
+    "depends_on": [
+      "T223"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
