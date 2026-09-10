@@ -3,8 +3,18 @@ import { parseChartText } from '../chart/loader';
 import { getBasename } from '../audio/AudioCache';
 import type { Chart, SongEntry, ZipEntry } from '../types';
 
+export interface ZipPair {
+  tomlPath: string;
+  audioPath: string;
+  folder: string;
+  chart: Chart;
+  tomlText: string;
+  audioBytes: Uint8Array;
+  audioName: string;
+}
+
 export interface ZipPairResult {
-  pairs: Array<{ tomlPath: string; audioPath: string; folder: string; chart: Chart; tomlText: string }>;
+  pairs: ZipPair[];
   skipped: string[];
   duplicates: string[];
 }
@@ -130,7 +140,7 @@ export function pairTomlAudioInFolder(
       });
 
       if (matchEntry) {
-        const [audioName] = matchEntry;
+        const [audioName, audioBytes] = matchEntry;
         const fullAudioPath = dir ? `${dir}/${audioName}` : audioName;
         pairs.push({
           tomlPath: dir ? `${dir}/${tomlName}` : tomlName,
@@ -138,6 +148,8 @@ export function pairTomlAudioInFolder(
           folder: dir,
           chart: parsed,
           tomlText: text,
+          audioBytes,
+          audioName,
         });
         usedAudioPaths.add(fullAudioPath);
         matched = true;
@@ -153,7 +165,7 @@ export function pairTomlAudioInFolder(
       });
 
       if (unusedAudio) {
-        const [audioName] = unusedAudio;
+        const [audioName, audioBytes] = unusedAudio;
         const fullAudioPath = dir ? `${dir}/${audioName}` : audioName;
         pairs.push({
           tomlPath: dir ? `${dir}/${tomlName}` : tomlName,
@@ -161,6 +173,8 @@ export function pairTomlAudioInFolder(
           folder: dir,
           chart: parsed,
           tomlText: text,
+          audioBytes,
+          audioName,
         });
         usedAudioPaths.add(fullAudioPath);
         matched = true;
@@ -238,12 +252,23 @@ export async function handleZipFile(
 
   const result = pairZipEntries(entries);
 
+  // Empty audio bytes → pair not established (reported, never stored)
+  const pairs: ZipPair[] = [];
+  const skipped: string[] = [...result.skipped];
+  for (const pair of result.pairs) {
+    if (pair.audioBytes && pair.audioBytes.length > 0) {
+      pairs.push(pair);
+    } else {
+      skipped.push(`${pair.tomlPath} (音声ファイル空)`);
+    }
+  }
+
   const baseTime = Date.now();
   const newSongs: SongEntry[] = [];
 
-  for (let i = 0; i < result.pairs.length; i++) {
-    const pair = result.pairs[i];
-    const id = `custom-${baseTime}-${i}`;
+  for (let i = 0; i < pairs.length; i++) {
+    const pair = pairs[i];
+    const id = generateCustomIds(baseTime, pairs.length)[i];
     const title = pair.chart.title || pair.tomlPath.replace(/\.toml$/i, '') || 'Untitled';
 
     const newEntry: SongEntry = {
@@ -256,5 +281,5 @@ export async function handleZipFile(
     newSongs.push(newEntry);
   }
 
-  return { pairs: result.pairs, skipped: result.skipped, newSongs };
+  return { pairs, skipped, newSongs };
 }

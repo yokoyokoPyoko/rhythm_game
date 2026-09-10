@@ -156,13 +156,13 @@ beat = 8.0
         return
       }
 
-      // Persist charts and audio to IndexedDB
+      // Persist charts and audio to IndexedDB using unified IDs from result.newSongs
       for (let i = 0; i < result.pairs.length; i++) {
         const pair = result.pairs[i]
-        const id = `custom-${Date.now()}-${i}`
+        const id = result.newSongs[i]?.id || `custom-${Date.now()}-${i}`
         const title = pair.chart.title || pair.tomlPath.replace(/\.toml$/i, '') || 'Untitled'
         const toml = chartToToml(pair.chart)
-        const audioId = pair.audioPath ? id : null
+        const audioId = pair.audioBytes && pair.audioBytes.length > 0 ? id : null
 
         ChartCache.set(id, pair.chart)
         ChartCache.set(pair.tomlPath, pair.chart)
@@ -183,17 +183,15 @@ beat = 8.0
           }
         })()
 
-        if (pair.audioPath) {
-          // Find the audio bytes from the zip entries
-          // This is a simplified version - in practice we'd need to pass the audio bytes through
-          const audioBytes = new Uint8Array([]) // placeholder - actual implementation would extract from zip
-          const audioBaseName = getBasename(pair.audioPath)
+        // Empty audio bytes → pair not established, report and do not store
+        if (pair.audioBytes && pair.audioBytes.length > 0) {
+          const audioBaseName = getBasename(pair.audioName || pair.audioPath)
           void (async () => {
             try {
               const mgr = AudioManager.getInstance()
               await mgr.ensure()
-              const audioFileObj = new File([audioBytes], audioBaseName, {
-                type: `audio/${pair.audioPath.split('.').pop() || 'octet-stream'}`,
+              const audioFileObj = new File([pair.audioBytes as BlobPart], audioBaseName, {
+                type: `audio/${(pair.audioPath || audioBaseName).split('.').pop() || 'octet-stream'}`,
               })
               const buf = await loadAudioFromFile(audioFileObj, mgr.ctx)
               if (buf) {
@@ -203,13 +201,15 @@ beat = 8.0
                   id,
                   name: audioBaseName,
                   mime: audioFileObj.type,
-                  bytes: audioBytes,
+                  bytes: pair.audioBytes,
                 })
               }
             } catch (e) {
               console.warn('[SelectScreen] Failed to decode zip audio', e)
             }
           })()
+        } else {
+          setImportError(`音声ファイルが空のためスキップ: ${pair.tomlPath}（空バイトは保存されません）`)
         }
       }
 
