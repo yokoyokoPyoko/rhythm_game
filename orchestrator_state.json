@@ -2024,7 +2024,7 @@
         "qa": "ses_f76f26dafffey7dACE50kisT3Q",
         "coder": "ses_f76f0bd3effeZ5MVgTGuQfaduF"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
