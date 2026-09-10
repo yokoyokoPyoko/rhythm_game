@@ -1998,7 +1998,7 @@
         "qa": "ses_f773fdeb5ffe6fVlYYbGG2mCqv",
         "coder": "ses_f773db266ffem9P9yM7sSEt1aU"
       },
-      "gate_b_golden": false
+      "gate_b_golden": true
     }
   },
   "consecutive_no_action": 0
