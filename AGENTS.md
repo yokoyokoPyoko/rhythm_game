@@ -2948,3 +2948,28 @@ const minorStep =
 1. zip投入→プレイで音声付き再生されること（IndexedDBの音声バイト長が実ファイルサイズと一致すること）。
 2. カードIDとキャッシュ／IDBのキーが一致し、ミリ秒境界を跨いでも譜面が見つかること。
 3. `tsc --noEmit`、T214・T194〜T196の回帰なし。
+
+---
+
+### [T226] ホールドリングのチュートリアル追加＋波形譜面の先頭1拍削除
+
+**要求（ユーザー確定）**:
+- ホールドリングのチュートリアルを作る。
+- 波形チュートリアル譜面の手前の1拍（導入stay）が余分なのでなくす。
+
+**修正**:
+- `src/game/tutorial.ts`:
+  - 波形譜面から先頭 `{stay, 1}` を除去 → `up/down/up/down` の4拍に（`start_position: -1.0` は維持）。`TUTORIAL_BEATS_A` 5→4、指示文のbeat 5エントリ→4。
+  - 新規 `generateHoldPracticeChart()`：BPM90、`stay` 波形、ホールド2個（head=1拍・4拍、`duration = 2` 拍）。`start_position: 0.0`。指示文はbeat 0「Spaceを押し続けて、テールのタイミングで離そう！」（＋完了時ねぎらい）。
+  - `TutorialStage` に `'hold'` を追加。
+- `src/screens/GameScreen.tsx`:
+  - フェーズ `'tutorial-hold'`＋`startHoldStage()`（`startRingStage` と同型：時計リセット・暗転待機・カーソルスナップ・Space確定ゲート）を新設。遷移はwave→ring→hold→main。hold終了（最終テール＋余白）で本編へ。
+  - `wavePracticeEndRef` の `beatToMs(5)`→`(4)`。
+  - 確定用Space押下がhead（1拍先）に誤ヒットしないことは窓幅で保証される。成否不問・時間で自動進行、スキップ常時表示は従来通り。
+  - `judgeHit`・ホールド判定ロジック・スコアは不変。
+- テスト：`.gateb_T211.test.ts`・`dynamic.test.ts` の波形内容アサート（5セグ・先頭stay）を4セグ構成に更新。hold譜面の構造・3段階遷移・既存挙動の回帰確認。
+
+**完了条件**:
+1. 波形練習が4拍（導入なし）で動作し、リング→ホールド→本編の順に自動進行すること。
+2. ホールドステージで押し続け→テール離しの操作が体験できること（判定ロジックは既存のまま）。
+3. `tsc --noEmit` エラーなし。
