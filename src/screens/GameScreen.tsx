@@ -18,7 +18,9 @@ import { ScoreManager, type ScoreStats } from '../game/score'
 import {
   generateWavePracticeChart,
   generateRingPracticeChart,
+  generateHoldPracticeChart,
   getTutorialInstruction,
+  TUTORIAL_HOLD_END_BEAT,
   type TutorialStage,
 } from '../game/tutorial'
 import { WaveEngine } from '../game/waveEngine'
@@ -65,6 +67,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   const ringPracticeTimelineRef = useRef<BpmTimeline | null>(null)
   const ringPracticeWaveRef = useRef<WaveEngine | null>(null)
   const ringPracticeEndRef = useRef(0)
+  const holdPracticeChartRef = useRef<Chart | null>(null)
+  const holdPracticeTimelineRef = useRef<BpmTimeline | null>(null)
+  const holdPracticeWaveRef = useRef<WaveEngine | null>(null)
+  const holdPracticeEndRef = useRef(0)
   const tutorialStageRef = useRef<TutorialStage>('wave')
   // T211: key-press confirmation — the clock only starts after the first
   // ArrowUp/ArrowDown (stage A) or Space (stage B) press.
@@ -84,7 +90,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   // T210: tutorial is only shown in public mode for normal play.
   // Debug mode and playtest (playtest* / onExit) never show the tutorial.
   const isPlaytest = !!(playtest || playtestChart || playtestBuffer || onExit)
-  const [phase, setPhase] = useState<'tutorial-wave' | 'tutorial-ring' | 'main'>(() =>
+  const [phase, setPhase] = useState<'tutorial-wave' | 'tutorial-ring' | 'tutorial-hold' | 'main'>(() =>
     getViewMode() === 'public' && !isPlaytest ? 'tutorial-wave' : 'main',
   )
   const phaseRef = useRef(phase)
@@ -257,6 +263,39 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     }
   }, [stopMetronome])
 
+  // T226: swap the ring-practice chart for the hold-practice chart after stage
+  // B completes. The hold stage also waits (dimmed overlay, clock paused) for
+  // its confirmation key (Space).
+  const startHoldStage = useCallback(() => {
+    if (phaseRef.current !== 'tutorial-ring') return
+    const chart = holdPracticeChartRef.current
+    const timeline = holdPracticeTimelineRef.current
+    const wave = holdPracticeWaveRef.current
+    if (!chart || !timeline || !wave) return
+    stopMetronome()
+    chartRef.current = chart
+    timelineRef.current = timeline
+    waveRef.current = wave
+    cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+    // 玉を開始拍の波形位置に完全に合わせる
+    cursorRef.current.y = wave.waveYAt(0)
+    ringsRef.current = []
+    judgementEventsRef.current = []
+    keysRef.current = { up: false, down: false, space: false }
+    tutorialStageRef.current = 'hold'
+    tutorialConfirmedRef.current = false
+    setOverlayDimmed(true)
+    setTutorialInstruction(getTutorialInstruction(0, 'hold'))
+    phaseRef.current = 'tutorial-hold'
+    setPhase('tutorial-hold')
+    try {
+      const ctx = AudioManager.getInstance().ctx
+      resetClock(ctx)
+    } catch {
+      // AudioContext not initialized yet
+    }
+  }, [stopMetronome])
+
   // T210: swap the tutorial engines for the main chart, discard any tutorial
   // score / combo / trace bonus. 本編の音楽はすぐ鳴らさず Space 待ちにする
   // （チュートリアル完了後・スキップ時・デバッグ初回で統一）。
@@ -402,7 +441,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         wavePracticeChartRef.current = wavePracticeChart
         wavePracticeTimelineRef.current = wavePracticeTimeline
         wavePracticeWaveRef.current = wavePracticeWave
-        wavePracticeEndRef.current = wavePracticeTimeline.beatToMs(5)
+        wavePracticeEndRef.current = wavePracticeTimeline.beatToMs(4)
 
         const ringPracticeChart = generateRingPracticeChart()
         const ringPracticeTimeline = new BpmTimeline(ringPracticeChart.bpm_changes, ringPracticeChart.amplitude)
@@ -416,6 +455,19 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         ringPracticeTimelineRef.current = ringPracticeTimeline
         ringPracticeWaveRef.current = ringPracticeWave
         ringPracticeEndRef.current = ringPracticeTimeline.beatToMs(5)
+
+        const holdPracticeChart = generateHoldPracticeChart()
+        const holdPracticeTimeline = new BpmTimeline(holdPracticeChart.bpm_changes, holdPracticeChart.amplitude)
+        const holdPracticeWave = new WaveEngine(
+          holdPracticeChart.segments,
+          holdPracticeTimeline,
+          holdPracticeChart.amplitude,
+          holdPracticeChart.start_position,
+        )
+        holdPracticeChartRef.current = holdPracticeChart
+        holdPracticeTimelineRef.current = holdPracticeTimeline
+        holdPracticeWaveRef.current = holdPracticeWave
+        holdPracticeEndRef.current = holdPracticeTimeline.beatToMs(TUTORIAL_HOLD_END_BEAT)
 
         // T210/T211: tutorial only for public normal play. Debug / playtest go
         // straight to the main chart (本編先行読込済み).
@@ -534,10 +586,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           songTimeMs = 0
         }
       }
-      // T211: tutorial stages advance by beats once the confirmation key gave
-      // the go-ahead:
-      //   tutorial-wave  → 5 beats complete → tutorial-ring
-      //   tutorial-ring  → final ring (beat 4) + small margin → main chart
+      // T211/T226: tutorial stages advance by beats once the confirmation key
+      // gave the go-ahead:
+      //   tutorial-wave  → 4 beats complete → tutorial-ring
+      //   tutorial-ring  → final ring (beat 4) + small margin → tutorial-hold
+      //   tutorial-hold  → final hold tail (beat 6) + margin → main chart
       if (
         startedRef.current &&
         tutorialConfirmedRef.current &&
@@ -552,6 +605,14 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         phaseRef.current === 'tutorial-ring' &&
         songTimeMs > ringPracticeEndRef.current
       ) {
+        setTimeout(() => startHoldStage(), 0)
+      }
+      if (
+        startedRef.current &&
+        tutorialConfirmedRef.current &&
+        phaseRef.current === 'tutorial-hold' &&
+        songTimeMs > holdPracticeEndRef.current
+      ) {
         enterMain()
         try {
           songTimeMs = songNow()
@@ -562,7 +623,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       const renderTimeMs = songTimeMs - getManualOffsetMs()
 
       // T211: beat-synced instruction overlay while the tutorial runs
-      if (phaseRef.current === 'tutorial-wave' || phaseRef.current === 'tutorial-ring') {
+      if (
+        phaseRef.current === 'tutorial-wave' ||
+        phaseRef.current === 'tutorial-ring' ||
+        phaseRef.current === 'tutorial-hold'
+      ) {
         const stage = tutorialStageRef.current
         const text = getTutorialInstruction(timeline.msToBeat(renderTimeMs), stage)
         setTutorialInstruction((prev) => (prev === text ? prev : text))
@@ -727,8 +792,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         keysRef.current.space = true
         const inTutorial = phaseRef.current !== 'main'
         if (inTutorial) {
-          // T211: stage B waits for the first Space press to start practice.
-          if (phaseRef.current === 'tutorial-ring' && !tutorialConfirmedRef.current) {
+          // T211/T226: stage B/C each wait for the first Space press to start.
+          if (
+            (phaseRef.current === 'tutorial-ring' || phaseRef.current === 'tutorial-hold') &&
+            !tutorialConfirmedRef.current
+          ) {
             void (async () => {
               if (!startedRef.current) await startGame()
               confirmTutorialStart()
@@ -853,7 +921,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               終了
             </button>
           )}
-          {(phase === 'tutorial-wave' || phase === 'tutorial-ring') && (
+          {(phase === 'tutorial-wave' || phase === 'tutorial-ring' || phase === 'tutorial-hold') && (
             <div
               className={`tutorial-overlay${overlayDimmed ? ' dim' : ' clear'}`}
               data-testid="tutorial-overlay"

@@ -3,10 +3,12 @@
  * Vitest (TypeScript, node environment) pure unit — no browser / no DOM required.
  * Spec:
  *  - 対象はパブリックモードの通常プレイ時のみ（デバッグ・プレイテスト時は出さない、T210と同一）
- *  - ステージA（波形練習・BPM90）: stay 1拍 → up 1 / down 1 / up 1 / down 1 の計5拍、リングなし。
- *    開始時は暗く（オーバーレイ減光）、↑/↓初回押下で練習開始＋時計リセット、5拍完走でステージBへ自動進行
+ *  - ステージA（波形練習・BPM90）: up 1 / down 1 / up 1 / down 1 の計4拍（導入stayなし）、リングなし。
+ *    開始時は暗く（オーバーレイ減光）、↑/↓初回押下で練習開始＋時計リセット、4拍完走でステージBへ自動進行
  *  - ステージB（リング練習・BPM90・上下なし）: stay波形の上にリング4個を1拍ごと（beat 1,2,3,4, single）に配置。
- *    開始時は暗く、Space初回押下で練習開始、最終リング後に本編へ遷移
+ *    開始時は暗く、Space初回押下で練習開始、最終リング後にステージC（ホールド）へ自動進行
+ *  - ステージC（ホールド練習・BPM90）: stay波形の上にホールド2個（head 1拍・4拍, duration 2拍）を配置。
+ *    開始時は暗く、Space初回押下で練習開始、最終テール後に本編へ遷移。押し続け→テールで離す操作を体験
  *  - T213: 暗さの制御はオーバーレイ1層のみ（canvas常時不透明度1）。待機中（押下前・本編Space待ち）は
  *    rgba(10,10,10,0.45)の減光ON、練習中は減光OFF（透明）。指示文・スキップは上部配置。
  *  - 待機中は時計を進めない（押下でresetClockし直し）、待機中にメトロノームは鳴らさない
@@ -29,6 +31,8 @@ import { BpmTimeline } from '../src/audio/bpmTimeline';
 import { WaveEngine, TW_AMP, TW_CENTER_Y } from '../src/game/waveEngine';
 import { Cursor } from '../src/game/cursor';
 import { ScoreManager } from '../src/game/score';
+import { RingSpawner } from '../src/game/ringSpawner';
+import { judgeHit } from '../src/game/hitJudge';
 
 // ---------------------------------------------------------------------------
 // global mocks — node has no localStorage / window by default
@@ -177,7 +181,7 @@ describe('T211-0: ファイル契約 — tutorial.ts / GameScreen.tsx / phases',
 // T211-1: ステージA — 波形練習譜面の固定内容 (3-step, computed, off-grid必須)
 // ---------------------------------------------------------------------------
 describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, computed, off-grid)', () => {
-  it('Step1 初期 empty capture (chart 未生成) → Step2 generateWavePracticeChart() 実行 → Step3 BPM90, stay1+up1/down1*4 の5拍、リング0、amplitude1.0', () => {
+  it('Step1 初期 empty capture (chart 未生成) → Step2 generateWavePracticeChart() 実行 → Step3 BPM90, up1+down1+up1+down1 の4拍、リング0、amplitude1.0', () => {
     const before: unknown = null;
     expect(before).toBeNull();
 
@@ -190,47 +194,46 @@ describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, compu
     expect(chart.bpm_changes[0].beat).toBe(0);
     expect(chart.bpm_changes[0].bpm).toBe(90);
 
-    // Segments: stay1 + up1 + down1 + up1 + down1 =5
-    expect(chart.segments.length).toBe(5);
-    expect(chart.segments[0]).toEqual({ direction: 'stay', beats: 1 });
-    expect(chart.segments[1]).toEqual({ direction: 'up', beats: 1 });
-    expect(chart.segments[2]).toEqual({ direction: 'down', beats: 1 });
-    expect(chart.segments[3]).toEqual({ direction: 'up', beats: 1 });
-    expect(chart.segments[4]).toEqual({ direction: 'down', beats: 1 });
+    // Segments: up1 + down1 + up1 + down1 =4 (T226: 導入stayなし)
+    expect(chart.segments.length).toBe(4);
+    expect(chart.segments[0]).toEqual({ direction: 'up', beats: 1 });
+    expect(chart.segments[1]).toEqual({ direction: 'down', beats: 1 });
+    expect(chart.segments[2]).toEqual({ direction: 'up', beats: 1 });
+    expect(chart.segments[3]).toEqual({ direction: 'down', beats: 1 });
 
-    // Total beats =5
+    // Total beats =4
     const total = chart.segments.reduce((s: number, seg: any) => s + seg.beats, 0);
-    expect(total).toBe(5);
+    expect(total).toBe(4);
 
     // No rings
     expect(Array.isArray(chart.rings)).toBe(true);
     expect(chart.rings.length).toBe(0);
 
     expect(chart.amplitude).toBeCloseTo(1.0, 5);
-    // start_position should be 0 (center) or defined
-    expect(typeof chart.start_position).toBe('number');
+    // start_position -1 (下端): 下から上へ動かす練習 (T212/T226)
+    expect(chart.start_position).toBeCloseTo(-1.0, 5);
   });
 
-  it('Step1 BPMタイムライン未構築を capture → Step2 BpmTimeline で beatToMs 計測 → Step3 90BPMで 5拍=3333ms 前後, beatMs=666ms', () => {
+  it('Step1 BPMタイムライン未構築を capture → Step2 BpmTimeline で beatToMs 計測 → Step3 90BPMで 4拍=2666ms 前後, beatMs=666ms', () => {
     const mod: any = TutorialModule as any;
     const chart = mod.generateWavePracticeChart();
     const tlBefore = new BpmTimeline(chart.bpm_changes, chart.amplitude);
     expect(tlBefore.beatMsAt(0)).toBeCloseTo(60000 / 90, 5); // 666.666...
     expect(tlBefore.beatToMs(1)).toBeCloseTo(60000 / 90, 2);
-    expect(tlBefore.beatToMs(5)).toBeCloseTo((60000 / 90) * 5, 0);
+    expect(tlBefore.beatToMs(4)).toBeCloseTo((60000 / 90) * 4, 0);
     expect(tlBefore.msToBeat((60000 / 90) * 2.5)).toBeCloseTo(2.5, 3);
     // Duration via helper
     const dur = tutorialAMs(chart);
-    expect(dur).toBeCloseTo((60000 / 90) * 5, 0);
+    expect(dur).toBeCloseTo((60000 / 90) * 4, 0);
   });
 
-  it('Step1 segments 未検証を capture → Step2 WaveEngine で getPoints/waveYAt 計測 → Step3 点数=6, 上下幅固定, stay区間は中央で安定, off-grid 0.37/1.23 で物理整合', () => {
+  it('Step1 segments 未検証を capture → Step2 WaveEngine で getPoints/waveYAt 計測 → Step3 点数=5, 上下幅固定, 開始下端・upで上昇, off-grid 0.37/1.23 で物理整合', () => {
     const mod: any = TutorialModule as any;
     const chart = mod.generateWavePracticeChart();
     const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
     const engine = new WaveEngine(chart.segments, tl, chart.amplitude, chart.start_position);
 
-    expect(engine.getPoints().length).toBe(chart.segments.length + 1); // 6
+    expect(engine.getPoints().length).toBe(chart.segments.length + 1); // 5
     const points = engine.getPoints();
     const minY = Math.min(...points.map(p => p.y));
     const maxY = Math.max(...points.map(p => p.y));
@@ -240,17 +243,23 @@ describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, compu
 
     // start_position -1 => bottom at beat 0 (wave practice starts low)
     expect(engine.waveYAt(0)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 5);
-    // stay 1 beat: beats 0..1 should stay at bottom (off-grid)
-    expect(engine.waveYAt(0.37)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
-    expect(engine.waveYAt(0.99)).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
-    // up 1 beat from 1..2 should move toward top (negative dY)
+    // up 1 beat from 0..1: moves toward top with slope perBeat=2*TW_AMP (off-grid)
+    const perBeat = 2 * TW_AMP * 1.0;
+    const expected037 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, (TW_CENTER_Y + TW_AMP) - perBeat * 0.37));
+    expect(engine.waveYAt(0.37)).toBeCloseTo(expected037, 2);
+    const expected099 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, (TW_CENTER_Y + TW_AMP) - perBeat * 0.99));
+    expect(engine.waveYAt(0.99)).toBeCloseTo(expected099, 2);
+    // beat 1 reached the top (full width in 1 beat at amplitude 1.0)
     const yAt1 = engine.waveYAt(1);
-    expect(yAt1).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
-    // off-grid inside up segment should be between bottom and top
+    expect(yAt1).toBeCloseTo(TW_CENTER_Y - TW_AMP, 2);
+    // off-grid inside down segment [1,2) should move back toward bottom
     const yAt137 = engine.waveYAt(1.37);
-    expect(yAt137).toBeLessThan(TW_CENTER_Y + TW_AMP);
     expect(yAt137).toBeGreaterThan(TW_CENTER_Y - TW_AMP - 1);
-    // down segment 2..3 should go back toward center/bottom
+    expect(yAt137).toBeLessThan(TW_CENTER_Y);
+    // down segment [1,2) physically consistent: yAt137 = clamp(yAt1 + perBeat*0.37)
+    const expected137 = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yAt1 + perBeat * 0.37));
+    expect(yAt137).toBeCloseTo(expected137, 2);
+    // further beats remain finite
     const yAt237 = engine.waveYAt(2.37);
     expect(Number.isFinite(yAt237)).toBe(true);
   });
@@ -260,22 +269,24 @@ describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, compu
     const baseChart = mod.generateWavePracticeChart();
     const amps = [0.7, 1.3, 2.7, 3.4];
     const offGrids = [0.37, 1.23, 1.37, 2.37, 3.37, 4.23];
+    const clampY = (v: number) => Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, v));
     for (const amp of amps) {
       const tl = new BpmTimeline(baseChart.bpm_changes, amp);
       const engine = new WaveEngine(baseChart.segments, tl, amp, 0.0);
       const perBeat = 2 * TW_AMP * amp;
       for (const off of offGrids) {
-        if (off > 5) continue;
-        // Determine segment containing off: 0-1 stay (dY=0), 1-2 up (-perBeat), 2-3 down (+perBeat), etc.
+        if (off > 4) continue;
+        // Determine segment containing off: 0-1 up (-perBeat), 1-2 down (+perBeat), 2-3 up, 3-4 down.
         // We verify slope matches perBeat via engine internal dY model (indirect via waveYAt difference)
         // Check that waveYAt respects clamp and slope exactly (T128)
         const y = engine.waveYAt(off);
         expect(y).toBeGreaterThanOrEqual(TW_CENTER_Y - TW_AMP - 1);
         expect(y).toBeLessThanOrEqual(TW_CENTER_Y + TW_AMP + 1);
 
-        // stay segment: off in [0,1) should be exactly center regardless of amp
+        // up segment [0,1): linear ascent from center with slope -perBeat (clamped)
         if (off < 1) {
-          expect(y).toBeCloseTo(TW_CENTER_Y, 3);
+          const expected = clampY(TW_CENTER_Y - perBeat * off);
+          expect(y).toBeCloseTo(expected, 2);
         }
 
         // Cursor speed consistency at this amp & beat
@@ -284,15 +295,16 @@ describe('T211-1: ステージA 波形練習譜面の固定内容 (3-step, compu
         const speed = (2 * TW_AMP * amp) / (beatMs / 1000);
         expect(speed).toBeCloseTo(perBeat / (beatMs / 1000), 5);
 
-        // For up segment [1,2): linear descent from center with slope -perBeat (clamped)
+        // down segment [1,2): linear descent from yAt1 with slope +perBeat (clamped)
         if (off >= 1 && off < 2) {
           const yAt1 = engine.waveYAt(1);
-          const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yAt1 - perBeat * (off - 1)));
+          const expected = clampY(yAt1 + perBeat * (off - 1));
           expect(y).toBeCloseTo(expected, 2);
         }
+        // up segment [2,3): linear ascent from yAt2 with slope -perBeat (clamped)
         if (off >= 2 && off < 3) {
           const yAt2 = engine.waveYAt(2);
-          const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, yAt2 + perBeat * (off - 2)));
+          const expected = clampY(yAt2 - perBeat * (off - 2));
           expect(y).toBeCloseTo(expected, 2);
         }
       }
@@ -554,10 +566,10 @@ describe('T211-4: ステージ遷移と押下確認（待機→練習開始→�
       src.includes('resetClock');
     expect(hasWaitingGuard).toBe(true);
 
-    // Stage A should advance after 5 beats (wave practice duration)
-    // Check for beat count or timeline check: 5 beats at 90bpm
-    const has5BeatCheck = src.includes('5') && (src.includes('beatToMs') || src.includes('tutorial') || src.includes('wave'));
-    expect(has5BeatCheck).toBe(true);
+    // Stage A should advance after 4 beats (wave practice duration)
+    // Check for beat count or timeline check: 4 beats at 90bpm
+    const has4BeatCheck = src.includes('4') && (src.includes('beatToMs') || src.includes('tutorial') || src.includes('wave'));
+    expect(has4BeatCheck).toBe(true);
   });
 
   it('Step1 待機中は時計が進まないことを capture (startedRef / songNow) → Step2 押下で resetClock し直す → Step3 待機中にメトロノームは鳴らさない (startMetronome が待機解除後にのみ呼ばれる)', () => {
@@ -585,17 +597,18 @@ describe('T211-4: ステージ遷移と押下確認（待機→練習開始→�
     }
   });
 
-  it('Step1 各ステージ規定拍数 capture (stageA 5拍, stageB 4拍+2秒) → Step2 GameScreen の自動進行閾値を再計算 → Step3 5拍完走で wave→ring、最終リング+2秒で ring→main', () => {
+  it('Step1 各ステージ規定拍数 capture (stageA 4拍, stageB 最終リング4拍+2秒, stageC 最終テール6拍+2秒) → Step2 GameScreen の自動進行閾値を再計算 → Step3 4拍完走で wave→ring、最終リング+2秒で ring→hold、最終テール+余白で hold→main', () => {
     const mod: any = TutorialModule as any;
     const chartA = mod.generateWavePracticeChart();
     const chartB = mod.generateRingPracticeChart();
+    const chartC = mod.generateHoldPracticeChart();
 
     // Step1: capture stage durations
     const tlA = new BpmTimeline(chartA.bpm_changes, chartA.amplitude);
     const totalA = chartA.segments.reduce((s: number, seg: any) => s + seg.beats, 0);
-    expect(totalA).toBe(5);
+    expect(totalA).toBe(4);
     const durA = tlA.beatToMs(totalA);
-    expect(durA).toBeCloseTo((60000 / 90) * 5, 0);
+    expect(durA).toBeCloseTo((60000 / 90) * 4, 0);
 
     const tlB = new BpmTimeline(chartB.bpm_changes, chartB.amplitude);
     const lastBeatB = chartB.rings.reduce((m: number, r: any) => Math.max(m, r.beat), -Infinity);
@@ -603,19 +616,30 @@ describe('T211-4: ステージ遷移と押下確認（待機→練習開始→�
     const durB = tlB.beatToMs(lastBeatB) + 2000;
     expect(durB).toBeCloseTo((60000 / 90) * 4 + 2000, 0);
 
-    // Step3: GameScreen must have two thresholds or a combined phased threshold
+    // hold stage: head 1拍・4拍, duration 2拍 → テールは 3拍・6拍
+    const tlC = new BpmTimeline(chartC.bpm_changes, chartC.amplitude);
+    const lastTailC = chartC.rings.reduce((m: number, r: any) => Math.max(m, r.beat + (r.duration ?? 0)), -Infinity);
+    expect(lastTailC).toBe(6);
+    expect(TutorialModule.TUTORIAL_HOLD_END_BEAT).toBe(7);
+    const durC = tlC.beatToMs(TutorialModule.TUTORIAL_HOLD_END_BEAT);
+    expect(durC).toBeCloseTo((60000 / 90) * 7, 0);
+
+    // Step3: GameScreen must have three thresholds or a combined phased threshold
     const src = readFile('src/screens/GameScreen.tsx');
-    // Must reference both stages for auto-advance
+    // Must reference all three stages for auto-advance
     expect(src).toMatch(/tutorial-wave/);
     expect(src).toMatch(/tutorial-ring/);
-    // Must have logic to transition wave -> ring and ring -> main
+    expect(src).toMatch(/tutorial-hold/);
+    // Must have logic to transition wave -> ring and ring -> hold and hold -> main
     const waveToRing = src.match(/tutorial-wave[\s\S]{0,600}tutorial-ring/);
     expect(waveToRing !== null).toBe(true);
-    const ringToMain = src.match(/tutorial-ring[\s\S]{0,800}main/);
-    expect(ringToMain !== null).toBe(true);
+    const ringToHold = src.match(/tutorial-ring[\s\S]{0,800}tutorial-hold/);
+    expect(ringToHold !== null).toBe(true);
+    const holdToMain = src.match(/tutorial-hold[\s\S]{0,800}(enterMain|\['main'\]|'main')/);
+    expect(holdToMain !== null).toBe(true);
 
     // Must use beatToMs or duration comparison for stage end
-    expect(src).toMatch(/beatToMs|tutorialEnd|stageEnd|waveEnd|ringEnd/);
+    expect(src).toMatch(/beatToMs|tutorialEnd|stageEnd|waveEnd|ringEnd|holdEnd/);
   });
 
   it('Step1 本編スコア未混入を capture (ScoreManager) → Step2 エンジン差し替え時のリセット挙動を探索 → Step3 スコア破棄・rings/judgements/cursor リセットが wave→ring と ring→main の両方で行われる', () => {
@@ -912,5 +936,113 @@ describe('T211-8: 回帰 — 旧単相 generateTutorialChart と新2段階の共
     // File must not still advertise single 8-second 120BPM tutorial as primary
     const hasNewStages = src.includes('generateWavePracticeChart') && src.includes('generateRingPracticeChart');
     expect(hasNewStages).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T226-9: ステージC — ホールド練習 (譜面構造・3段階遷移・判定ロジック回帰)
+// ---------------------------------------------------------------------------
+describe('T226-9: ホールド練習ステージ C (3-step, computed, off-grid)', () => {
+  it('Step1 初期 empty capture (hold chart 未生成) → Step2 generateHoldPracticeChart() 実行 → Step3 BPM90, stay波形のみ, ホールド2個 (head 1/4, duration 2), start 0.0', () => {
+    const before: unknown = null;
+    expect(before).toBeNull();
+
+    const mod: any = TutorialModule as any;
+    expect(typeof mod.generateHoldPracticeChart).toBe('function');
+    const chart = mod.generateHoldPracticeChart();
+
+    // BPM90
+    expect(chart.bpm_changes[0].beat).toBe(0);
+    expect(chart.bpm_changes[0].bpm).toBe(90);
+    expect(chart.amplitude).toBeCloseTo(1.0, 5);
+    expect(chart.start_position).toBeCloseTo(0.0, 5);
+
+    // stay wave only (上下移動なし)
+    expect(chart.segments.length).toBeGreaterThanOrEqual(1);
+    for (const seg of chart.segments) {
+      expect(seg.direction).toBe('stay');
+      expect(seg.beats).toBeGreaterThan(0);
+    }
+    const total = chart.segments.reduce((s: number, seg: any) => s + seg.beats, 0);
+    expect(total).toBeGreaterThanOrEqual(7); // 最終テール(6)＋余白
+
+    // hold rings: head 1拍・4拍, duration 2拍
+    expect(chart.rings.length).toBe(2);
+    expect(chart.rings[0]).toEqual({ beat: 1, type: 'hold', duration: 2 });
+    expect(chart.rings[1]).toEqual({ beat: 4, type: 'hold', duration: 2 });
+  });
+
+  it('Step1 タイムライン未構築 capture → Step2 BpmTimeline でテール計算 → Step3 テールは 3拍(=2000ms)・6拍(=4000ms)、hold 終了点=beat 7、確認用Spaceは誤ヒットしない窓幅', () => {
+    const mod: any = TutorialModule as any;
+    const chart = mod.generateHoldPracticeChart();
+    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+
+    // テール位置 (head + duration)
+    expect(tl.beatToMs(3)).toBeCloseTo((60000 / 90) * 3, 0);
+    expect(tl.beatToMs(6)).toBeCloseTo((60000 / 90) * 6, 0);
+    // 最終テール + 余白 = TUTORIAL_HOLD_END_BEAT(7)
+    expect(TutorialModule.TUTORIAL_HOLD_END_BEAT).toBe(7);
+
+    // 確認用Space押下は t=0 (時計リセット直後)。head=1拍(666ms)に対し
+    // 判定窓 windowMs = beatMs*0.4 (266ms) なので誤ヒットしない
+    const windowMs = tl.beatMsAt(1) * 0.4;
+    expect(tl.beatToMs(1)).toBeGreaterThan(windowMs * 1.5);
+  });
+
+  it('Step1 GameScreen 初期 capture (wave→ring→main) → Step2 新3段階遷移を探索 → Step3 startHoldStage と tutorial-hold フェーズがあり wave→ring→hold→main の順で進む', () => {
+    const src = readFile('src/screens/GameScreen.tsx');
+    expect(src).toMatch(/'tutorial-hold'/);
+    expect(src).toMatch(/startHoldStage/);
+    expect(src).toMatch(/generateHoldPracticeChart/);
+    expect(src).toMatch(/wavePracticeEndRef\.current\s*=\s*wavePracticeTimeline\.beatToMs\(4\)/);
+    expect(src).toMatch(/holdPracticeEndRef/);
+    // T226: ring→hold の自動進行 + hold→main（enterMain）の順序が成立
+    const waveToRing = src.match(/tutorial-wave[\s\S]{0,700}tutorial-ring/);
+    expect(waveToRing !== null).toBe(true);
+    const ringToHold = src.match(/tutorial-ring[\s\S]{0,800}tutorial-hold/);
+    expect(ringToHold !== null).toBe(true);
+    const holdToMain = src.match(/tutorial-hold[\s\S]{0,900}(enterMain\(\)|['"]main['"])/);
+    expect(holdToMain !== null).toBe(true);
+  });
+
+  it('Step1 tutorial.ts の指示文 capture → Step2 getTutorialInstruction(0, \'hold\') 実行 → Step3 Space長押し＋テール離しの案内と終了文言がある', () => {
+    const src = readFile('src/game/tutorial.ts');
+    expect(src).toMatch(/押し続け/);
+    expect(src).toMatch(/離そう/);
+    expect(src).toMatch(/本編/);
+    const text = TutorialModule.getTutorialInstruction(0, 'hold');
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toMatch(/Space|押す|離す/);
+    // 端数拍でも安定（ステップ関数）
+    const at37 = TutorialModule.getTutorialInstruction(3.7, 'hold');
+    expect(typeof at37).toBe('string');
+    expect(at37.length).toBeGreaterThan(0);
+  });
+
+  it('Step1 ホールド頭判定前 capture → Step2 RingSpawner + judgeHit で head=1拍 を叩く → Step3 判定ロジック不変: hit=true, resolved=false, holding=true, releaseTime=beat 3', () => {
+    const mod: any = TutorialModule as any;
+    const chart = mod.generateHoldPracticeChart();
+    const tl = new BpmTimeline(chart.bpm_changes, chart.amplitude);
+    const wave = new WaveEngine(chart.segments, tl, chart.amplitude, chart.start_position);
+
+    const spawner = new RingSpawner(chart.rings);
+    const hitTime1 = tl.beatToMs(1);
+    const rings = spawner.update(hitTime1, chart.rings, tl, wave);
+
+    const head = rings.find(r => r.hitTime === hitTime1);
+    expect(head).toBeDefined();
+    expect(head!.type).toBe('hold');
+    expect(head!.duration).toBe(2);
+    // stay 波形のため targetY は中央
+    expect(head!.targetY).toBeCloseTo(TW_CENTER_Y, 2);
+    expect(head!.releaseTime).toBeCloseTo(tl.beatToMs(3), 2);
+
+    const j = judgeHit(hitTime1, head!.targetY, rings, tl.beatMsAt(1));
+    expect(j).not.toBeNull();
+    // T207/T226: ホールド頭判定は従来通りの絶対値誤差 (hitJudge 変更なし)
+    expect(j!.errorMs).toBeCloseTo(0, 3);
+    expect(head!.hit).toBe(true);
+    expect(head!.holding).toBe(true);
+    expect(head!.resolved).toBe(false);
   });
 });

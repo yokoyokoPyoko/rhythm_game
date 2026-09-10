@@ -2077,9 +2077,14 @@
       "finished": 1789077273.7814815
     },
     "T226": {
-      "attempts": 0,
+      "attempts": 1,
       "status": "running",
-      "started": 1789078067.7808237
+      "started": 1789078873.721286,
+      "cycles": 1,
+      "gate_b_golden": false,
+      "sessions": {
+        "coder": null
+      }
     }
   },
   "consecutive_no_action": 0

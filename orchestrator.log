@@ -10178,3 +10178,14 @@ src/screens/SelectScreen.tsx(187,41): error TS2454: Variable 'handleZipFile' is 
 2026-09-11 07:07:46,779 [WARNING] Timeout reached (40s). Terminating process.
 2026-09-11 07:07:47,780 [INFO] Orchestrator range execution: 1 tasks (from=T226, to=T226, budget=600m)
 2026-09-11 07:07:47,780 [INFO] [T226] --only mode: skipping dependency checks.
+2026-09-11 07:07:47,851 [INFO] [T226] Code Review Only mode active: skipping QA-Gen & Playwright video tests, using git diff AI code review.
+2026-09-11 07:07:47,853 [INFO] Starting implementation [T226] (attempt 1, cycle 1/10)
+2026-09-11 07:07:47,853 [INFO] [T226] Proceeding directly to Coder implementation (skipping Red check for Coder retry).
+2026-09-11 07:07:47,867 [INFO] RateLimit sleep: 5s...
+2026-09-11 07:07:52,869 [INFO] Dispatching [1mCoder(T226)[0m (model=[90mopencode/big-pickle, variant=medium[0m, attempt=1/5, timeout=∞) (title=[T226] Coder bde246d1)
+2026-09-11 07:19:22,195 [INFO] --resume: resuming T226
+2026-09-11 07:19:22,195 [WARNING] Selected range has unpassed prerequisite dependencies: T212 (status: None), T224 (status: None), T222 (status: None), T223 (status: None)
+2026-09-11 07:20:05,406 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-11 07:20:46,435 [WARNING] Timeout reached (40s). Terminating process.
+2026-09-11 07:21:13,721 [INFO] Orchestrator range execution: 1 tasks (from=T226, to=T226, budget=600m)
+2026-09-11 07:21:13,721 [INFO] [T226] --only mode: skipping dependency checks.

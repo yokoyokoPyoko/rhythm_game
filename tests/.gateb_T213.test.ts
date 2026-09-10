@@ -352,11 +352,12 @@ describe('T213-4: 回帰 — tutorial生成・WaveEngine/Cursor数値整合 (3-s
     const waveChart = mod.generateWavePracticeChart();
     const ringChart = mod.generateRingPracticeChart();
 
-    // Wave stage: BPM90, stay1+up1/down1*4 =5, rings 0, start -1.0
+    // Wave stage: BPM90, up1+down1+up1+down1 =4, rings 0, start -1.0 (T226: 導入stayなし)
     expect(waveChart.bpm_changes[0].bpm).toBe(90);
     expect(waveChart.bpm_changes[0].beat).toBe(0);
-    expect(waveChart.segments.length).toBe(5);
-    expect(waveChart.segments.reduce((s: number, seg: any) => s + seg.beats, 0)).toBe(5);
+    expect(waveChart.segments.length).toBe(4);
+    expect(waveChart.segments.reduce((s: number, seg: any) => s + seg.beats, 0)).toBe(4);
+    expect(waveChart.segments[0].direction).toBe('up');
     expect(waveChart.rings.length).toBe(0);
     expect(waveChart.start_position).toBeCloseTo(-1.0, 2);
 
@@ -407,9 +408,10 @@ describe('T213-4: 回帰 — tutorial生成・WaveEngine/Cursor数値整合 (3-s
           const speed = (2 * TW_AMP * amp) / (beatMs / 1000);
           expect(speed).toBeCloseTo(perBeat / (beatMs / 1000), 5);
 
-          // For waveChart stay 1 beat: off<1 should be start_position (-1 => bottom)
+          // For waveChart (start -1.0, up segment): off<1 moves up from bottom by perBeat
           if (chart === waveChart && off < 1) {
-            expect(y).toBeCloseTo(TW_CENTER_Y + TW_AMP, 3);
+            const expected = Math.max(TW_CENTER_Y - TW_AMP, Math.min(TW_CENTER_Y + TW_AMP, (TW_CENTER_Y + TW_AMP) - perBeat * off));
+            expect(y).toBeCloseTo(expected, 2);
           }
           // For ringChart stay: all beats stay at center (start 0.0)
           if (chart === ringChart) {
