@@ -85,6 +85,13 @@ button:focus-visible {
   font-size: 0.875rem;
 }
 
+.select-guide {
+  font-size: 1.125rem;
+  font-weight: 600;
+  text-align: center;
+  margin: 0 0 1.5rem;
+}
+
 .select-error {
   color: var(--danger);
 }

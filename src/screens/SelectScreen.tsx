@@ -327,6 +327,12 @@ beat = 8.0
         <span className="select-sub">Trace Wave</span>
       </header>
 
+      {viewMode !== 'debug' && (
+        <p className="select-guide" data-testid="select-guide">
+          遊びたい曲を選んでください — カードをタップでスタート
+        </p>
+      )}
+
       {viewMode === 'debug' && (
         <div className="custom-import-section" style={{ marginBottom: '20px', padding: '16px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-surface)' }}>
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
@@ -475,7 +481,9 @@ beat = 8.0
       ) : songs.length === 0 ? (
         <div className="song-grid-empty" data-testid="empty-song-list">
           <p className="empty-message">
-            曲がありません。上のエリアから譜面TOMLと音声をインポートしてください。
+            {viewMode !== 'debug'
+              ? '曲がありません。'
+              : '曲がありません。上のエリアから譜面TOMLと音声をインポートしてください。'}
           </p>
         </div>
       ) : (
