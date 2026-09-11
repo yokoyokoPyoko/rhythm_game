@@ -30,13 +30,43 @@ function getRank(stats: ScoreStats): Rank {
 export default function ResultScreen() {
   const location = useLocation()
   const navigate = useNavigate()
-  const state = (location.state ?? {}) as { stats?: ScoreStats; songId?: string }
+  const state = (location.state ?? {}) as { stats?: ScoreStats; songId?: string; title?: string; rank?: Rank }
   const stats = state.stats ?? EMPTY_STATS
   const songId = state.songId
-  const rank = getRank(stats)
+  // Rank is decided by score alone in GameScreen (passed via state).
+  // Fall back to the legacy local calc for direct access.
+  const rank = state.rank ?? getRank(stats)
+  const title = state.title ?? ''
 
   const [displayScore, setDisplayScore] = useState(0)
   const rafRef = useRef(0)
+  const [globalBest, setGlobalBest] = useState<{ score: number; rank: string | null } | null>(null)
+  const [isRecord, setIsRecord] = useState(false)
+  const submittedRef = useRef(false)
+
+  // Submit once per result view (StrictMode-safe via ref guard).
+  useEffect(() => {
+    if (submittedRef.current) return
+    submittedRef.current = true
+    if (!title) return
+    void (async () => {
+      try {
+        const { submitHighScore } = await import('../storage/highScores')
+        const res = await submitHighScore(title, stats.score, rank)
+        if (res) {
+          setGlobalBest(res.best)
+          setIsRecord(res.isRecord)
+        } else {
+          const { fetchBestScores } = await import('../storage/highScores')
+          const all = await fetchBestScores()
+          if (all[title] !== undefined) setGlobalBest(all[title])
+        }
+      } catch {
+        /* offline — hide best section */
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     const target = stats.score
@@ -73,6 +103,18 @@ export default function ResultScreen() {
       </div>
 
       <div className="result-score">{displayScore.toLocaleString()}</div>
+
+      {globalBest !== null && (
+        <div className="result-best" data-testid="result-global-best">
+          {isRecord && (
+            <div className="result-record" data-testid="result-new-record">
+              NEW RECORD!
+            </div>
+          )}
+          <span className="result-best-label">みんなの最高</span>{' '}
+          <span className="result-best-value">{globalBest.score.toLocaleString()}点</span>
+        </div>
+      )}
 
       <div className="result-stats">
         <div className="result-stat perfect">

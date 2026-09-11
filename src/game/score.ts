@@ -1,4 +1,4 @@
-import type { HitResult } from '../types';
+import type { HitResult, RingDef } from '../types';
 
 const PERFECT_SCORE = 50;
 const GREAT_SCORE = 30;
@@ -113,10 +113,39 @@ export class ScoreManager {
     return 'D';
   }
 
+  // NOTE: getRank() (PERFECT-rate based) is legacy. Rank is now decided by
+  // score alone (rankForScore below), computed where the chart is available.
+
   private incrementCombo(): void {
     this.combo++;
     if (this.combo > this.maxCombo) {
       this.maxCombo = this.combo;
     }
   }
+}
+
+const HOLD_MAX_SCORE = PERFECT_SCORE * 2; // head 50 + release 50
+
+/** Theoretical max ring score of a chart (trace bonus excluded). */
+export function maxRingScore(rings: RingDef[]): number {
+  let max = 0;
+  for (const r of rings ?? []) {
+    if (!r) continue;
+    max += r.type === 'hold' ? HOLD_MAX_SCORE : PERFECT_SCORE;
+  }
+  return max;
+}
+
+/**
+ * Rank decided by score alone: ratio of score to the chart's max ring
+ * score. Trace bonus counts toward the score (can exceed 100%).
+ */
+export function rankForScore(score: number, maxRing: number): Rank {
+  if (!Number.isFinite(score) || !Number.isFinite(maxRing) || maxRing <= 0) return 'D';
+  const ratio = score / maxRing;
+  if (ratio >= 0.9) return 'S';
+  if (ratio >= 0.75) return 'A';
+  if (ratio >= 0.6) return 'B';
+  if (ratio >= 0.4) return 'C';
+  return 'D';
 }

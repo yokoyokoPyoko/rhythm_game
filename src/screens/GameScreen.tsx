@@ -14,7 +14,7 @@ import { Cursor } from '../game/cursor'
 import { judgeHit } from '../game/hitJudge'
 import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
-import { ScoreManager, type ScoreStats } from '../game/score'
+import { ScoreManager, maxRingScore, rankForScore, type ScoreStats } from '../game/score'
 import {
   generateWavePracticeChart,
   generateRingPracticeChart,
@@ -750,7 +750,10 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         if (onExitRef.current) {
           onExitRef.current(stats)
         } else {
-          navigate('/result', { state: { stats, songId } })
+          // Rank is decided by score alone (ratio to the chart's max ring score).
+          const max = maxRingScore(initChart?.rings ?? [])
+          const rank = rankForScore(stats.score, max)
+          navigate('/result', { state: { stats, songId, title: chart.title, rank } })
         }
         return
       }

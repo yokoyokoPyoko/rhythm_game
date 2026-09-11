@@ -26,6 +26,16 @@ async function loadGlobalCounts(): Promise<Record<string, number>> {
   }
 }
 
+// Global bests (by song title) fetched once per mount.
+async function loadGlobalBests(): Promise<Record<string, { score: number; rank: string | null }>> {
+  try {
+    const { fetchBestScores } = await import('../storage/highScores')
+    return await fetchBestScores()
+  } catch {
+    return {}
+  }
+}
+
 const MAX_DIFFICULTY = 5
 const SKELETON_COUNT = 4
 
@@ -103,12 +113,16 @@ export default function SelectScreen() {
   const [viewMode, setViewMode] = useState<ViewMode>(getViewMode())
   // Global play counts keyed by song title (empty when backend unconfigured).
   const [globalCounts, setGlobalCounts] = useState<Record<string, number>>({})
+  // Global bests keyed by song title (empty when backend unconfigured).
+  const [globalBests, setGlobalBests] = useState<Record<string, { score: number; rank: string | null }>>({})
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       const g = await loadGlobalCounts()
       if (!cancelled && Object.keys(g).length > 0) setGlobalCounts(g)
+      const b = await loadGlobalBests()
+      if (!cancelled && Object.keys(b).length > 0) setGlobalBests(b)
     })()
     return () => {
       cancelled = true
@@ -603,6 +617,15 @@ beat = 8.0
                       style={{ fontSize: '11px', color: 'var(--text-muted)' }}
                     >
                       ▶ {globalCounts[song.title] ?? getPlayCount(song.id)}回
+                    </div>
+                  )}
+                  {viewMode === 'debug' && globalBests[song.title] !== undefined && (
+                    <div
+                      className="song-card-best"
+                      data-testid={`best-${song.id}`}
+                      style={{ fontSize: '11px', color: 'var(--text-muted)' }}
+                    >
+                      最高 {globalBests[song.title].score.toLocaleString()}点
                     </div>
                   )}
                   <div className="song-card-difficulty">
