@@ -169,6 +169,13 @@ button:focus-visible {
   margin-top: auto;
 }
 
+.song-card-best {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 2px 0 8px;
+}
+
 .difficulty-dot {
   width: 12px;
   height: 4px;

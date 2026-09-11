@@ -13,6 +13,7 @@ import { handleZipFile as importZipFile } from '../storage/zipImport'
 import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
 import TodayTrendsPane from './TrendsPane'
+import { startPreview, type PreviewHandle } from '../audio/preview'
 import { getViewMode, ViewMode } from '../viewMode'
 import { getPlayCount } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
@@ -74,6 +75,101 @@ export default function SelectScreen() {
       })()
       return prev.map((s) => (s.id === songId ? { ...s, title } : s))
     })
+  }, [])
+
+  // Hover preview: at most one preview at a time. Token discards late decodes.
+  const previewRef = useRef<{ songId: string; stop: PreviewHandle['stop']; token: number } | null>(null)
+  const previewTokenRef = useRef(0)
+
+  const stopPreview = useCallback(() => {
+    const p = previewRef.current
+    previewRef.current = null
+    if (p) {
+      try {
+        p.stop()
+      } catch {
+        /* ignore */
+      }
+      window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: null } }))
+    }
+  }, [])
+
+  const startPreviewFor = useCallback(
+    (song: SongEntry) => {
+      if (renamingId === song.id) return
+      if (previewRef.current?.songId === song.id) return
+      stopPreview()
+      const token = ++previewTokenRef.current
+      void (async () => {
+        try {
+          // Resolve chart (cache → IndexedDB) to find the audio basename.
+          let chart = ChartCache.get(song.id)
+          if (!chart && song.id.startsWith('custom-')) {
+            const { getChart } = await import('../storage/libraryDb')
+            const stored = await getChart(song.id)
+            if (!stored) return
+            chart = parseChartText(stored.toml, song.id)
+            ChartCache.set(song.id, chart)
+          }
+          if (!chart) return
+          const base = getBasename(chart.audio)
+          // Resolve decoded audio (cache → IndexedDB bytes).
+          let buf: AudioBuffer | null = AudioCache.get(base) ?? null
+          if (!buf && song.id.startsWith('custom-')) {
+            const { getAudio } = await import('../storage/libraryDb')
+            const storedAudio = await getAudio(song.id)
+            if (storedAudio?.bytes) {
+              const mgr0 = AudioManager.getInstance()
+              await mgr0.ensure()
+              const bytes = storedAudio.bytes
+              const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+              buf = await mgr0.ctx.decodeAudioData(copy)
+              AudioCache.set(base, buf)
+            }
+          }
+          if (!buf) return
+          if (previewTokenRef.current !== token) return
+          const mgr = AudioManager.getInstance()
+          await mgr.ensure()
+          if (previewTokenRef.current !== token) return
+          const handle = startPreview(buf, mgr.ctx)
+          previewRef.current = { songId: song.id, stop: handle.stop, token }
+          window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: song.id } }))
+        } catch {
+          /* preview is best-effort; stay silent on failure */
+        }
+      })()
+    },
+    [renamingId, stopPreview],
+  )
+
+  // Autoplay policy: hover alone cannot unlock audio. Resume on first gesture.
+  useEffect(() => {
+    const unlock = () => {
+      void AudioManager.getInstance()
+        .ensure()
+        .catch(() => {})
+    }
+    window.addEventListener('pointerdown', unlock, { once: true })
+    window.addEventListener('keydown', unlock, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      const p = previewRef.current
+      previewRef.current = null
+      if (p) {
+        try {
+          p.stop()
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -578,7 +674,15 @@ beat = 8.0
           {songs.map((song) => {
             const isCustom = song.id.startsWith('custom-')
             return (
-              <div key={song.id} className="song-card-wrapper" style={{ position: 'relative' }}>
+              <div
+                key={song.id}
+                className="song-card-wrapper"
+                style={{ position: 'relative' }}
+                onMouseEnter={() => startPreviewFor(song)}
+                onMouseLeave={() => {
+                  if (previewRef.current?.songId === song.id) stopPreview()
+                }}
+              >
                 <button
                   className="song-card"
                   onClick={() => {
@@ -638,7 +742,6 @@ beat = 8.0
                     <div
                       className="song-card-best"
                       data-testid={`best-${song.id}`}
-                      style={{ fontSize: '11px', color: 'var(--text-muted)' }}
                     >
                       最高 {globalBests[song.title].score.toLocaleString()}点
                     </div>
