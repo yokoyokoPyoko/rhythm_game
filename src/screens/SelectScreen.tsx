@@ -353,7 +353,7 @@ beat = 8.0
 
       {viewMode !== 'debug' && (
         <p className="select-guide" data-testid="select-guide">
-          遊びたい曲を選んでください — カードをタップでスタート
+          曲を選択し自由に遊んでください。
         </p>
       )}
 
