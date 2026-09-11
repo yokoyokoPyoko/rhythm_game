@@ -4,7 +4,11 @@
 // bests are never lost. Empty object when unconfigured/offline.
 
 import { COUNTER_ENABLED, SUPABASE_ANON_KEY, SUPABASE_URL } from './counterConfig';
-import { bestScoresFromEvents, fetchAllEvents, isCountingPaused } from './playCounts';
+import {
+  bestScoresFromEvents,
+  fetchEventRows,
+  isCountingPaused,
+} from './playCounts';
 
 const FETCH_TIMEOUT_MS = 6000;
 
@@ -87,10 +91,22 @@ export async function fetchBestForTitle(title: string): Promise<HighScoreEntry |
   }
 }
 
-/** Fetch all global bests keyed by song title (events MAX merged with legacy table). */
-export async function fetchBestScores(): Promise<Record<string, HighScoreEntry>> {
+/**
+ * Events-derived bests with a success signal. `ok === false` means the fetch
+ * failed (unknown state) — never treat it as an empty leaderboard, or stale
+ * scores will be celebrated as NEW RECORDs.
+ */
+export async function fetchEventsBestStatus(): Promise<{
+  bests: Record<string, HighScoreEntry>;
+  ok: boolean;
+}> {
+  const { events, ok } = await fetchEventRows();
+  if (!ok) return { bests: {}, ok: false };
+  return { bests: bestScoresFromEvents(events), ok: true };
+}
+
+async function fetchLegacyBest(): Promise<Record<string, HighScoreEntry>> {
   if (!COUNTER_ENABLED) return {};
-  const fromEvents = bestScoresFromEvents(await fetchAllEvents());
   try {
     const res = await fetchWithTimeout(
       `${SUPABASE_URL}/rest/v1/high_scores?select=song_id,score,rank`,
@@ -101,9 +117,9 @@ export async function fetchBestScores(): Promise<Record<string, HighScoreEntry>>
         },
       },
     );
-    if (!res.ok) return fromEvents;
+    if (!res.ok) return {};
     const rows = (await res.json()) as unknown;
-    if (!Array.isArray(rows)) return fromEvents;
+    if (!Array.isArray(rows)) return {};
     const legacy: Record<string, HighScoreEntry> = {};
     for (const row of rows) {
       if (
@@ -119,10 +135,16 @@ export async function fetchBestScores(): Promise<Record<string, HighScoreEntry>>
         };
       }
     }
-    return mergeBests(fromEvents, legacy);
+    return legacy;
   } catch {
-    return fromEvents;
+    return {};
   }
+}
+
+/** Fetch all global bests keyed by song title (events MAX merged with legacy table). */
+export async function fetchBestScores(): Promise<Record<string, HighScoreEntry>> {
+  const [{ bests }, legacy] = await Promise.all([fetchEventsBestStatus(), fetchLegacyBest()]);
+  return mergeBests(bests, legacy);
 }
 
 async function postRpc(
@@ -168,28 +190,25 @@ export async function submitHighScore(
     return null;
   }
   const rounded = Math.round(score);
-  const prevEntry = (await fetchBestScores())[key];
-  const prevBest = prevEntry?.score ?? 0;
+  // Celebration AND best display require positively-known prior bests: an
+  // unknown leaderboard (fetch failure) must never read as "no record", or
+  // stale scores get celebrated as NEW RECORDs with the current score shown
+  // as the best. The row is still recorded; only the display is withheld.
+  const [{ bests: evBests, ok }, legacy] = await Promise.all([
+    fetchEventsBestStatus(),
+    fetchLegacyBest(),
+  ]);
   const logged = await postRpc('log_play', { sid: key, sc: rounded, rk: rank });
-  if (!logged.ok && logged.status !== 404) return null;
-  if (!logged.ok) {
+  if (!logged.ok && logged.status !== 404) {
     // Old backend without the 3-arg overload: use the legacy upsert RPC.
-    const legacy = await postRpc('submit_high_score', { sid: key, sc: rounded, rk: rank });
-    if (!legacy.ok) return null;
-    const v = legacy.json as { best?: unknown; beaten?: unknown } | null;
-    if (v && typeof v === 'object' && typeof v.best === 'number' && Number.isFinite(v.best)) {
-      return {
-        best: { score: v.best, rank: v.beaten === true ? rank : (prevEntry?.rank ?? rank) },
-        isRecord: v.beaten === true || rounded > prevBest,
-      };
-    }
-    return {
-      best: rounded > prevBest ? { score: rounded, rank } : (prevEntry ?? { score: prevBest, rank }),
-      isRecord: rounded > prevBest,
-    };
+    const legacyPost = await postRpc('submit_high_score', { sid: key, sc: rounded, rk: rank });
+    if (!legacyPost.ok) return null;
   }
+  if (!ok) return null;
+  const prev = mergeBests(evBests, legacy)[key];
+  const prevBest = prev?.score ?? 0;
   return {
-    best: rounded > prevBest ? { score: rounded, rank } : (prevEntry ?? { score: prevBest, rank }),
+    best: rounded > prevBest ? { score: rounded, rank } : (prev ?? { score: prevBest, rank }),
     isRecord: rounded > prevBest,
   };
 }

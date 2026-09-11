@@ -153,7 +153,7 @@ export class Renderer {
       this.particles.push({
         x: px,
         y: py,
-        vx: -(Math.random() * 40 + 20),
+        vx: -(Math.random() * 160 + 80),
         vy: Math.sin(angle) * speed,
         life: 0,
         maxLife: Math.random() * 0.2 + 0.3,
@@ -202,7 +202,7 @@ export class Renderer {
           this.particles.push({
             x,
             y,
-            vx: -(Math.random() * 40 + 20),
+            vx: -(Math.random() * 160 + 80),
             vy: Math.sin(angle) * speed,
             life: 0,
             maxLife,

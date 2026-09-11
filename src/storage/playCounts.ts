@@ -211,9 +211,15 @@ export function bucketEventsToSlots(
   return slots;
 }
 
-/** Fetch all per-play events (oldest first). Empty when unconfigured/offline. */
-export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
-  if (!COUNTER_ENABLED) return [];
+/**
+ * Raw event fetch with success signal. `ok` distinguishes "fetch failed"
+ * (unknown) from "no rows" (known empty) — callers must not treat failure
+ * as an empty leaderboard (that fabricates false NEW RECORDs).
+ */
+export async function fetchEventRows(
+  limit = 10000,
+): Promise<{ events: PlayEvent[]; ok: boolean }> {
+  if (!COUNTER_ENABLED) return { events: [], ok: false };
   try {
     const res = await fetchWithTimeout(
       `${SUPABASE_URL}/rest/v1/play_events?select=song_id,played_at,score,rank&order=played_at.asc&limit=${limit}`,
@@ -224,9 +230,9 @@ export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
         },
       },
     );
-    if (!res.ok) return [];
+    if (!res.ok) return { events: [], ok: false };
     const rows = (await res.json()) as unknown;
-    if (!Array.isArray(rows)) return [];
+    if (!Array.isArray(rows)) return { events: [], ok: false };
     const out: PlayEvent[] = [];
     for (const row of rows) {
       if (
@@ -246,10 +252,15 @@ export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
         }
       }
     }
-    return out;
+    return { events: out, ok: true };
   } catch {
-    return [];
+    return { events: [], ok: false };
   }
+}
+
+/** Fetch all per-play events (oldest first). Empty when unconfigured/offline. */
+export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
+  return (await fetchEventRows(limit)).events;
 }
 
 /** Derive per-song bests from events (max score, null scores ignored). Pure. */
