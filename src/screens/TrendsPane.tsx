@@ -44,6 +44,8 @@ export default function TodayTrendsPane({
     return order;
   }, [events]);
 
+  // Cumulative per song: running totals over the day, so each line rises
+  // monotonically (per-slot spikes looked like a bar forest).
   const series = useMemo(
     () =>
       songs.map((song) => {
@@ -51,7 +53,13 @@ export default function TodayTrendsPane({
           .filter((e) => e.song_id === song)
           .map((e) => Date.parse(e.played_at))
           .filter((t) => Number.isFinite(t));
-        return { song, slots: bucketEventsToSlots(ms, dayStartMs, SLOT_MS, SLOT_COUNT) };
+        const perSlot = bucketEventsToSlots(ms, dayStartMs, SLOT_MS, SLOT_COUNT);
+        let acc = 0;
+        const slots = perSlot.map((r) => {
+          acc += r.count;
+          return { startMs: r.startMs, count: acc };
+        });
+        return { song, slots };
       }),
     [songs, events, dayStartMs],
   );
@@ -87,7 +95,7 @@ export default function TodayTrendsPane({
       }}
     >
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-        本日の推移（全曲合計 {total}プレイ・1分単位）
+        本日の推移（曲別累計・1分単位／全曲合計 {total}プレイ）
       </div>
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
         {series.map((s, si) => (
