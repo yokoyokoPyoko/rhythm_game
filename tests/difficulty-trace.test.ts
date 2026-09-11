@@ -140,8 +140,8 @@ describe('hover preview start offset', () => {
     const src = readSrc('src/screens/SelectScreen.tsx');
     expect(src).toContain('data-testid={`preview-offset-input-${song.id}`}');
     expect(src).toContain('rhythmPreviewOffsets');
-    // Per-song lookup with 0 fallback; public mode forces offset 0.
+    // Per-song lookup with 0 fallback in all modes; editing UI is debug-only.
     expect(src).toMatch(/previewOffsetsRef\.current\[song\.id\] \?\? 0/);
-    expect(src).toMatch(/getViewMode\(\) === 'debug' \? \(previewOffsetsRef\.current\[song\.id\] \?\? 0\) : 0/);
+    expect(src).not.toMatch(/getViewMode\(\) === 'debug' \? \(previewOffsetsRef/);
   });
 });

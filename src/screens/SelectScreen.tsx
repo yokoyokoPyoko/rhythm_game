@@ -298,7 +298,8 @@ export default function SelectScreen() {
           // scheduled playback would erupt late and unpredictably.
           // The pending hover is retried on the next gesture (unlock below).
           if (mgr.ctx.state !== 'running') return
-          const offset = getViewMode() === 'debug' ? (previewOffsetsRef.current[song.id] ?? 0) : 0
+          // Per-song start offset applies in all modes; editing UI is debug-only.
+          const offset = previewOffsetsRef.current[song.id] ?? 0
           const handle = startPreview(buf, mgr.ctx, PREVIEW_VOLUME, offset)
           previewRef.current = { songId: song.id, stop: handle.stop, token }
           window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: song.id } }))
