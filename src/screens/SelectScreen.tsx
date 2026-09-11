@@ -14,7 +14,7 @@ import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
 import TodayTrendsPane from './TrendsPane'
 import { getViewMode, ViewMode } from '../viewMode'
-import { getPlayCount, bucketEventsToSlots } from '../storage/playCounts'
+import { getPlayCount } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
 
 // Global counts (by song title) fetched once per mount; falls back to local.
