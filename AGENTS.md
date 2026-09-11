@@ -2973,3 +2973,27 @@ const minorStep =
 1. 波形練習が4拍（導入なし）で動作し、リング→ホールド→本編の順に自動進行すること。
 2. ホールドステージで押し続け→テール離しの操作が体験できること（判定ロジックは既存のまま）。
 3. `tsc --noEmit` エラーなし。
+
+---
+
+### [T227] MISS過剰計上の2件修正（遷移フレームの亡霊MISS＋リピート連打MISS）
+
+**要求（ユーザー確定）**: ①チュートリアルにMISSが混ざっている気がする＋MISS表示が明らかに多すぎる ②チュートリアルの最後に一瞬MISSが出る。
+
+**根本原因（コード確定・E2E再現済み）**:
+1. **遷移フレームの亡霊MISS（2症状の真犯人）**: hold→main自動遷移だけ `enterMain()` をtick内で直呼びしていた（他ステージは `setTimeout` deferral）。遷移前判定の `inMainWait=false` のまま後続処理へ進み、作り直し直後のスポナーがチュートリアル時計時刻でチュートリアルリング全弾を未解決再スポーン→期限切れループが全てMISS計上（最大6件が本編スコアに恒久混入）＋MISSテキスト束が1フレームだけalpha=1描画（「最後の一瞬MISS」）。次フレーム以降は時計凍結で `age<0` のため非表示。チュートリアル混入説は機構としては否定（`enterMain` は必ずスコア初期化する）が、「チュートリアル終了がトリガー」の指摘は正しかった。
+2. **リピート連打MISS**: Space keydownに `e.repeat` ガードが無く（`CalibrationModal` にはある）、押し続け（ホールド必須操作）が `handleHit()` を連射し、近傍リングをY不一致MISSで消費する。反転確認済み：ガードなしで押しっぱなし→good=17の自動プレイ化、ガードあり→perfect/great/good=0・miss=17（期限切れのみ）。
+
+**修正**（`src/screens/GameScreen.tsx` のみ）:
+- hold→main遷移を `setTimeout(() => enterMain(), 0)` に（他ステージと一致。次フレームはfreshなmain-waitとして凍結）。`enterMain` 先頭に `if (phaseRef.current === 'main') return` ガードを追加。
+- Space keydownに `if (e.repeat) return` を追加（`keysRef.space = true` 維持の後。ホールド維持・離し判定はレベル／keyup遷移のため不変）。
+
+**テスト**（`tests/.gateb_T227.test.ts` 契約5件＋`tests/t227-repeat.spec.ts` 行為E2E）:
+- hold→mainがsetTimeout経由・enterMainにphaseガード・Space分岐にrepeatガード（keysRef維持の後）・CalibrationModalとの対称性・enterMainのスコア置換。
+- E2E（stay波形・中央開始・0.25拍間隔17リング・debug）：全曲押しっぱなしでperfect/great/good=0・miss=17・エラーなし。
+
+**完了条件**:
+1. hold→main遷移フレームでMISS計上ゼロ・MISSイベントゼロであること。
+2. リピートkeydownで判定が増えないこと（押しっぱなしで自動プレイ化しない）。
+3. チュートリアルMISSの本編非混入が維持されること。
+4. `tsc --noEmit` エラーなし（vitest全体の既存失敗199件は本件前後で不変であることを確認済み）。

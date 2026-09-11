@@ -311,6 +311,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   // score / combo / trace bonus. 本編の音楽はすぐ鳴らさず Space 待ちにする
   // （チュートリアル完了後・スキップ時・デバッグ初回で統一）。
   const enterMain = useCallback(() => {
+    // 二重timeout・スキップ連打での二重実行を防止（処理自体は冪等だが明示化）。
+    if (phaseRef.current === 'main') return
     const chart = mainChartRef.current
     const timeline = mainTimelineRef.current
     const wave = mainWaveRef.current
@@ -624,12 +626,11 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         phaseRef.current === 'tutorial-hold' &&
         songTimeMs > holdPracticeEndRef.current
       ) {
-        enterMain()
-        try {
-          songTimeMs = songNow()
-        } catch {
-          songTimeMs = 0
-        }
+        // 他ステージと同様にdeferする：同フレーム内でenterMain()を直呼びすると
+        // inMainWait等のフラグが遷移前判定のまま残り、作り直し直後のスポナーが
+        // チュートリアル時計時刻で全リングを期限切れMISSにしてしまう。
+        // 次フレームは fresh な main-wait として凍結される。
+        setTimeout(() => enterMain(), 0)
       }
       const renderTimeMs = songTimeMs - getManualOffsetMs()
 
@@ -804,6 +805,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         e.preventDefault()
         if (statusRef.current !== 'ready') return
         keysRef.current.space = true
+        // オートリピートは判定に回さない（CalibrationModalと同一ガード）。
+        // 押し続け判定（ホールド維持）はkeysRef.spaceのレベル参照のため不変。
+        if (e.repeat) return
         const inTutorial = phaseRef.current !== 'main'
         if (inTutorial) {
           // T211/T226: stage B/C each wait for the first Space press to start.

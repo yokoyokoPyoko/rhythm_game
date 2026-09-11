@@ -1532,5 +1532,14 @@
     ],
     "type": "feat",
     "test": true
+  },
+  {
+    "id": "T227",
+    "desc": "MISS過剰計上の2件修正（遷移フレームの亡霊MISS＋リピート連打MISS）。要求: チュートリアルMISS混入感＋MISS表示過多、チュートリアル最後の一瞬MISS。根本原因（コード確定・E2E再現済み）: (1)遷移フレームの亡霊MISS: hold→main自動遷移だけtick内直呼びのenterMain()で、遷移前判定のinMainWait=falseのまま後続処理へ進み、作り直し直後のスポナーがチュートリアル時計時刻でチュートリアルリング全弾を未解決再スポーン→期限切れループが全てMISS計上（最大6件が本編スコアに恒久混入）＋MISSテキスト束が1フレームだけalpha=1描画。次フレーム以降は時計凍結でage<0のため非表示。(2)リピート連打MISS: Space keydownにe.repeatガードが無く（CalibrationModalにはある）、押し続けがhandleHit()を連射し近傍リングをY不一致MISSで消費する。修正（src/screens/GameScreen.tsxのみ）: hold→main遷移をsetTimeout(()=>enterMain(),0)に（他ステージと一致）。enterMain先頭にif(phaseRef.current==='main')returnガードを追加。Space keydownにif(e.repeat)returnを追加（keysRef.space=true維持の後。ホールド維持・離し判定はレベル／keyup遷移のため不変）。テスト（tests/.gateb_T227.test.ts契約5件＋tests/t227-repeat.spec.ts行為E2E）: hold→mainがsetTimeout経由・enterMainにphaseガード・Space分岐にrepeatガード（keysRef維持の後）・CalibrationModalとの対称性・enterMainのスコア置換。E2E（stay波形・中央開始・0.25拍間隔17リング・debug）: 全曲押しっぱなしでperfect/great/good=0・miss=17・エラーなし。完了条件: (1)hold→main遷移フレームでMISS計上ゼロ・MISSイベントゼロ (2)リピートkeydownで判定が増えない（押しっぱなしで自動プレイ化しない） (3)チュートリアルMISSの本編非混入が維持される (4)tsc --noEmit（vitest全体の既存失敗199件は本件前後で不変であることを確認済み）。",
+    "depends_on": [
+      "T226"
+    ],
+    "type": "fix",
+    "test": true
   }
 ]
