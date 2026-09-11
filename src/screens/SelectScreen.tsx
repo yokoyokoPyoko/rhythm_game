@@ -13,7 +13,7 @@ import { handleZipFile as importZipFile } from '../storage/zipImport'
 import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
 import TodayTrendsPane from './TrendsPane'
-import { startPreview, type PreviewHandle } from '../audio/preview'
+import { startPreview, PREVIEW_VOLUME, type PreviewHandle } from '../audio/preview'
 import { getViewMode, ViewMode } from '../viewMode'
 import { getPlayCount } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
@@ -119,6 +119,8 @@ function DifficultyRow({
 }
 
 const MAX_DIFFICULTY = 5
+
+const PREVIEW_OFFSET_KEY = 'rhythmPreviewOffsetSec'
 const SKELETON_COUNT = 4
 
 export interface DifficultyStyle {
@@ -163,6 +165,21 @@ export default function SelectScreen() {
   // Debug-mode inline rename state (card id + draft text)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+  // Debug-only hover preview start offset in seconds (shared by all songs,
+  // persisted). Public mode always starts previews at 0.
+  const [previewOffsetSec, setPreviewOffsetSec] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(PREVIEW_OFFSET_KEY)
+      const v = raw === null ? 0 : Number(raw)
+      return Number.isFinite(v) && v >= 0 ? v : 0
+    } catch {
+      return 0
+    }
+  })
+  const previewOffsetRef = useRef(previewOffsetSec)
+  useEffect(() => {
+    previewOffsetRef.current = previewOffsetSec
+  }, [previewOffsetSec])
 
   const commitRename = useCallback(async (songId: string, newTitle: string) => {
     const title = newTitle.trim()
@@ -261,7 +278,8 @@ export default function SelectScreen() {
           // scheduled playback would erupt late and unpredictably.
           // The pending hover is retried on the next gesture (unlock below).
           if (mgr.ctx.state !== 'running') return
-          const handle = startPreview(buf, mgr.ctx)
+          const offset = getViewMode() === 'debug' ? previewOffsetRef.current : 0
+          const handle = startPreview(buf, mgr.ctx, PREVIEW_VOLUME, offset)
           previewRef.current = { songId: song.id, stop: handle.stop, token }
           window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: song.id } }))
         } catch {
@@ -1010,6 +1028,27 @@ beat = 8.0
             キャリブレーション
           </button>
           <span className="select-hint">L: キャリブレーション / E: エディタ</span>
+          <label className="select-offset-label">
+            試聴開始(秒)
+            <input
+              type="number"
+              min={0}
+              step={1}
+              data-testid="preview-offset-input"
+              value={previewOffsetSec}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                const next = Number.isFinite(v) && v >= 0 ? v : 0
+                setPreviewOffsetSec(next)
+                try {
+                  localStorage.setItem(PREVIEW_OFFSET_KEY, String(next))
+                } catch {
+                  /* storage unavailable */
+                }
+              }}
+            />
+          </label>
         </div>
       )}
 

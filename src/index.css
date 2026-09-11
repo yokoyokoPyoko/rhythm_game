@@ -311,6 +311,24 @@ button:focus-visible {
   transform: translateY(-2px);
 }
 
+.select-offset-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.select-offset-label input {
+  width: 5rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text);
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .game-screen {
   display: flex;
   flex-direction: column;

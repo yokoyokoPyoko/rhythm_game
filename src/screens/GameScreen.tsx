@@ -14,7 +14,7 @@ import { Cursor } from '../game/cursor'
 import { judgeHit } from '../game/hitJudge'
 import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
-import { ScoreManager, maxRingScore, rankForScore, type ScoreStats } from '../game/score'
+import { ScoreManager, maxRingScore, rankForScore, traceBaseForDifficulty, type ScoreStats } from '../game/score'
 import {
   generateWavePracticeChart,
   generateRingPracticeChart,
@@ -78,6 +78,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   const cursorRef = useRef(new Cursor())
   const spawnerRef = useRef(new RingSpawner())
   const scoreRef = useRef(new ScoreManager())
+  // Difficulty level (1..5) resolved during chart init; drives trace base points.
+  const difficultyRef = useRef(3)
   const ringsRef = useRef<RingState[]>([])
   // HUD best display (null = no record yet, undefined = not fetched).
   // CalibrationModal does not pass bestScore, so its HUD is unchanged.
@@ -336,7 +338,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     chartRef.current = chart
     timelineRef.current = timeline
     waveRef.current = wave
-    scoreRef.current = new ScoreManager()
+    scoreRef.current = new ScoreManager(traceBaseForDifficulty(difficultyRef.current))
     spawnerRef.current = new RingSpawner()
     ringsRef.current = []
     judgementEventsRef.current = []
@@ -402,6 +404,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       try {
         let chart: Chart
         let buf: AudioBuffer | null = null
+        let resolvedDifficulty: number | undefined
 
         const effectiveChart = playtest?.chart || playtestChart || state?.chart
         const effectiveBuffer = playtest?.buffer !== undefined ? playtest.buffer : (playtestBuffer !== undefined ? playtestBuffer : state?.buffer)
@@ -427,6 +430,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               if (stored) {
                 idbChart = parseChartText(stored.toml, songId!)
                 ChartCache.set(songId!, idbChart)
+                resolvedDifficulty = stored.difficulty
               }
             } catch {
               // IndexedDB unavailable
@@ -439,6 +443,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
               if (!song) {
                 throw new Error('譜面ファイルが見つかりません')
               }
+              resolvedDifficulty = song.difficulty
               const cachedByPath = ChartCache.get(song.chartPath)
               if (cachedByPath) {
                 chart = cachedByPath
@@ -448,6 +453,17 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             }
           }
         }
+        if (resolvedDifficulty === undefined && songId) {
+          // ChartCache-hit path (or any path without difficulty info): custom
+          // songs persist difficulty in their IndexedDB record.
+          try {
+            const { getChart } = await import('../storage/libraryDb')
+            resolvedDifficulty = (await getChart(songId))?.difficulty
+          } catch {
+            // IndexedDB unavailable
+          }
+        }
+        difficultyRef.current = resolvedDifficulty ?? 3
         // F5リロード直後はジェスチャーが無くresume()が保留されうるため、
         // タイムアウト付きで待つ（デコードはsuspendedでも動作する）。
         // 音は初回Space時の再ensureで鳴る。
@@ -522,6 +538,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           timelineRef.current = timeline
           waveRef.current = mainWave
           cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
+          scoreRef.current = new ScoreManager(traceBaseForDifficulty(difficultyRef.current))
           phaseRef.current = 'main'
           setPhase('main')
         }

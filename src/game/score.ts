@@ -9,6 +9,17 @@ const TRACE_BONUS_STEP_BEATS = 16;
 const TRACE_BONUS_STEP = 2;
 const OFF_BEAT_RESET = 3;
 const OFF_BEAT_EPS = 1e-9;
+// Trace base points per 0.15s tick by difficulty level (1..5, index 0..4).
+// Harder charts earn more while tracing the wave.
+const TRACE_BASE_BY_DIFFICULTY = [1, 3, 4, 5, 8];
+
+/** Trace tick base points for a difficulty level (1..5). Out-of-range/non-finite falls back to NORMAL. */
+export function traceBaseForDifficulty(difficulty: number): number {
+  const level = Number.isFinite(difficulty)
+    ? Math.min(5, Math.max(1, Math.round(difficulty)))
+    : 3;
+  return TRACE_BASE_BY_DIFFICULTY[level - 1];
+}
 // Hold tick: while a hold ring is held, +combo & fixed score every 0.5 beats.
 export const HOLD_TICK_BEATS = 0.5;
 export const HOLD_TICK_SCORE = 5;
@@ -38,6 +49,11 @@ export class ScoreManager {
   private traceBeats = 0;
   private offBeats = 0;
   private holdBeats = 0;
+  private traceBase: number;
+
+  constructor(traceBase: number = TRACE_BASE_SCORE) {
+    this.traceBase = traceBase;
+  }
 
   recordHit(result: HitResult): void {
     switch (result) {
@@ -91,7 +107,7 @@ export class ScoreManager {
     this.traceAccumulator += dt;
     while (this.traceAccumulator >= TRACE_INTERVAL) {
       this.traceAccumulator -= TRACE_INTERVAL;
-      this.score += TRACE_BASE_SCORE + this.comboBonus;
+      this.score += this.traceBase + this.comboBonus;
     }
   }
 
