@@ -198,6 +198,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
 
   // 本編の音楽開始（Space待ち解除時）。スポナー・リング・カーソルを初期化し、
   // 時計リセット→音楽＋メトロノーム開始までを一気に行う。
+  // デバッグ用アクセスカウンタもここで加算する（プレイテストは除外）。
   const startMainMusic = useCallback(async () => {
     const audioMgr = AudioManager.getInstance()
     await audioMgr.ensure()
@@ -210,9 +211,17 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     keysRef.current = { up: false, down: false, space: true }
     resetClock(ctx)
     startedRef.current = true
+    if (!isPlaytest) {
+      try {
+        const { recordPlay } = await import('../storage/playCounts')
+        recordPlay(songId ?? chart?.title ?? '')
+      } catch {
+        /* ignore counter errors */
+      }
+    }
     playMusic(ctx, chart?.audio_offset ?? 0)
     startMetronome(ctx)
-  }, [playMusic, startMetronome])
+  }, [playMusic, startMetronome, isPlaytest, songId])
 
   // T211: called on the first ArrowUp/ArrowDown (stage A) or Space (stage B)
   // press. Resets the clock so practice starts now, clears the overlay dim

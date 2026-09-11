@@ -13,6 +13,7 @@ import { handleZipFile as importZipFile } from '../storage/zipImport'
 import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
 import { getViewMode, ViewMode } from '../viewMode'
+import { getPlayCount } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
 
 const MAX_DIFFICULTY = 5
@@ -520,6 +521,15 @@ beat = 8.0
                 >
                   <div className="song-card-title">{song.title}</div>
                   <div className="song-card-artist">{song.artist || 'Unknown Artist'}</div>
+                  {viewMode === 'debug' && (
+                    <div
+                      className="song-card-plays"
+                      data-testid={`play-count-${song.id}`}
+                      style={{ fontSize: '11px', color: 'var(--text-muted)' }}
+                    >
+                      ▶ {getPlayCount(song.id)}回
+                    </div>
+                  )}
                   <div className="song-card-difficulty">
                     {Array.from({ length: MAX_DIFFICULTY }, (_, i) => (
                       <span
