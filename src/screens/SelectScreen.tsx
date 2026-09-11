@@ -382,7 +382,7 @@ beat = 8.0
 
       {viewMode !== 'debug' && (
         <p className="select-guide" data-testid="select-guide">
-          曲を選択し自由に遊んでください。
+          曲を選択し自由に遊んでください。シャイニングスターの方が簡単です。
         </p>
       )}
 
