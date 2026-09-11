@@ -64,10 +64,11 @@ export default function TodayTrendsPane({
     [songs, events, dayStartMs],
   );
 
-  const total = useMemo(
-    () => series.reduce((a, s) => a + s.slots.reduce((x, r) => x + r.count, 0), 0),
-    [series],
-  );
+  // Cumulative series: the per-song total is the FINAL slot value.
+  // (Summing all slots would multiply real counts by ~slot count.)
+  const finalOf = (slots: { count: number }[]): number =>
+    slots.length > 0 ? slots[slots.length - 1].count : 0;
+  const total = useMemo(() => series.reduce((a, s) => a + finalOf(s.slots), 0), [series]);
   const max = Math.max(1, ...series.flatMap((s) => s.slots.map((r) => r.count)));
   const mid = Math.ceil(max / 2);
   const xOf = (i: number) => PAD_L + (i / Math.max(1, SLOT_COUNT - 1)) * (W - PAD_L - PAD_R);
@@ -110,7 +111,7 @@ export default function TodayTrendsPane({
                 verticalAlign: 'middle',
               }}
             />
-            {s.song}（{s.slots.reduce((a, r) => a + r.count, 0)}）
+            {s.song}（{finalOf(s.slots)}）
           </span>
         ))}
       </div>

@@ -434,7 +434,13 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
             }
           }
         }
-        await audioMgr.ensure()
+        // F5リロード直後はジェスチャーが無くresume()が保留されうるため、
+        // タイムアウト付きで待つ（デコードはsuspendedでも動作する）。
+        // 音は初回Space時の再ensureで鳴る。
+        await Promise.race([
+          audioMgr.ensure(),
+          new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+        ])
         // T187: base tempo is derived internally from the first (beat-min) section
         const timeline = new BpmTimeline(chart.bpm_changes, chart.amplitude)
         const mainWave = new WaveEngine(chart.segments, timeline, chart.amplitude, chart.start_position)

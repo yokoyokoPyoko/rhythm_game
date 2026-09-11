@@ -92,6 +92,7 @@ function App() {
           path="/editor"
           element={mode === 'debug' ? <EditorScreen /> : <Navigate to="/" replace />}
         />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </HashRouter>
   )
