@@ -266,14 +266,16 @@ export default function SelectScreen() {
       const b = await loadGlobalBests()
       if (!cancelled && Object.keys(b).length > 0) setGlobalBests(b)
       try {
-        const { fetchAllEvents, groupCountsBySong, jstDayStartISO } = await import('../storage/playCounts')
+        const { fetchAllEvents, groupCountsBySong, hasCompletedScore, jstDayStartISO } = await import('../storage/playCounts')
         const now = Date.now()
         const events = await fetchAllEvents()
         if (cancelled) return
         const counts = groupCountsBySong(events)
         if (Object.keys(counts).length > 0) setGlobalCounts(counts)
         const dayStart = Date.parse(jstDayStartISO(now))
+        // Trends show completed plays only (same definition as counts).
         const today = events.filter((e) => {
+          if (!hasCompletedScore(e)) return false
           const t = Date.parse(e.played_at)
           return Number.isFinite(t) && t >= dayStart
         })

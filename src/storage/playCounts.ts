@@ -268,11 +268,21 @@ export function bestScoresFromEvents(
   return out;
 }
 
-/** Group events into per-song totals. Pure. */
+/**
+ * Group events into per-song totals. Pure.
+ * Only completed plays count: rows must carry a finite score.
+ * Started-but-quit rows (score null) and score-0 completions are handled as:
+ * null → excluded, 0 → included (a real 0-point completion).
+ */
+export function hasCompletedScore(e: PlayEvent): boolean {
+  return !!e && typeof e.song_id === 'string' && e.song_id !== '' &&
+    typeof e.score === 'number' && Number.isFinite(e.score);
+}
+
 export function groupCountsBySong(events: PlayEvent[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const e of events) {
-    if (!e || typeof e.song_id !== 'string' || e.song_id === '') continue;
+    if (!hasCompletedScore(e)) continue;
     out[e.song_id] = (out[e.song_id] ?? 0) + 1;
   }
   return out;
