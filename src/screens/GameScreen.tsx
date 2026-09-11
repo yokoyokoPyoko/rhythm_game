@@ -14,7 +14,7 @@ import { Cursor } from '../game/cursor'
 import { judgeHit } from '../game/hitJudge'
 import { Renderer, type JudgementEvent } from '../game/renderer'
 import { RingSpawner } from '../game/ringSpawner'
-import { ScoreManager, maxRingScore, rankForScore, traceBaseForDifficulty, type ScoreStats } from '../game/score'
+import { ScoreManager, maxRingScore, rankForScore, type ScoreStats } from '../game/score'
 import {
   generateWavePracticeChart,
   generateRingPracticeChart,
@@ -338,7 +338,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     chartRef.current = chart
     timelineRef.current = timeline
     waveRef.current = wave
-    scoreRef.current = new ScoreManager(traceBaseForDifficulty(difficultyRef.current))
+    scoreRef.current = ScoreManager.forDifficulty(difficultyRef.current)
     spawnerRef.current = new RingSpawner()
     ringsRef.current = []
     judgementEventsRef.current = []
@@ -538,7 +538,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           timelineRef.current = timeline
           waveRef.current = mainWave
           cursorRef.current = new Cursor(chart.amplitude, chart.start_position)
-          scoreRef.current = new ScoreManager(traceBaseForDifficulty(difficultyRef.current))
+          scoreRef.current = ScoreManager.forDifficulty(difficultyRef.current)
           phaseRef.current = 'main'
           setPhase('main')
         }

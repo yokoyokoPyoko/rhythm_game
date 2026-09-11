@@ -20,6 +20,18 @@ export function traceBaseForDifficulty(difficulty: number): number {
     : 3;
   return TRACE_BASE_BY_DIFFICULTY[level - 1];
 }
+
+// Combo bonus pool increment per 16 consecutive trace beats, by difficulty
+// level (1..5). Harder charts build the bonus pool faster.
+const BONUS_STEP_BY_DIFFICULTY = [1, 2, 2, 3, 5];
+
+/** Combo bonus increment for a difficulty level (1..5). Out-of-range/non-finite falls back to NORMAL. */
+export function bonusStepForDifficulty(difficulty: number): number {
+  const level = Number.isFinite(difficulty)
+    ? Math.min(5, Math.max(1, Math.round(difficulty)))
+    : 3;
+  return BONUS_STEP_BY_DIFFICULTY[level - 1];
+}
 // Hold tick: while a hold ring is held, +combo & fixed score every 0.5 beats.
 export const HOLD_TICK_BEATS = 0.5;
 export const HOLD_TICK_SCORE = 5;
@@ -50,9 +62,16 @@ export class ScoreManager {
   private offBeats = 0;
   private holdBeats = 0;
   private traceBase: number;
+  private bonusStep: number;
 
-  constructor(traceBase: number = TRACE_BASE_SCORE) {
+  constructor(traceBase: number = TRACE_BASE_SCORE, bonusStep: number = TRACE_BONUS_STEP) {
     this.traceBase = traceBase;
+    this.bonusStep = bonusStep;
+  }
+
+  /** Build a ScoreManager with trace base and bonus step for a difficulty level (1..5). */
+  static forDifficulty(difficulty: number): ScoreManager {
+    return new ScoreManager(traceBaseForDifficulty(difficulty), bonusStepForDifficulty(difficulty));
   }
 
   recordHit(result: HitResult): void {
@@ -102,7 +121,7 @@ export class ScoreManager {
     this.traceBeats += beats;
     while (this.traceBeats >= TRACE_BONUS_STEP_BEATS) {
       this.traceBeats -= TRACE_BONUS_STEP_BEATS;
-      this.comboBonus += TRACE_BONUS_STEP;
+      this.comboBonus += this.bonusStep;
     }
     this.traceAccumulator += dt;
     while (this.traceAccumulator >= TRACE_INTERVAL) {

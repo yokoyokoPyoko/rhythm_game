@@ -647,8 +647,8 @@ describe('T211-4: ステージ遷移と押下確認（待機→練習開始→�
     // Must discard score on entering main (and ideally on entering ring stage as well)
     const enterMainIdx = src.indexOf('enterMain');
     const enterSlice = enterMainIdx !== -1 ? src.slice(enterMainIdx, enterMainIdx + 1500) : src;
-    expect(enterSlice).toMatch(/new ScoreManager\(\)/);
-    expect(enterSlice).toMatch(/scoreRef\.current = new ScoreManager/);
+    expect(enterSlice).toMatch(/new ScoreManager\(\)|ScoreManager\.forDifficulty\(/);
+    expect(enterSlice).toMatch(/scoreRef\.current = (new ScoreManager|ScoreManager\.forDifficulty)/);
     expect(enterSlice).toMatch(/ringsRef\.current = \[\]/);
     // At least one reset point for ring stage as well (wave->ring should also reset or keep isolated)
     // Check that phase transitions involve new cursor/wave/timeline assignment
@@ -752,7 +752,7 @@ describe('T211-6: チュートリアル中のスコアは破棄し本編開始�
 
     // Also verify stage A -> stage B does not leak into main (file contract)
     const src = readFile('src/screens/GameScreen.tsx');
-    const mainResets = (src.match(/new ScoreManager\(\)/g) || []).length;
+    const mainResets = (src.match(/new ScoreManager\(\)|ScoreManager\.forDifficulty\(/g) || []).length;
     expect(mainResets).toBeGreaterThanOrEqual(1);
   });
 

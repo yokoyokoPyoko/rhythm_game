@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ScoreManager, traceBaseForDifficulty } from '../src/game/score';
+import { ScoreManager, bonusStepForDifficulty, traceBaseForDifficulty } from '../src/game/score';
 import { startPreview } from '../src/audio/preview';
 
 function readSrc(rel: string): string {
@@ -41,10 +41,50 @@ describe('trace base points by difficulty (harder earns more)', () => {
 
   it('GameScreen resolves difficulty and wires it into ScoreManager', () => {
     const src = readSrc('src/screens/GameScreen.tsx');
-    expect(src).toMatch(/new ScoreManager\(traceBaseForDifficulty\(difficultyRef\.current\)\)/);
+    expect(src).toMatch(/scoreRef\.current = ScoreManager\.forDifficulty\(difficultyRef\.current\)/);
     expect(src).toMatch(/resolvedDifficulty = stored\.difficulty/);
     expect(src).toMatch(/resolvedDifficulty = song\.difficulty/);
     expect(src).toMatch(/difficultyRef\.current = resolvedDifficulty \?\? 3/);
+  });
+});
+
+describe('combo bonus step by difficulty (harder builds faster)', () => {
+  function bonusOf(m: ScoreManager): number {
+    return (m as unknown as { comboBonus: number }).comboBonus;
+  }
+
+  it('maps levels 1..5 to bonus step 1,2,2,3,5', () => {
+    expect([1, 2, 3, 4, 5].map(bonusStepForDifficulty)).toEqual([1, 2, 2, 3, 5]);
+  });
+
+  it('clamps out-of-range levels and falls back for non-finite input', () => {
+    expect(bonusStepForDifficulty(0)).toBe(1);
+    expect(bonusStepForDifficulty(9)).toBe(5);
+    expect(bonusStepForDifficulty(NaN)).toBe(2);
+  });
+
+  it('16 consecutive trace beats add the difficulty step to the bonus (EXTRA +5)', () => {
+    const m = ScoreManager.forDifficulty(5);
+    for (let i = 0; i < 54; i++) m.recordTrace(0.15, true, 500); // 8.1s = 16.2 beats
+    expect(bonusOf(m)).toBe(5);
+    const before = m.getStats().score;
+    m.recordTrace(0.15, true, 500);
+    expect(m.getStats().score - before).toBe(8 + 5); // base 8 + bonus 5
+  });
+
+  it('16 consecutive trace beats add the difficulty step to the bonus (EASY +1)', () => {
+    const m = ScoreManager.forDifficulty(1);
+    for (let i = 0; i < 54; i++) m.recordTrace(0.15, true, 500);
+    expect(bonusOf(m)).toBe(1);
+    const before = m.getStats().score;
+    m.recordTrace(0.15, true, 500);
+    expect(m.getStats().score - before).toBe(1 + 1); // base 1 + bonus 1
+  });
+
+  it('default constructor keeps the legacy bonus step 2', () => {
+    const m = new ScoreManager();
+    for (let i = 0; i < 54; i++) m.recordTrace(0.15, true, 500);
+    expect(bonusOf(m)).toBe(2);
   });
 });
 
