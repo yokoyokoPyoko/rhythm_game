@@ -5,22 +5,20 @@
 // Until then the app runs in local-only mode (per-browser localStorage).
 //
 // Setup (Supabase dashboard → SQL Editor, run once):
-//   create table if not exists play_counts (
-//     song_id text primary key,
-//     count integer not null default 0
+//   create table if not exists play_events (
+//     id bigint generated always as identity primary key,
+//     song_id text not null,
+//     played_at timestamptz not null default now()
 //   );
-//   alter table play_counts enable row level security;
-//   create policy "public read" on play_counts for select using (true);
-//   create or replace function increment_play_count(sid text)
-//   returns integer language plpgsql security definer as $$
-//   declare c integer;
+//   alter table play_events enable row level security;
+//   create policy "public read" on play_events for select using (true);
+//   create or replace function log_play(sid text)
+//   returns void language plpgsql security definer as $$
 //   begin
-//     insert into play_counts(song_id, count) values (sid, 1)
-//     on conflict (song_id) do update set count = play_counts.count + 1
-//     returning play_counts.count into c;
-//     return c;
+//     insert into play_events(song_id) values (sid);
 //   end $$;
-//   grant execute on function increment_play_count(text) to anon, authenticated;
+//   grant execute on function log_play(text) to anon, authenticated;
+//   (Counts are derived by aggregation; no counts table is needed.)
 //
 // Then paste Project URL + anon public key below.
 

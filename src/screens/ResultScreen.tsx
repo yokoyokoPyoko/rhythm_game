@@ -45,21 +45,23 @@ export default function ResultScreen() {
   const submittedRef = useRef(false)
 
   // Submit once per result view (StrictMode-safe via ref guard).
+  // Record-ness is decided by comparing against the pre-submit best, so the
+  // NEW RECORD notice does not depend on the RPC response shape alone.
   useEffect(() => {
     if (submittedRef.current) return
     submittedRef.current = true
     if (!title) return
     void (async () => {
       try {
-        const { submitHighScore } = await import('../storage/highScores')
+        const { submitHighScore, fetchBestScores } = await import('../storage/highScores')
+        const before = await fetchBestScores()
+        const prevBest = before[title]?.score ?? 0
         const res = await submitHighScore(title, stats.score, rank)
         if (res) {
           setGlobalBest(res.best)
-          setIsRecord(res.isRecord)
-        } else {
-          const { fetchBestScores } = await import('../storage/highScores')
-          const all = await fetchBestScores()
-          if (all[title] !== undefined) setGlobalBest(all[title])
+          setIsRecord(res.isRecord || stats.score > prevBest)
+        } else if (before[title] !== undefined) {
+          setGlobalBest(before[title])
         }
       } catch {
         /* offline — hide best section */

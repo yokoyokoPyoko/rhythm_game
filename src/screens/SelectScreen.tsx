@@ -17,16 +17,6 @@ import { getViewMode, ViewMode } from '../viewMode'
 import { getPlayCount } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
 
-// Global counts (by song title) fetched once per mount; falls back to local.
-async function loadGlobalCounts(): Promise<Record<string, number>> {
-  try {
-    const { fetchGlobalCounts } = await import('../storage/playCounts')
-    return await fetchGlobalCounts()
-  } catch {
-    return {}
-  }
-}
-
 // Global bests (by song title) fetched once per mount.
 async function loadGlobalBests(): Promise<Record<string, { score: number; rank: string | null }>> {
   try {
@@ -116,24 +106,30 @@ export default function SelectScreen() {
   const [globalCounts, setGlobalCounts] = useState<Record<string, number>>({})
   // Global bests keyed by song title (empty when backend unconfigured).
   const [globalBests, setGlobalBests] = useState<Record<string, { score: number; rank: string | null }>>({})
-  // Today's per-play timestamps (ms) for the trends graph (debug only).
-  const [trendEventMs, setTrendEventMs] = useState<number[]>([])
+  // All per-play events for counts + trends graph (debug only).
+  const [trendEvents, setTrendEvents] = useState<{ song_id: string; played_at: string }[]>([])
   const [trendDayStartMs, setTrendDayStartMs] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const g = await loadGlobalCounts()
-      if (!cancelled && Object.keys(g).length > 0) setGlobalCounts(g)
       const b = await loadGlobalBests()
       if (!cancelled && Object.keys(b).length > 0) setGlobalBests(b)
       try {
-        const { fetchTodayEvents, jstDayStartISO } = await import('../storage/playCounts')
+        const { fetchAllEvents, groupCountsBySong, jstDayStartISO } = await import('../storage/playCounts')
         const now = Date.now()
-        const events = await fetchTodayEvents(now)
-        if (!cancelled && events.length > 0) {
-          setTrendDayStartMs(Date.parse(jstDayStartISO(now)))
-          setTrendEventMs(events.map((e) => Date.parse(e.played_at)).filter((t) => Number.isFinite(t)))
+        const events = await fetchAllEvents()
+        if (cancelled) return
+        const counts = groupCountsBySong(events)
+        if (Object.keys(counts).length > 0) setGlobalCounts(counts)
+        const dayStart = Date.parse(jstDayStartISO(now))
+        const today = events.filter((e) => {
+          const t = Date.parse(e.played_at)
+          return Number.isFinite(t) && t >= dayStart
+        })
+        if (today.length > 0) {
+          setTrendDayStartMs(dayStart)
+          setTrendEvents(today)
         }
       } catch {
         /* trends are best-effort */
@@ -420,8 +416,8 @@ beat = 8.0
         </>
       )}
 
-      {viewMode === 'debug' && trendEventMs.length > 0 && trendDayStartMs > 0 && (
-        <TodayTrendsPane eventMs={trendEventMs} dayStartMs={trendDayStartMs} />
+      {viewMode === 'debug' && trendEvents.length > 0 && trendDayStartMs > 0 && (
+        <TodayTrendsPane events={trendEvents} dayStartMs={trendDayStartMs} />
       )}
 
       {viewMode === 'debug' && (

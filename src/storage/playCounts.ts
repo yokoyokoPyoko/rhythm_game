@@ -1,9 +1,10 @@
 // Play/access counter.
 //
 // Local: localStorage (per browser, keyed by song id).
-// Global: Supabase `play_counts` table (shared across PCs, keyed by song
-// title so separately-imported copies of the same song accumulate together).
-// When the backend is not configured (counterConfig.ts), local-only mode.
+// Global: Supabase `play_events` table (one row per play, shared across PCs,
+// keyed by song title so separately-imported copies of the same song merge).
+// Counts are derived by aggregation; the single write path is the `log_play`
+// RPC. When the backend is not configured (counterConfig.ts), local-only mode.
 
 import { COUNTER_ENABLED, SUPABASE_ANON_KEY, SUPABASE_URL } from './counterConfig';
 
@@ -98,29 +99,19 @@ export async function recordPlay(id: string, globalKey?: string): Promise<number
   }
   const gkey = (globalKey || id || '').trim();
   if (COUNTER_ENABLED && gkey) {
-    const headers = {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-    };
+    // Single write path: the RPC inserts the event row; counts are derived.
     try {
-      await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/increment_play_count`, {
+      await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/log_play`, {
         method: 'POST',
-        headers,
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ sid: gkey }),
       });
     } catch {
       /* offline or backend error — local count already saved */
-    }
-    // Per-play event log for the trends graph (fire-and-forget).
-    try {
-      await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/log_play_event`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ sid: gkey }),
-      });
-    } catch {
-      /* event log is best-effort */
     }
   }
   return next;
@@ -207,12 +198,12 @@ export function bucketEventsToSlots(
   return slots;
 }
 
-/** Fetch global counts keyed by song title. Empty object when unconfigured/offline. */
-export async function fetchGlobalCounts(): Promise<Record<string, number>> {
-  if (!COUNTER_ENABLED) return {};
+/** Fetch all per-play events (oldest first). Empty when unconfigured/offline. */
+export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
+  if (!COUNTER_ENABLED) return [];
   try {
     const res = await fetchWithTimeout(
-      `${SUPABASE_URL}/rest/v1/play_counts?select=song_id,count`,
+      `${SUPABASE_URL}/rest/v1/play_events?select=song_id,played_at&order=played_at.asc&limit=${limit}`,
       {
         headers: {
           apikey: SUPABASE_ANON_KEY,
@@ -220,22 +211,40 @@ export async function fetchGlobalCounts(): Promise<Record<string, number>> {
         },
       },
     );
-    if (!res.ok) return {};
+    if (!res.ok) return [];
     const rows = (await res.json()) as unknown;
-    if (!Array.isArray(rows)) return {};
-    const out: Record<string, number> = {};
+    if (!Array.isArray(rows)) return [];
+    const out: PlayEvent[] = [];
     for (const row of rows) {
       if (
         typeof row === 'object' &&
         row !== null &&
         typeof (row as { song_id?: unknown }).song_id === 'string' &&
-        typeof (row as { count?: unknown }).count === 'number'
+        typeof (row as { played_at?: unknown }).played_at === 'string'
       ) {
-        out[(row as { song_id: string }).song_id] = (row as { count: number }).count;
+        const r = row as { song_id: string; played_at: string };
+        if (Number.isFinite(Date.parse(r.played_at))) {
+          out.push({ song_id: r.song_id, played_at: r.played_at });
+        }
       }
     }
     return out;
   } catch {
-    return {};
+    return [];
   }
+}
+
+/** Group events into per-song totals. Pure. */
+export function groupCountsBySong(events: PlayEvent[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of events) {
+    if (!e || typeof e.song_id !== 'string' || e.song_id === '') continue;
+    out[e.song_id] = (out[e.song_id] ?? 0) + 1;
+  }
+  return out;
+}
+
+/** Fetch global counts keyed by song title (derived from events). Empty when unconfigured/offline. */
+export async function fetchGlobalCounts(): Promise<Record<string, number>> {
+  return groupCountsBySong(await fetchAllEvents());
 }
