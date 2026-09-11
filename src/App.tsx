@@ -5,16 +5,32 @@ import GameScreen from './screens/GameScreen'
 import ResultScreen from './screens/ResultScreen'
 import EditorScreen from './screens/EditorScreen'
 import { getViewMode, toggleViewMode, ViewMode } from './viewMode'
+import { isCountingPaused, toggleCountingPaused } from './storage/playCounts'
 
 function App() {
   const [mode, setMode] = useState<ViewMode>(getViewMode())
+  const [countPaused, setCountPaused] = useState(() => {
+    try {
+      return isCountingPaused()
+    } catch {
+      return false
+    }
+  })
 
   useEffect(() => {
     const handleStorage = () => {
       setMode(getViewMode())
     }
+    const handleCountChange = () => {
+      try {
+        setCountPaused(isCountingPaused())
+      } catch {
+        /* ignore */
+      }
+    }
     window.addEventListener('storage', handleStorage)
     window.addEventListener('trace-wave-view-mode-changed', handleStorage)
+    window.addEventListener('trace-wave-counting-changed', handleCountChange)
 
     const handleKeyDown = (e: KeyboardEvent) => {
       // JIS配列では Shift+@ が '`' になるため e.key だけでは拾えない。
@@ -26,19 +42,27 @@ function App() {
         e.preventDefault()
         const newMode = toggleViewMode()
         setMode(newMode)
+        return
+      }
+      // カウントしないモードのオンオフ切替（JIS/US差異に備えcode併用）
+      const isCountKey = e.key === '0' || e.code === 'Digit0'
+      if (e.ctrlKey && e.altKey && e.shiftKey && isCountKey) {
+        e.preventDefault()
+        setCountPaused(toggleCountingPaused())
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => {
       window.removeEventListener('storage', handleStorage)
       window.removeEventListener('trace-wave-view-mode-changed', handleStorage)
+      window.removeEventListener('trace-wave-counting-changed', handleCountChange)
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [])
 
   return (
     <HashRouter>
-      {mode === 'debug' && (
+      {(mode === 'debug' || countPaused) && (
         <div
           style={{
             position: 'fixed',
@@ -56,7 +80,7 @@ function App() {
           }}
           data-testid="debug-badge"
         >
-          DEBUG
+          {mode === 'debug' ? (countPaused ? 'DEBUG・カウント停止中' : 'DEBUG') : 'カウント停止中'}
         </div>
       )}
       <Routes>

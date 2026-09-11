@@ -8,7 +8,34 @@
 import { COUNTER_ENABLED, SUPABASE_ANON_KEY, SUPABASE_URL } from './counterConfig';
 
 const STORAGE_KEY = 'traceWavePlayCounts';
+const PAUSED_KEY = 'traceWaveCountingPaused';
 const FETCH_TIMEOUT_MS = 6000;
+
+/** When true, plays are not counted (local nor global). Toggled by Ctrl+Alt+Shift+0. */
+export function isCountingPaused(): boolean {
+  try {
+    return localStorage.getItem(PAUSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setCountingPaused(paused: boolean): boolean {
+  const next = !!paused;
+  try {
+    localStorage.setItem(PAUSED_KEY, next ? '1' : '0');
+  } catch {
+    /* ignore storage errors */
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('trace-wave-counting-changed'));
+  }
+  return next;
+}
+
+export function toggleCountingPaused(): boolean {
+  return setCountingPaused(!isCountingPaused());
+}
 
 function readAll(): Record<string, number> {
   try {
@@ -55,6 +82,9 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
  * Never throws.
  */
 export async function recordPlay(id: string, globalKey?: string): Promise<number> {
+  if (isCountingPaused()) {
+    return id ? (readAll()[id] ?? 0) : 0;
+  }
   let next = 0;
   if (id) {
     const all = readAll();
