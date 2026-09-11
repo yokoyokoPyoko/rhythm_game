@@ -167,6 +167,36 @@ button:focus-visible {
   display: flex;
   gap: 4px;
   margin-top: auto;
+  align-items: center;
+}
+
+.difficulty-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-left: 4px;
+}
+
+.difficulty-stepper {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.difficulty-step {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
 }
 
 .song-card-best {

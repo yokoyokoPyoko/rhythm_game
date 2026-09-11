@@ -61,8 +61,88 @@ async function ensureDecodedAudio(song: SongEntry): Promise<AudioBuffer | null> 
   }
 }
 
+/** Display-only difficulty row: colored dots + level name (all modes). */
+function DifficultyRow({
+  song,
+  debug,
+  onStep,
+}: {
+  song: SongEntry
+  debug: boolean
+  onStep: (songId: string, delta: -1 | 1) => void
+}) {
+  const style = difficultyStyle(song.difficulty)
+  const dec = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onStep(song.id, -1)
+  }
+  const inc = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onStep(song.id, 1)
+  }
+  return (
+    <div className="song-card-difficulty">
+      {Array.from({ length: MAX_DIFFICULTY }, (_, i) => (
+        <span
+          key={i}
+          className={`difficulty-dot ${i < style.level ? 'filled' : ''}`}
+          style={i < style.level ? { backgroundColor: style.color } : undefined}
+        />
+      ))}
+      <span className="difficulty-label" style={{ color: style.color }}>
+        {style.name}
+      </span>
+      {debug && song.id.startsWith('custom-') && (
+        <span className="difficulty-stepper">
+          <button
+            type="button"
+            aria-label={`${song.title}の難易度を下げる`}
+            data-testid={`difficulty-dec-${song.id}`}
+            className="difficulty-step"
+            onClick={dec}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            aria-label={`${song.title}の難易度を上げる`}
+            data-testid={`difficulty-inc-${song.id}`}
+            className="difficulty-step"
+            onClick={inc}
+          >
+            ＋
+          </button>
+        </span>
+      )}
+    </div>
+  )
+}
+
 const MAX_DIFFICULTY = 5
 const SKELETON_COUNT = 4
+
+export interface DifficultyStyle {
+  level: number;
+  name: string;
+  color: string;
+}
+
+const DIFFICULTY_LEVELS: { name: string; color: string }[] = [
+  { name: 'EASY', color: 'var(--positive)' },
+  { name: 'NORMAL', color: 'var(--accent-sub)' },
+  { name: 'HARD', color: 'var(--warning)' },
+  { name: 'MASTER', color: 'var(--danger)' },
+  { name: 'EXTRA', color: 'var(--accent)' },
+]
+
+/** Clamp any difficulty value to 1..MAX_DIFFICULTY and resolve its display style. */
+export function difficultyStyle(difficulty: number): DifficultyStyle {
+  const level = Number.isFinite(difficulty)
+    ? Math.min(MAX_DIFFICULTY, Math.max(1, Math.round(difficulty)))
+    : 3
+  const entry = DIFFICULTY_LEVELS[level - 1]
+  return { level, name: entry.name, color: entry.color }
+}
 
 export default function SelectScreen() {
   const navigate = useNavigate()
@@ -107,6 +187,27 @@ export default function SelectScreen() {
         }
       })()
       return prev.map((s) => (s.id === songId ? { ...s, title } : s))
+    })
+  }, [])
+
+  // Debug-mode difficulty stepper (custom songs only; persisted to IndexedDB).
+  const stepDifficulty = useCallback((songId: string, delta: -1 | 1) => {
+    if (!songId.startsWith('custom-')) return
+    setSongs((prev) => {
+      const target = prev.find((s) => s.id === songId)
+      if (!target) return prev
+      const next = difficultyStyle(target.difficulty + delta).level
+      if (next === difficultyStyle(target.difficulty).level) return prev
+      void (async () => {
+        try {
+          const stored = await getChart(songId)
+          if (stored) await putChart({ ...stored, difficulty: next })
+        } catch (err) {
+          console.warn('[SelectScreen] Failed to persist difficulty', err)
+          setImportError(err instanceof Error ? err.message : '難易度の保存に失敗しました')
+        }
+      })()
+      return prev.map((s) => (s.id === songId ? { ...s, difficulty: next } : s))
     })
   }, [])
 
@@ -806,14 +907,7 @@ beat = 8.0
                       最高 {globalBests[song.title].score.toLocaleString()}点
                     </div>
                   )}
-                  <div className="song-card-difficulty">
-                    {Array.from({ length: MAX_DIFFICULTY }, (_, i) => (
-                      <span
-                        key={i}
-                        className={`difficulty-dot ${i < song.difficulty ? 'filled' : ''}`}
-                      />
-                    ))}
-                  </div>
+                  <DifficultyRow song={song} debug={viewMode === 'debug'} onStep={stepDifficulty} />
                 </button>
                 {viewMode === 'debug' && isCustom && (
                   <button
