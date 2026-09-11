@@ -734,6 +734,8 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       if (startedRef.current && !inMainWait) {
         const isOnWave = Math.abs(cursorRef.current.y - wave.waveYAtMs(renderTimeMs)) < TW_TOLERANCE;
         scoreRef.current.recordTrace(dt, isOnWave, currentBeatMs)
+        const holding = ringsRef.current.some((ring) => !ring.resolved && ring.type === 'hold' && ring.hit && ring.holding)
+        scoreRef.current.recordHold(dt, currentBeatMs, holding)
       }
 
       renderer.render(ctx2d, {

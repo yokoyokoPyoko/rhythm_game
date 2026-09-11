@@ -9,6 +9,9 @@ const TRACE_BONUS_STEP_BEATS = 16;
 const TRACE_BONUS_STEP = 2;
 const OFF_BEAT_RESET = 3;
 const OFF_BEAT_EPS = 1e-9;
+// Hold tick: while a hold ring is held, +combo & fixed score every 0.5 beats.
+export const HOLD_TICK_BEATS = 0.5;
+export const HOLD_TICK_SCORE = 5;
 
 export interface ScoreStats {
   score: number;
@@ -34,6 +37,7 @@ export class ScoreManager {
   private comboBonus = 0;
   private traceBeats = 0;
   private offBeats = 0;
+  private holdBeats = 0;
 
   recordHit(result: HitResult): void {
     switch (result) {
@@ -59,6 +63,7 @@ export class ScoreManager {
         this.traceBeats = 0;
         this.offBeats = 0;
         this.traceAccumulator = 0;
+        this.holdBeats = 0;
         break;
     }
   }
@@ -87,6 +92,25 @@ export class ScoreManager {
     while (this.traceAccumulator >= TRACE_INTERVAL) {
       this.traceAccumulator -= TRACE_INTERVAL;
       this.score += TRACE_BASE_SCORE + this.comboBonus;
+    }
+  }
+
+  /**
+   * Hold tick scoring: while a hold ring is held, every HOLD_TICK_BEATS
+   * beats grant combo+1 and HOLD_TICK_SCORE points. No Y/wave condition —
+   * holding alone counts. Call every tick with the current holding state;
+   * passing false resets the accumulator (hold ended).
+   */
+  recordHold(dt: number, beatMs: number, holding: boolean): void {
+    if (!holding) {
+      this.holdBeats = 0;
+      return;
+    }
+    this.holdBeats += (dt * 1000) / beatMs;
+    while (this.holdBeats >= HOLD_TICK_BEATS) {
+      this.holdBeats -= HOLD_TICK_BEATS;
+      this.score += HOLD_TICK_SCORE;
+      this.incrementCombo();
     }
   }
 
