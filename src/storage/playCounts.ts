@@ -99,19 +99,12 @@ export async function recordPlay(id: string, globalKey?: string): Promise<number
   }
   const gkey = (globalKey || id || '').trim();
   if (COUNTER_ENABLED && gkey) {
-    // Single write path: the RPC inserts the event row; counts are derived.
-    try {
-      await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/log_play`, {
-        method: 'POST',
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ sid: gkey }),
-      });
-    } catch {
-      /* offline or backend error — local count already saved */
+    // Single write path: 3-arg log_play (event + score/rank columns).
+    // Falls back to the legacy 1-arg form when the new overload is not
+    // deployed yet, so event logging keeps working across the deploy gap.
+    const status = await postLogPlay({ sid: gkey, sc: null, rk: null });
+    if (status === 404) {
+      await postLogPlay({ sid: gkey });
     }
   }
   return next;
@@ -120,6 +113,26 @@ export async function recordPlay(id: string, globalKey?: string): Promise<number
 export interface PlayEvent {
   song_id: string;
   played_at: string;
+  score?: number | null;
+  rank?: string | null;
+}
+
+/** POST a log_play call. Returns the HTTP status, or -1 on network failure. */
+async function postLogPlay(body: Record<string, unknown>): Promise<number> {
+  try {
+    const res = await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/log_play`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    return res.status;
+  } catch {
+    return -1;
+  }
 }
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -203,7 +216,7 @@ export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
   if (!COUNTER_ENABLED) return [];
   try {
     const res = await fetchWithTimeout(
-      `${SUPABASE_URL}/rest/v1/play_events?select=song_id,played_at&order=played_at.asc&limit=${limit}`,
+      `${SUPABASE_URL}/rest/v1/play_events?select=song_id,played_at,score,rank&order=played_at.asc&limit=${limit}`,
       {
         headers: {
           apikey: SUPABASE_ANON_KEY,
@@ -222,9 +235,14 @@ export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
         typeof (row as { song_id?: unknown }).song_id === 'string' &&
         typeof (row as { played_at?: unknown }).played_at === 'string'
       ) {
-        const r = row as { song_id: string; played_at: string };
+        const r = row as { song_id: string; played_at: string; score?: unknown; rank?: unknown };
         if (Number.isFinite(Date.parse(r.played_at))) {
-          out.push({ song_id: r.song_id, played_at: r.played_at });
+          out.push({
+            song_id: r.song_id,
+            played_at: r.played_at,
+            score: typeof r.score === 'number' && Number.isFinite(r.score) ? r.score : null,
+            rank: typeof r.rank === 'string' ? r.rank : null,
+          });
         }
       }
     }
@@ -232,6 +250,22 @@ export async function fetchAllEvents(limit = 10000): Promise<PlayEvent[]> {
   } catch {
     return [];
   }
+}
+
+/** Derive per-song bests from events (max score, null scores ignored). Pure. */
+export function bestScoresFromEvents(
+  events: PlayEvent[],
+): Record<string, { score: number; rank: string | null }> {
+  const out: Record<string, { score: number; rank: string | null }> = {};
+  for (const e of events) {
+    if (!e || typeof e.song_id !== 'string' || e.song_id === '') continue;
+    if (typeof e.score !== 'number' || !Number.isFinite(e.score)) continue;
+    const cur = out[e.song_id];
+    if (!cur || e.score > cur.score) {
+      out[e.song_id] = { score: e.score, rank: typeof e.rank === 'string' ? e.rank : null };
+    }
+  }
+  return out;
 }
 
 /** Group events into per-song totals. Pure. */

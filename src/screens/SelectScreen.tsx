@@ -80,6 +80,7 @@ export default function SelectScreen() {
   // Hover preview: at most one preview at a time. Token discards late decodes.
   const previewRef = useRef<{ songId: string; stop: PreviewHandle['stop']; token: number } | null>(null)
   const previewTokenRef = useRef(0)
+  const mountedRef = useRef(true)
 
   const stopPreview = useCallback(() => {
     const p = previewRef.current
@@ -93,6 +94,14 @@ export default function SelectScreen() {
       window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: null } }))
     }
   }, [])
+
+  // Invalidate any in-flight decode/start AND stop the current preview.
+  // Called on mouse-leave, unmount, and navigation so a late decode can never
+  // start ownerless playback (plays-though-not-hovering / plays-into-game bugs).
+  const cancelPreview = useCallback(() => {
+    previewTokenRef.current++
+    stopPreview()
+  }, [stopPreview])
 
   const startPreviewFor = useCallback(
     (song: SongEntry) => {
@@ -132,6 +141,10 @@ export default function SelectScreen() {
           const mgr = AudioManager.getInstance()
           await mgr.ensure()
           if (previewTokenRef.current !== token) return
+          if (!mountedRef.current) return
+          // Never start into a suspended context: without a prior gesture the
+          // scheduled playback would erupt late and unpredictably.
+          if (mgr.ctx.state !== 'running') return
           const handle = startPreview(buf, mgr.ctx)
           previewRef.current = { songId: song.id, stop: handle.stop, token }
           window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: song.id } }))
@@ -159,18 +172,12 @@ export default function SelectScreen() {
   }, [])
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
-      const p = previewRef.current
-      previewRef.current = null
-      if (p) {
-        try {
-          p.stop()
-        } catch {
-          /* ignore */
-        }
-      }
+      mountedRef.current = false
+      cancelPreview()
     }
-  }, [])
+  }, [cancelPreview])
 
   useEffect(() => {
     loadSongList()
@@ -679,13 +686,14 @@ beat = 8.0
                 className="song-card-wrapper"
                 style={{ position: 'relative' }}
                 onMouseEnter={() => startPreviewFor(song)}
-                onMouseLeave={() => {
-                  if (previewRef.current?.songId === song.id) stopPreview()
-                }}
+                onMouseLeave={() => cancelPreview()}
               >
                 <button
                   className="song-card"
                   onClick={() => {
+                    // Stop any hover preview before leaving (unmount cleanup
+                    // also covers this, but stop eagerly to avoid overlap).
+                    cancelPreview()
                     if (isCustom) {
                       // Load chart from IndexedDB cache into ChartCache so GameScreen can find it
                       const cached = ChartCache.get(song.id)

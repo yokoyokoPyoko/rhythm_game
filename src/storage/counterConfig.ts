@@ -8,17 +8,22 @@
 //   create table if not exists play_events (
 //     id bigint generated always as identity primary key,
 //     song_id text not null,
-//     played_at timestamptz not null default now()
+//     played_at timestamptz not null default now(),
+//     score integer,
+//     rank text
 //   );
 //   alter table play_events enable row level security;
 //   create policy "public read" on play_events for select using (true);
-//   create or replace function log_play(sid text)
+//   -- Single write path (replaces increment_play_count + 1-arg log_play;
+//   -- old overloads may remain, they are simply unused):
+//   create or replace function log_play(sid text, sc integer default null, rk text default null)
 //   returns void language plpgsql security definer as $$
 //   begin
-//     insert into play_events(song_id) values (sid);
+//     insert into play_events(song_id, score, rank) values (sid, sc, rk);
 //   end $$;
-//   grant execute on function log_play(text) to anon, authenticated;
-//   (Counts are derived by aggregation; no counts table is needed.)
+//   grant execute on function log_play(text, integer, text) to anon, authenticated;
+//   (Counts and bests are both derived from play_events by aggregation.
+//   The legacy high_scores table stays read-only as a fallback.)
 //
 // Then paste Project URL + anon public key below.
 
