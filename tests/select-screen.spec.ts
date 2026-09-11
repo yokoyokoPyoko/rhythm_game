@@ -30,7 +30,7 @@ test('T31 select screen: song cards, click to play, L to calibration', async ({ 
   await page.waitForLoadState('domcontentloaded');
 
   await expect(page.locator('.select-header h1')).toBeAttached();
-  await expect(page.locator('.select-header h1')).toHaveText('トレース・ウェーブ');
+  await expect(page.locator('.select-header h1')).toHaveText('トレースウェーブ（音ゲー）');
 
   await addCustomSong(page);
 

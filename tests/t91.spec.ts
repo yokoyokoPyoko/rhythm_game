@@ -37,7 +37,7 @@ test('T91 comprehensive debug & verification test', async ({ page }) => {
   await page.goto('http://localhost:5173/');
   await page.waitForLoadState('domcontentloaded');
   await expect(page.locator('body')).toBeAttached();
-  await expect(page.locator('.select-header h1')).toHaveText('トレース・ウェーブ');
+  await expect(page.locator('.select-header h1')).toHaveText('トレースウェーブ（音ゲー）');
   await page.screenshot({ path: 'screenshots/frame_1.png' });
   await page.waitForTimeout(1500);
   await addCustomSong(page);

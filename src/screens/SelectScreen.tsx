@@ -347,7 +347,7 @@ beat = 8.0
       data-testid="home-dropzone"
     >
       <header className="select-header">
-        <h1>トレース・ウェーブ</h1>
+        <h1>トレースウェーブ（音ゲー）</h1>
         <span className="select-sub">Trace Wave</span>
       </header>
 
