@@ -67,6 +67,31 @@ export interface RenderParams {
   isTracing?: boolean;
   cursorVelocity?: { x: number; y: number };
   showJudgementDetail?: boolean;
+  /** Global best for the song. Undefined = draw nothing (e.g. calibration). */
+  bestScore?: number | null;
+}
+
+export interface ScoreDiff {
+  text: string;
+  color: string;
+}
+
+/**
+ * Score-vs-best diff display (pure, testable).
+ * Positive → green "+1,200"; negative → red "-400"; zero → muted "±0".
+ * best null/NaN → null (draw "BEST ---" without a diff line).
+ */
+export function formatScoreDiff(current: number, best: number | null | undefined): ScoreDiff | null {
+  if (best === null || best === undefined || !Number.isFinite(best)) return null;
+  const cur = Number.isFinite(current) ? Math.round(current) : 0;
+  const diff = cur - Math.round(best);
+  if (diff > 0) {
+    return { text: `+${diff.toLocaleString('en-US')}`, color: COLORS.positive };
+  }
+  if (diff < 0) {
+    return { text: `-${Math.abs(diff).toLocaleString('en-US')}`, color: COLORS.danger };
+  }
+  return { text: '±0', color: COLORS.muted };
 }
 
 function safe(value: number, fallback: number): number {
@@ -225,7 +250,7 @@ export class Renderer {
     this.drawRings(ctx, rings, renderTimeMs, scrollSpeed, waveEngine);
     this.drawParticles(ctx, score);
     this.drawCursor(ctx, cursor, score);
-    this.drawHud(ctx, score);
+    this.drawHud(ctx, score, params.bestScore);
     this.drawJudgements(ctx, events, songTimeMs, params.showJudgementDetail);
   }
 
@@ -350,7 +375,7 @@ export class Renderer {
     ctx.stroke();
   }
 
-  private drawHud(ctx: CanvasRenderingContext2D, score: ScoreManager): void {
+  private drawHud(ctx: CanvasRenderingContext2D, score: ScoreManager, bestScore?: number | null): void {
     const stats = score.getStats();
 
     ctx.fillStyle = COLORS.text;
@@ -362,6 +387,24 @@ export class Renderer {
     ctx.fillStyle = COLORS.muted;
     ctx.font = `500 14px ${FONT}`;
     ctx.fillText('SCORE', 16, 48);
+
+    if (bestScore !== undefined) {
+      ctx.font = `500 14px ${FONT}`;
+      if (bestScore === null || !Number.isFinite(bestScore)) {
+        ctx.fillStyle = COLORS.muted;
+        ctx.fillText('BEST ---', 16, 68);
+      } else {
+        const b = Math.round(bestScore);
+        ctx.fillStyle = COLORS.muted;
+        ctx.fillText(`BEST ${b.toLocaleString('en-US')}`, 16, 68);
+        const diff = formatScoreDiff(stats.score, b);
+        if (diff) {
+          ctx.fillStyle = diff.color;
+          ctx.font = `600 18px ${FONT}`;
+          ctx.fillText(diff.text, 16, 88);
+        }
+      }
+    }
 
     if (stats.combo > 1) {
       ctx.fillStyle = COLORS.text;

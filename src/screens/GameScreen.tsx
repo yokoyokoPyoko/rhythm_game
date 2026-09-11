@@ -79,6 +79,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
   const spawnerRef = useRef(new RingSpawner())
   const scoreRef = useRef(new ScoreManager())
   const ringsRef = useRef<RingState[]>([])
+  // HUD best display (null = no record yet, undefined = not fetched).
+  // CalibrationModal does not pass bestScore, so its HUD is unchanged.
+  const bestScoreRef = useRef<number | null | undefined>(undefined)
   const judgementEventsRef = useRef<JudgementEvent[]>([])
   const bufferRef = useRef<AudioBuffer | null>(null)
   const musicSourceRef = useRef<AudioBufferSourceNode | null>(null)
@@ -219,6 +222,15 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         void recordPlay(songId ?? chart?.title ?? '', chart?.title)
       } catch {
         /* ignore counter errors */
+      }
+      // HUD best display: fetch once at song start (frozen during play).
+      try {
+        const { fetchBestScores } = await import('../storage/highScores')
+        const all = await fetchBestScores()
+        const title = chart?.title ?? ''
+        bestScoreRef.current = title && all[title] !== undefined ? all[title].score : null
+      } catch {
+        bestScoreRef.current = null
       }
     }
     playMusic(ctx, chart?.audio_offset ?? 0)
@@ -732,6 +744,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
         judgementEvents: judgementEventsRef.current,
         scrollSpeed: 110 * timeline.zoomAt(currentBeat),
         showJudgementDetail: getViewMode() === 'debug',
+        bestScore: bestScoreRef.current,
       })
 
       // T206: end-of-song priority = end_beat → last ring (incl. hold tail) +2s → audio length.
