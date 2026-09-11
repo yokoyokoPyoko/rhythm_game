@@ -24,7 +24,7 @@
 //
 // Then paste Project URL + anon public key below.
 
-export const SUPABASE_URL = 'https://razzgbcnowsnlufdohsf.supabase.co';
-export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJhenpnYmNub3dzbmx1ZmRvaHNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwOTQzNDgsImV4cCI6MjEwNDY3MDM0OH0.U9FoslW5RXRy7GA_bIKMOfaL2d4S-tH6tIXUhrpuw4Y';
+export const SUPABASE_URL: string = 'https://razzgbcnowsnlufdohsf.supabase.co';
+export const SUPABASE_ANON_KEY: string = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJhenpnYmNub3dzbmx1ZmRvaHNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwOTQzNDgsImV4cCI6MjEwNDY3MDM0OH0.U9FoslW5RXRy7GA_bIKMOfaL2d4S-tH6tIXUhrpuw4Y';
 
 export const COUNTER_ENABLED = SUPABASE_URL !== '' && SUPABASE_ANON_KEY !== '';
