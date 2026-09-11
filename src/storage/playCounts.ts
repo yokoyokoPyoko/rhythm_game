@@ -98,21 +98,113 @@ export async function recordPlay(id: string, globalKey?: string): Promise<number
   }
   const gkey = (globalKey || id || '').trim();
   if (COUNTER_ENABLED && gkey) {
+    const headers = {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+    };
     try {
       await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/increment_play_count`, {
         method: 'POST',
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ sid: gkey }),
       });
     } catch {
       /* offline or backend error — local count already saved */
     }
+    // Per-play event log for the trends graph (fire-and-forget).
+    try {
+      await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/log_play_event`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ sid: gkey }),
+      });
+    } catch {
+      /* event log is best-effort */
+    }
   }
   return next;
+}
+
+export interface PlayEvent {
+  song_id: string;
+  played_at: string;
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** JST midnight (start of today) as an ISO timestamp. Japan has no DST. */
+export function jstDayStartISO(nowMs = Date.now()): string {
+  const jst = new Date(nowMs + JST_OFFSET_MS);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth();
+  const d = jst.getUTCDate();
+  return new Date(Date.UTC(y, m, d) - JST_OFFSET_MS).toISOString();
+}
+
+/** Fetch today's per-play events (for the trends graph). Empty when unconfigured/offline. */
+export async function fetchTodayEvents(nowMs = Date.now()): Promise<PlayEvent[]> {
+  if (!COUNTER_ENABLED) return [];
+  try {
+    const since = encodeURIComponent(jstDayStartISO(nowMs));
+    const res = await fetchWithTimeout(
+      `${SUPABASE_URL}/rest/v1/play_events?select=song_id,played_at&played_at=gte.${since}&order=played_at.asc&limit=5000`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      },
+    );
+    if (!res.ok) return [];
+    const rows = (await res.json()) as unknown;
+    if (!Array.isArray(rows)) return [];
+    const out: PlayEvent[] = [];
+    for (const row of rows) {
+      if (
+        typeof row === 'object' &&
+        row !== null &&
+        typeof (row as { song_id?: unknown }).song_id === 'string' &&
+        typeof (row as { played_at?: unknown }).played_at === 'string'
+      ) {
+        const r = row as { song_id: string; played_at: string };
+        const t = Date.parse(r.played_at);
+        if (Number.isFinite(t)) out.push({ song_id: r.song_id, played_at: r.played_at });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export interface TrendSlot {
+  /** Slot start as ms since epoch. */
+  startMs: number;
+  count: number;
+}
+
+/**
+ * Bucket event timestamps into fixed slots (pure, testable).
+ * Slots cover [dayStartMs, dayStartMs + slotCount * slotMs).
+ */
+export function bucketEventsToSlots(
+  eventMsList: number[],
+  dayStartMs: number,
+  slotMs: number,
+  slotCount: number,
+): TrendSlot[] {
+  const slots: TrendSlot[] = Array.from({ length: slotCount }, (_, i) => ({
+    startMs: dayStartMs + i * slotMs,
+    count: 0,
+  }));
+  if (!(slotMs > 0) || !(slotCount > 0)) return slots;
+  for (const t of eventMsList) {
+    if (!Number.isFinite(t)) continue;
+    const idx = Math.floor((t - dayStartMs) / slotMs);
+    if (idx >= 0 && idx < slotCount) slots[idx].count += 1;
+  }
+  return slots;
 }
 
 /** Fetch global counts keyed by song title. Empty object when unconfigured/offline. */

@@ -12,8 +12,9 @@ import { putChart, putAudio, listCharts, deleteChart, deleteAudio, getChart } fr
 import { handleZipFile as importZipFile } from '../storage/zipImport'
 import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
+import TodayTrendsPane from './TrendsPane'
 import { getViewMode, ViewMode } from '../viewMode'
-import { getPlayCount } from '../storage/playCounts'
+import { getPlayCount, bucketEventsToSlots } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
 
 // Global counts (by song title) fetched once per mount; falls back to local.
@@ -115,6 +116,9 @@ export default function SelectScreen() {
   const [globalCounts, setGlobalCounts] = useState<Record<string, number>>({})
   // Global bests keyed by song title (empty when backend unconfigured).
   const [globalBests, setGlobalBests] = useState<Record<string, { score: number; rank: string | null }>>({})
+  // Today's per-play timestamps (ms) for the trends graph (debug only).
+  const [trendEventMs, setTrendEventMs] = useState<number[]>([])
+  const [trendDayStartMs, setTrendDayStartMs] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -123,6 +127,17 @@ export default function SelectScreen() {
       if (!cancelled && Object.keys(g).length > 0) setGlobalCounts(g)
       const b = await loadGlobalBests()
       if (!cancelled && Object.keys(b).length > 0) setGlobalBests(b)
+      try {
+        const { fetchTodayEvents, jstDayStartISO } = await import('../storage/playCounts')
+        const now = Date.now()
+        const events = await fetchTodayEvents(now)
+        if (!cancelled && events.length > 0) {
+          setTrendDayStartMs(Date.parse(jstDayStartISO(now)))
+          setTrendEventMs(events.map((e) => Date.parse(e.played_at)).filter((t) => Number.isFinite(t)))
+        }
+      } catch {
+        /* trends are best-effort */
+      }
     })()
     return () => {
       cancelled = true
@@ -405,6 +420,10 @@ beat = 8.0
         </>
       )}
 
+      {viewMode === 'debug' && trendEventMs.length > 0 && trendDayStartMs > 0 && (
+        <TodayTrendsPane eventMs={trendEventMs} dayStartMs={trendDayStartMs} />
+      )}
+
       {viewMode === 'debug' && (
         <div className="custom-import-section" style={{ marginBottom: '20px', padding: '16px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-surface)' }}>
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
@@ -619,7 +638,7 @@ beat = 8.0
                       ▶ {globalCounts[song.title] ?? getPlayCount(song.id)}回
                     </div>
                   )}
-                  {viewMode === 'debug' && globalBests[song.title] !== undefined && (
+                  {globalBests[song.title] !== undefined && (
                     <div
                       className="song-card-best"
                       data-testid={`best-${song.id}`}
