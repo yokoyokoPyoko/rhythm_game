@@ -18,6 +18,18 @@ export class AudioManager {
     }
   }
 
+  /**
+   * Create the context if needed, WITHOUT waiting for resume.
+   * decodeAudioData works while suspended, so background preloads
+   * (page load, no gesture yet) use this instead of ensure().
+   */
+  ensureCreated(): AudioContext {
+    if (!this._ctx) {
+      this._ctx = new AudioContext();
+    }
+    return this._ctx;
+  }
+
   get ctx(): AudioContext {
     if (!this._ctx) {
       throw new Error('AudioContext is not initialized. Call ensure() first.');

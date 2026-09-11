@@ -28,6 +28,39 @@ async function loadGlobalBests(): Promise<Record<string, { score: number; rank: 
   }
 }
 
+// Resolve + decode a song's audio into AudioCache (best-effort).
+// Uses ensureCreated (no resume wait): decodeAudioData works while suspended,
+// so page-load preloads and pre-gesture hovers can decode.
+async function ensureDecodedAudio(song: SongEntry): Promise<AudioBuffer | null> {
+  try {
+    let chart = ChartCache.get(song.id)
+    if (!chart && song.id.startsWith('custom-')) {
+      const { getChart } = await import('../storage/libraryDb')
+      const stored = await getChart(song.id)
+      if (!stored) return null
+      chart = parseChartText(stored.toml, song.id)
+      ChartCache.set(song.id, chart)
+    }
+    if (!chart) return null
+    const base = getBasename(chart.audio)
+    const cached = AudioCache.get(base)
+    if (cached) return cached
+    if (!song.id.startsWith('custom-')) return null
+    const { getAudio } = await import('../storage/libraryDb')
+    const storedAudio = await getAudio(song.id)
+    if (!storedAudio?.bytes) return null
+    const mgr = AudioManager.getInstance()
+    const ctx = mgr.ensureCreated()
+    const bytes = storedAudio.bytes
+    const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    const buf = await ctx.decodeAudioData(copy)
+    AudioCache.set(base, buf)
+    return buf
+  } catch {
+    return null
+  }
+}
+
 const MAX_DIFFICULTY = 5
 const SKELETON_COUNT = 4
 
@@ -103,39 +136,20 @@ export default function SelectScreen() {
     stopPreview()
   }, [stopPreview])
 
+  // Currently hovered card (for retrying a suspended start after a gesture).
+  const hoveredSongRef = useRef<SongEntry | null>(null)
+
   const startPreviewFor = useCallback(
     (song: SongEntry) => {
       if (renamingId === song.id) return
       if (previewRef.current?.songId === song.id) return
+      hoveredSongRef.current = song
       stopPreview()
       const token = ++previewTokenRef.current
       void (async () => {
         try {
-          // Resolve chart (cache → IndexedDB) to find the audio basename.
-          let chart = ChartCache.get(song.id)
-          if (!chart && song.id.startsWith('custom-')) {
-            const { getChart } = await import('../storage/libraryDb')
-            const stored = await getChart(song.id)
-            if (!stored) return
-            chart = parseChartText(stored.toml, song.id)
-            ChartCache.set(song.id, chart)
-          }
-          if (!chart) return
-          const base = getBasename(chart.audio)
-          // Resolve decoded audio (cache → IndexedDB bytes).
-          let buf: AudioBuffer | null = AudioCache.get(base) ?? null
-          if (!buf && song.id.startsWith('custom-')) {
-            const { getAudio } = await import('../storage/libraryDb')
-            const storedAudio = await getAudio(song.id)
-            if (storedAudio?.bytes) {
-              const mgr0 = AudioManager.getInstance()
-              await mgr0.ensure()
-              const bytes = storedAudio.bytes
-              const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
-              buf = await mgr0.ctx.decodeAudioData(copy)
-              AudioCache.set(base, buf)
-            }
-          }
+          // Hover during load: decode first (works while suspended).
+          const buf = await ensureDecodedAudio(song)
           if (!buf) return
           if (previewTokenRef.current !== token) return
           const mgr = AudioManager.getInstance()
@@ -144,6 +158,7 @@ export default function SelectScreen() {
           if (!mountedRef.current) return
           // Never start into a suspended context: without a prior gesture the
           // scheduled playback would erupt late and unpredictably.
+          // The pending hover is retried on the next gesture (unlock below).
           if (mgr.ctx.state !== 'running') return
           const handle = startPreview(buf, mgr.ctx)
           previewRef.current = { songId: song.id, stop: handle.stop, token }
@@ -156,20 +171,52 @@ export default function SelectScreen() {
     [renamingId, stopPreview],
   )
 
-  // Autoplay policy: hover alone cannot unlock audio. Resume on first gesture.
+  // Autoplay policy: hover alone cannot unlock audio. Resume on first gesture,
+  // then start the still-hovered card immediately (hover-during-load support).
   useEffect(() => {
     const unlock = () => {
-      void AudioManager.getInstance()
+      const mgr = AudioManager.getInstance()
+      void mgr
         .ensure()
+        .then(() => {
+          const hovered = hoveredSongRef.current
+          if (
+            hovered &&
+            mgr.ctx.state === 'running' &&
+            !previewRef.current &&
+            mountedRef.current
+          ) {
+            startPreviewFor(hovered)
+          }
+        })
         .catch(() => {})
     }
-    window.addEventListener('pointerdown', unlock, { once: true })
-    window.addEventListener('keydown', unlock, { once: true })
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
     return () => {
       window.removeEventListener('pointerdown', unlock)
       window.removeEventListener('keydown', unlock)
     }
-  }, [])
+  }, [startPreviewFor])
+
+  // Page-load preload: decode every song in the background (best-effort,
+  // sequential, UI never blocks). Makes hover instant and removes the need
+  // for an editor visit. Memory cost is ~tens of MB per decoded song.
+  const preloadedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      for (const song of songs) {
+        if (cancelled || !mountedRef.current) return
+        if (preloadedRef.current.has(song.id)) continue
+        preloadedRef.current.add(song.id)
+        await ensureDecodedAudio(song)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [songs])
 
   useEffect(() => {
     mountedRef.current = true
@@ -686,7 +733,10 @@ beat = 8.0
                 className="song-card-wrapper"
                 style={{ position: 'relative' }}
                 onMouseEnter={() => startPreviewFor(song)}
-                onMouseLeave={() => cancelPreview()}
+                onMouseLeave={() => {
+                  hoveredSongRef.current = null
+                  cancelPreview()
+                }}
               >
                 <button
                   className="song-card"
