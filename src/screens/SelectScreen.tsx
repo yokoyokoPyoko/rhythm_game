@@ -8,7 +8,7 @@ import { getManualOffsetMs, setManualOffset } from '../audio/clock'
 import { AudioCache, getBasename } from '../audio/AudioCache'
 import { ChartCache } from '../chart/cache'
 import { chartToToml } from '../chart/serialize'
-import { putChart, putAudio, listCharts, deleteChart, deleteAudio } from '../storage/libraryDb'
+import { putChart, putAudio, listCharts, deleteChart, deleteAudio, getChart } from '../storage/libraryDb'
 import { handleZipFile as importZipFile } from '../storage/zipImport'
 import type { StoredChart } from '../storage/libraryDb'
 import CalibrationModal from './editor/CalibrationModal'
@@ -45,6 +45,35 @@ export default function SelectScreen() {
   const dropzoneRef = useRef<HTMLDivElement>(null)
   const [calibrationOpen, setCalibrationOpen] = useState(false)
   const savedOffsetRef = useRef(getManualOffsetMs())
+  // Debug-mode inline rename state (card id + draft text)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+
+  const commitRename = useCallback(async (songId: string, newTitle: string) => {
+    const title = newTitle.trim()
+    setRenamingId(null)
+    if (!title) return
+    setSongs((prev) => {
+      const target = prev.find((s) => s.id === songId)
+      if (!target || target.title === title) return prev
+      // Persist: update IndexedDB record (title + re-serialized TOML) and caches
+      void (async () => {
+        try {
+          const stored = await getChart(songId)
+          if (stored) {
+            const parsed = parseChartText(stored.toml, songId)
+            parsed.title = title
+            await putChart({ ...stored, title, toml: chartToToml(parsed) })
+            ChartCache.set(songId, parsed)
+          }
+        } catch (err) {
+          console.warn('[SelectScreen] Failed to persist renamed song', err)
+          setImportError(err instanceof Error ? err.message : '曲名の保存に失敗しました')
+        }
+      })()
+      return prev.map((s) => (s.id === songId ? { ...s, title } : s))
+    })
+  }, [])
 
   useEffect(() => {
     loadSongList()
@@ -542,7 +571,25 @@ beat = 8.0
                     navigate('/play/' + song.id)
                   }}
                 >
-                  <div className="song-card-title">{song.title}</div>
+                  {viewMode === 'debug' && renamingId === song.id ? (
+                    <input
+                      className="song-card-rename-input"
+                      data-testid={`rename-input-${song.id}`}
+                      value={renameDraft}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={() => void commitRename(song.id, renameDraft)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === 'Enter') void commitRename(song.id, renameDraft)
+                        else if (e.key === 'Escape') setRenamingId(null)
+                      }}
+                      style={{ fontSize: '1.125rem', fontWeight: 600, width: '100%' }}
+                    />
+                  ) : (
+                    <div className="song-card-title">{song.title}</div>
+                  )}
                   <div className="song-card-artist">{song.artist || 'Unknown Artist'}</div>
                   {viewMode === 'debug' && (
                     <div
@@ -562,6 +609,40 @@ beat = 8.0
                     ))}
                   </div>
                 </button>
+                {viewMode === 'debug' && isCustom && (
+                  <button
+                    type="button"
+                    aria-label={`${song.title}の名前を変更`}
+                    data-testid={`rename-${song.id}`}
+                    className="song-card-delete"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setRenameDraft(song.title)
+                      setRenamingId(song.id)
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: '6px',
+                      right: '30px',
+                      width: '20px',
+                      height: '20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: 'var(--bg-surface)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius)',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      lineHeight: 1,
+                      padding: 0,
+                      zIndex: 1,
+                    }}
+                  >
+                    ✎
+                  </button>
+                )}
                 {viewMode === 'debug' && isCustom && (
                   <button
                     type="button"
