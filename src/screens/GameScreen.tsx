@@ -751,7 +751,7 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
           onExitRef.current(stats)
         } else {
           // Rank is decided by score alone (ratio to the chart's max ring score).
-          const max = maxRingScore(initChart?.rings ?? [])
+          const max = maxRingScore(chart?.rings ?? [])
           const rank = rankForScore(stats.score, max)
           navigate('/result', { state: { stats, songId, title: chart.title, rank } })
         }
