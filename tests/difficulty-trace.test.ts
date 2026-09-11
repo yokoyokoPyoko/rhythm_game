@@ -136,11 +136,12 @@ describe('hover preview start offset', () => {
     expect(b.calls[0].offset).toBe(0);
   });
 
-  it('SelectScreen exposes a debug-only offset input persisted to localStorage', () => {
+  it('SelectScreen exposes a debug-only per-song offset input persisted to localStorage', () => {
     const src = readSrc('src/screens/SelectScreen.tsx');
-    expect(src).toContain('data-testid="preview-offset-input"');
-    expect(src).toContain('rhythmPreviewOffsetSec');
-    // Public mode forces offset 0; debug uses the saved value.
-    expect(src).toMatch(/getViewMode\(\) === 'debug' \? previewOffsetRef\.current : 0/);
+    expect(src).toContain('data-testid={`preview-offset-input-${song.id}`}');
+    expect(src).toContain('rhythmPreviewOffsets');
+    // Per-song lookup with 0 fallback; public mode forces offset 0.
+    expect(src).toMatch(/previewOffsetsRef\.current\[song\.id\] \?\? 0/);
+    expect(src).toMatch(/getViewMode\(\) === 'debug' \? \(previewOffsetsRef\.current\[song\.id\] \?\? 0\) : 0/);
   });
 });

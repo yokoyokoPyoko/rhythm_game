@@ -120,7 +120,7 @@ function DifficultyRow({
 
 const MAX_DIFFICULTY = 5
 
-const PREVIEW_OFFSET_KEY = 'rhythmPreviewOffsetSec'
+const PREVIEW_OFFSETS_KEY = 'rhythmPreviewOffsets'
 const SKELETON_COUNT = 4
 
 export interface DifficultyStyle {
@@ -165,21 +165,41 @@ export default function SelectScreen() {
   // Debug-mode inline rename state (card id + draft text)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
-  // Debug-only hover preview start offset in seconds (shared by all songs,
-  // persisted). Public mode always starts previews at 0.
-  const [previewOffsetSec, setPreviewOffsetSec] = useState<number>(() => {
+  // Debug-only per-song hover preview start offset in seconds (persisted map).
+  // Public mode always starts previews at 0.
+  const [previewOffsets, setPreviewOffsets] = useState<Record<string, number>>(() => {
     try {
-      const raw = localStorage.getItem(PREVIEW_OFFSET_KEY)
-      const v = raw === null ? 0 : Number(raw)
-      return Number.isFinite(v) && v >= 0 ? v : 0
+      const raw = localStorage.getItem(PREVIEW_OFFSETS_KEY)
+      if (!raw) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') {
+        const out: Record<string, number> = {}
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[k] = v
+        }
+        return out
+      }
+      return {}
     } catch {
-      return 0
+      return {}
     }
   })
-  const previewOffsetRef = useRef(previewOffsetSec)
+  const previewOffsetsRef = useRef(previewOffsets)
   useEffect(() => {
-    previewOffsetRef.current = previewOffsetSec
-  }, [previewOffsetSec])
+    previewOffsetsRef.current = previewOffsets
+  }, [previewOffsets])
+  const setPreviewOffset = useCallback((songId: string, v: number) => {
+    const next = Number.isFinite(v) && v >= 0 ? v : 0
+    setPreviewOffsets((prev) => {
+      const updated = { ...prev, [songId]: next }
+      try {
+        localStorage.setItem(PREVIEW_OFFSETS_KEY, JSON.stringify(updated))
+      } catch {
+        /* storage unavailable */
+      }
+      return updated
+    })
+  }, [])
 
   const commitRename = useCallback(async (songId: string, newTitle: string) => {
     const title = newTitle.trim()
@@ -278,7 +298,7 @@ export default function SelectScreen() {
           // scheduled playback would erupt late and unpredictably.
           // The pending hover is retried on the next gesture (unlock below).
           if (mgr.ctx.state !== 'running') return
-          const offset = getViewMode() === 'debug' ? previewOffsetRef.current : 0
+          const offset = getViewMode() === 'debug' ? (previewOffsetsRef.current[song.id] ?? 0) : 0
           const handle = startPreview(buf, mgr.ctx, PREVIEW_VOLUME, offset)
           previewRef.current = { songId: song.id, stop: handle.stop, token }
           window.dispatchEvent(new CustomEvent('preview-change', { detail: { songId: song.id } }))
@@ -1005,6 +1025,22 @@ beat = 8.0
                     ×
                   </button>
                 )}
+                {viewMode === 'debug' && (
+                  <label
+                    className="song-preview-offset"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    試聴開始(秒)
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      data-testid={`preview-offset-input-${song.id}`}
+                      value={previewOffsets[song.id] ?? 0}
+                      onChange={(e) => setPreviewOffset(song.id, Number(e.target.value))}
+                    />
+                  </label>
+                )}
               </div>
             )
           })}
@@ -1028,27 +1064,6 @@ beat = 8.0
             キャリブレーション
           </button>
           <span className="select-hint">L: キャリブレーション / E: エディタ</span>
-          <label className="select-offset-label">
-            試聴開始(秒)
-            <input
-              type="number"
-              min={0}
-              step={1}
-              data-testid="preview-offset-input"
-              value={previewOffsetSec}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                const next = Number.isFinite(v) && v >= 0 ? v : 0
-                setPreviewOffsetSec(next)
-                try {
-                  localStorage.setItem(PREVIEW_OFFSET_KEY, String(next))
-                } catch {
-                  /* storage unavailable */
-                }
-              }}
-            />
-          </label>
         </div>
       )}
 
