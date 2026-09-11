@@ -214,7 +214,9 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
     if (!isPlaytest) {
       try {
         const { recordPlay } = await import('../storage/playCounts')
-        recordPlay(songId ?? chart?.title ?? '')
+        // Global key = title (copies imported on other PCs share the title,
+        // so festival-wide counts accumulate). Local key = song id.
+        void recordPlay(songId ?? chart?.title ?? '', chart?.title)
       } catch {
         /* ignore counter errors */
       }

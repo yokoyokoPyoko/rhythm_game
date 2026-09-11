@@ -1,7 +1,14 @@
-// Debug-only play/access counter (per browser, localStorage).
-// Counts how many times each song's main chart started playing.
+// Play/access counter.
+//
+// Local: localStorage (per browser, keyed by song id).
+// Global: Supabase `play_counts` table (shared across PCs, keyed by song
+// title so separately-imported copies of the same song accumulate together).
+// When the backend is not configured (counterConfig.ts), local-only mode.
+
+import { COUNTER_ENABLED, SUPABASE_ANON_KEY, SUPABASE_URL } from './counterConfig';
 
 const STORAGE_KEY = 'traceWavePlayCounts';
+const FETCH_TIMEOUT_MS = 6000;
 
 function readAll(): Record<string, number> {
   try {
@@ -30,16 +37,83 @@ export function getPlayCount(id: string): number {
   return readAll()[id] ?? 0;
 }
 
-/** Increment the play count for a song. Returns the new count. */
-export function recordPlay(id: string): number {
-  if (!id) return 0;
-  const all = readAll();
-  const next = (all[id] ?? 0) + 1;
-  all[id] = next;
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-  } catch {
-    /* ignore storage errors */
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Increment the play count for a song.
+ * - Local counter (keyed by id) is always bumped (offline backup).
+ * - Global counter (keyed by title, so copies on other PCs merge) is
+ *   incremented server-side (atomic) when the backend is configured.
+ * Never throws.
+ */
+export async function recordPlay(id: string, globalKey?: string): Promise<number> {
+  let next = 0;
+  if (id) {
+    const all = readAll();
+    next = (all[id] ?? 0) + 1;
+    all[id] = next;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      /* ignore storage errors */
+    }
+  }
+  const gkey = (globalKey || id || '').trim();
+  if (COUNTER_ENABLED && gkey) {
+    try {
+      await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/increment_play_count`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sid: gkey }),
+      });
+    } catch {
+      /* offline or backend error — local count already saved */
+    }
   }
   return next;
+}
+
+/** Fetch global counts keyed by song title. Empty object when unconfigured/offline. */
+export async function fetchGlobalCounts(): Promise<Record<string, number>> {
+  if (!COUNTER_ENABLED) return {};
+  try {
+    const res = await fetchWithTimeout(
+      `${SUPABASE_URL}/rest/v1/play_counts?select=song_id,count`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      },
+    );
+    if (!res.ok) return {};
+    const rows = (await res.json()) as unknown;
+    if (!Array.isArray(rows)) return {};
+    const out: Record<string, number> = {};
+    for (const row of rows) {
+      if (
+        typeof row === 'object' &&
+        row !== null &&
+        typeof (row as { song_id?: unknown }).song_id === 'string' &&
+        typeof (row as { count?: unknown }).count === 'number'
+      ) {
+        out[(row as { song_id: string }).song_id] = (row as { count: number }).count;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }

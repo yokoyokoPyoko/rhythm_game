@@ -16,6 +16,16 @@ import { getViewMode, ViewMode } from '../viewMode'
 import { getPlayCount } from '../storage/playCounts'
 import type { Chart, SongEntry } from '../types'
 
+// Global counts (by song title) fetched once per mount; falls back to local.
+async function loadGlobalCounts(): Promise<Record<string, number>> {
+  try {
+    const { fetchGlobalCounts } = await import('../storage/playCounts')
+    return await fetchGlobalCounts()
+  } catch {
+    return {}
+  }
+}
+
 const MAX_DIFFICULTY = 5
 const SKELETON_COUNT = 4
 
@@ -62,6 +72,19 @@ export default function SelectScreen() {
   }, [])
 
   const [viewMode, setViewMode] = useState<ViewMode>(getViewMode())
+  // Global play counts keyed by song title (empty when backend unconfigured).
+  const [globalCounts, setGlobalCounts] = useState<Record<string, number>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const g = await loadGlobalCounts()
+      if (!cancelled && Object.keys(g).length > 0) setGlobalCounts(g)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     const handleModeChange = () => {
@@ -527,7 +550,7 @@ beat = 8.0
                       data-testid={`play-count-${song.id}`}
                       style={{ fontSize: '11px', color: 'var(--text-muted)' }}
                     >
-                      ▶ {getPlayCount(song.id)}回
+                      ▶ {globalCounts[song.title] ?? getPlayCount(song.id)}回
                     </div>
                   )}
                   <div className="song-card-difficulty">
