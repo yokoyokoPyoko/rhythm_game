@@ -67,8 +67,11 @@ export async function fetchBestForTitle(title: string): Promise<HighScoreEntry |
   try {
     const eq = encodeURIComponent(key);
     const [evRes, legRes] = await Promise.all([
+      // NOTE: NULLS FIRST is PostgreSQL's default for DESC, so without the
+      // not.is.null filter a score-less play row would win limit=1 and the
+      // song would wrongly show "---" despite having scored plays.
       fetchWithTimeout(
-        `${SUPABASE_URL}/rest/v1/play_events?select=score,rank&song_id=eq.${eq}&order=score.desc&limit=1`,
+        `${SUPABASE_URL}/rest/v1/play_events?select=score,rank&song_id=eq.${eq}&score=not.is.null&order=score.desc&limit=1`,
         { headers },
       ),
       fetchWithTimeout(`${SUPABASE_URL}/rest/v1/high_scores?select=score,rank&song_id=eq.${eq}`, {
