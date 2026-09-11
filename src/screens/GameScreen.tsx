@@ -223,15 +223,17 @@ export default function GameScreen({ playtestChart, playtestBuffer, playtest, on
       } catch {
         /* ignore counter errors */
       }
-      // HUD best display: fetch once at song start (frozen during play).
-      try {
-        const { fetchBestScores } = await import('../storage/highScores')
-        const all = await fetchBestScores()
-        const title = chart?.title ?? ''
-        bestScoreRef.current = title && all[title] !== undefined ? all[title].score : null
-      } catch {
-        bestScoreRef.current = null
-      }
+      // HUD best display: fire-and-forget fetch (must never delay music start).
+      // The HUD shows "BEST ---" until the value arrives.
+      void (async () => {
+        try {
+          const { fetchBestForTitle } = await import('../storage/highScores')
+          const best = await fetchBestForTitle(chart?.title ?? '')
+          bestScoreRef.current = best ? best.score : null
+        } catch {
+          bestScoreRef.current = null
+        }
+      })()
     }
     playMusic(ctx, chart?.audio_offset ?? 0)
     startMetronome(ctx)

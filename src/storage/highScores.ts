@@ -35,6 +35,55 @@ function mergeBests(
   return out;
 }
 
+/**
+ * Fetch one song's best with two single-row queries (no full-table scan).
+ * Used on the song-start critical path. Returns null when unknown/offline.
+ */
+export async function fetchBestForTitle(title: string): Promise<HighScoreEntry | null> {
+  const key = (title || '').trim();
+  if (!key || !COUNTER_ENABLED) return null;
+  const headers = {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  };
+  const parseBest = (rows: unknown): HighScoreEntry | null => {
+    if (!Array.isArray(rows)) return null;
+    let best: HighScoreEntry | null = null;
+    for (const row of rows) {
+      if (
+        typeof row === 'object' &&
+        row !== null &&
+        typeof (row as { score?: unknown }).score === 'number'
+      ) {
+        const r = row as { score: number; rank?: unknown };
+        if (!Number.isFinite(r.score)) continue;
+        if (!best || r.score > best.score) {
+          best = { score: r.score, rank: typeof r.rank === 'string' ? r.rank : null };
+        }
+      }
+    }
+    return best;
+  };
+  try {
+    const eq = encodeURIComponent(key);
+    const [evRes, legRes] = await Promise.all([
+      fetchWithTimeout(
+        `${SUPABASE_URL}/rest/v1/play_events?select=score,rank&song_id=eq.${eq}&order=score.desc&limit=1`,
+        { headers },
+      ),
+      fetchWithTimeout(`${SUPABASE_URL}/rest/v1/high_scores?select=score,rank&song_id=eq.${eq}`, {
+        headers,
+      }),
+    ]);
+    const evBest = evRes.ok ? parseBest(await evRes.json().catch(() => null)) : null;
+    const legBest = legRes.ok ? parseBest(await legRes.json().catch(() => null)) : null;
+    if (evBest && legBest) return evBest.score >= legBest.score ? evBest : legBest;
+    return evBest ?? legBest;
+  } catch {
+    return null;
+  }
+}
+
 /** Fetch all global bests keyed by song title (events MAX merged with legacy table). */
 export async function fetchBestScores(): Promise<Record<string, HighScoreEntry>> {
   if (!COUNTER_ENABLED) return {};
